@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}渠道管理 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>渠道管理</h1>
+<section class="card">
+  <p>“正常”表示当前入口实际提取到条目；“失败”会显示原因。候选或人工来源不代表整个平台已自动接入。</p>
+  <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
+</section>
+<section class="card">
+  <h2>新增来源</h2>
+  <p class="muted">网页监控通过本机 changedetection API 建立任务；RSS 读取公开订阅；人工方式仅保存渠道与线索。</p>
+  <form method="post" action="{{ url_for('source_add') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>平台<input name="platform" required></label>
+    <label>入口名称<input name="name" required></label>
+    <label>类别<select name="category">{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
+    <label>方式<select name="method"><option value="monitor">网页监控</option><option value="rss">RSS 订阅</option><option value="manual">人工录入</option></select></label>
+    <label>公开 HTTPS 地址<input type="url" name="url" required></label>
+    <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="60" required></label>
+    <div><button>新增来源</button></div>
+  </form>
+</section>
+<div class="grid">
+{% for row in rows %}
+  <article class="card">
+    <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
+    <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'RSS 订阅','manual':'人工'}.get(row.method,row.method) }}</p>
+    <p><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看入口 ↗</a></p>
+    <p class="muted">最近检查：{{ row.last_checked or '尚未检查' }}<br>最近成功：{{ row.last_success or '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
+    {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}
+    <div class="row">
+      <form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>
+      {% if row.enabled and row.method!='manual' %}<form method="post" action="{{ url_for('scan_one',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>现在检查</button></form>{% endif %}
+    </div>
+    {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><label>每 <input style="width:75px" name="interval_minutes" type="number" min="5" max="1440" value="{{ row.interval_minutes }}" required> 分钟检查</label><button class="secondary">更新频率</button></form>{% endif %}
+  </article>
+{% endfor %}
+</div>
+{% endblock %}
