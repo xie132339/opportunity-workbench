@@ -5,6 +5,7 @@ from pathlib import Path
 import secrets
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
@@ -29,6 +30,19 @@ def load_env():
 load_env()
 app = Flask(__name__)
 app.secret_key = os.environ.get("WORKBENCH_SECRET") or secrets.token_hex(32)
+
+
+@app.template_filter("cn_time")
+def cn_time(value):
+    if not value:
+        return "尚未记录"
+    try:
+        moment = datetime.fromisoformat(str(value))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M 北京时间")
+    except ValueError:
+        return str(value)
 
 
 @app.before_request
@@ -128,7 +142,11 @@ def index():
         page = 1
     with connect() as db:
         total = db.execute("SELECT COUNT(*) FROM (" + sql + ")", args).fetchone()[0]
-        rows = db.execute(sql + " ORDER BY o.created_at DESC,o.id DESC LIMIT 36 OFFSET ?",
+        rows = db.execute(sql + """ ORDER BY CASE o.category
+            WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
+            WHEN '供货与清仓' THEN 3 WHEN '新品与补货' THEN 4
+            WHEN '拍卖与资产' THEN 5 WHEN '服务与合作' THEN 6 ELSE 7 END,
+            o.created_at DESC,o.id DESC LIMIT 36 OFFSET ?""",
                           [*args, (page - 1) * 36]).fetchall()
         sources = db.execute("SELECT * FROM sources ORDER BY id").fetchall()
         alerts = db.execute("SELECT COUNT(*) FROM notifications WHERE status='pending'").fetchone()[0]

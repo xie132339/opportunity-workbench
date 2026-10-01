@@ -26,7 +26,7 @@
     <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
     <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'RSS 订阅','manual':'人工'}.get(row.method,row.method) }}</p>
     <p><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看入口 ↗</a></p>
-    <p class="muted">最近检查：{{ row.last_checked or '尚未检查' }}<br>最近成功：{{ row.last_success or '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
+    <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
     {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}
     <div class="row">
       <form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>
