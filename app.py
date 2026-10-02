@@ -15,7 +15,8 @@ import requests
 
 from db import connect, initialize
 from scanner import _local_adapter_url, _public_url, scan_all, scan_source
-from notifier import active_channels, deliver
+from notifier import (CHANNEL_LABELS, active_channels, channel_ready, deliver,
+                      notification_settings, save_notification_settings)
 
 ROOT = Path(__file__).resolve().parent
 
@@ -728,6 +729,83 @@ def strategies():
                                    ORDER BY d.id DESC LIMIT 50""").fetchall()
     return render_template("strategies.html", rows=rows, notices=notices,
                            deliveries=deliveries, channels=active_channels(), show_archive=show_archive)
+
+
+@app.get("/messages")
+def messages():
+    values = notification_settings()
+    chosen = {item.strip() for item in values["NOTIFY_CHANNELS"].split(",")}
+    channels = [
+        {"key": key, "label": label, "selected": key in chosen,
+         "configured": channel_ready(key, values)}
+        for key, label in CHANNEL_LABELS.items()
+    ]
+    with connect() as db:
+        deliveries = db.execute("""SELECT channel,status,COUNT(*) AS total
+                                   FROM notification_deliveries
+                                   GROUP BY channel,status ORDER BY channel,status""").fetchall()
+    return render_template("messages.html", enabled=values["NOTIFY_ENABLED"] == "1",
+                           channels=channels, deliveries=deliveries,
+                           qq_base=values["QQ_ONEBOT_BASE"],
+                           qq_group_set=bool(values["QQ_GROUP_ID"]),
+                           qq_user_set=bool(values["QQ_USER_ID"]))
+
+
+@app.post("/messages")
+def save_messages():
+    values = notification_settings()
+    chosen = set(request.form.getlist("channels"))
+    if not chosen.issubset(CHANNEL_LABELS):
+        abort(400)
+    try:
+        values["NOTIFY_ENABLED"] = "1" if request.form.get("enabled") == "1" else "0"
+        values["NOTIFY_CHANNELS"] = ",".join(key for key in CHANNEL_LABELS if key in chosen)
+        for key in ("WECOM_WEBHOOK_URL", "SERVERCHAN_SENDKEY", "QQ_ONEBOT_TOKEN",
+                    "QQ_GROUP_ID", "QQ_USER_ID"):
+            submitted = request.form.get(key, "").strip()
+            if submitted and (len(submitted) > 2000 or any(ord(c) < 32 for c in submitted)):
+                raise ValueError("凭据或接收目标格式不正确")
+            if request.form.get("clear_" + key) == "1":
+                values[key] = ""
+            elif submitted:
+                values[key] = submitted
+        qq_base = request.form.get("QQ_ONEBOT_BASE", "").strip()
+        if qq_base:
+            values["QQ_ONEBOT_BASE"] = qq_base.rstrip("/")
+        if len(values["QQ_ONEBOT_BASE"]) > 100 or any(ord(c) < 32 for c in values["QQ_ONEBOT_BASE"]):
+            raise ValueError("QQ 本机网关地址格式不正确")
+        if values["QQ_GROUP_ID"] and (not values["QQ_GROUP_ID"].isdigit() or len(values["QQ_GROUP_ID"]) > 20):
+            raise ValueError("QQ 群 ID 须为数字")
+        if values["QQ_USER_ID"] and (not values["QQ_USER_ID"].isdigit() or len(values["QQ_USER_ID"]) > 20):
+            raise ValueError("QQ 用户 ID 须为数字")
+        if values["NOTIFY_ENABLED"] == "1":
+            if not chosen:
+                raise ValueError("启用消息前至少选择一个通道")
+            missing = [CHANNEL_LABELS[key] for key in chosen if not channel_ready(key, values)]
+            if missing:
+                raise ValueError("以下通道配置尚不完整：" + "、".join(missing))
+        save_notification_settings(values)
+        flash("消息配置已保存；未发送消息。后台下个周期会读取新配置。", "ok")
+    except (ValueError, OSError) as exc:
+        flash("消息配置未保存：" + (str(exc) if isinstance(exc, ValueError) else "本机配置文件写入失败"), "error")
+    return go("messages")
+
+
+@app.post("/messages/test/<channel>")
+def test_message_channel(channel):
+    if channel not in CHANNEL_LABELS:
+        abort(404)
+    if not channel_ready(channel, notification_settings()):
+        flash("该通道尚未完成配置，未发送测试消息", "error")
+        return go("messages")
+    try:
+        deliver(channel, "机会工作台接入测试",
+                "这是你在本机消息接入页面主动触发的测试消息。请到接收端确认实际到达。",
+                manual_test=True)
+        flash("通道接口已接受测试请求；请到接收端确认是否收到。", "ok")
+    except Exception:
+        flash("测试消息发送失败；请检查通道配置和接收端日志。", "error")
+    return go("messages")
 
 
 @app.post("/strategies")

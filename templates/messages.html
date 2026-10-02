@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block title %}消息接入 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>消息接入</h1>
+<section class="card">
+  <p>选择接收平台并配置你自己的接收目标。保存设置不会发送消息；自动提醒只处理原文时效、历史买价和保守退出价都已核实的候选。测试消息仅在你主动点击时发送。</p>
+  <p class="muted">密钥保存在本机 Git 忽略的 .env 文件，页面只显示是否已配置，不回显密钥。当前服务仅监听 127.0.0.1。</p>
+</section>
+<section class="card">
+  <h2>通道状态</h2>
+  <div class="grid">
+    {% for channel in channels %}
+    <div class="card">
+      <h3>{{ channel.label }}</h3>
+      <p><span class="pill {{ 'healthy' if enabled and channel.selected and channel.configured else 'pending' }}">{{ '已启用' if enabled and channel.selected and channel.configured else '未启用' }}</span>
+      <span class="pill {{ 'healthy' if channel.configured else 'pending' }}">{{ '参数已填，送达未验证' if channel.configured else '参数未齐' }}</span></p>
+      {% if channel.configured %}
+      <form method="post" action="{{ url_for('test_message_channel',channel=channel.key) }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary">向我的接收目标发送测试消息</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+<section class="card">
+  <h2>配置通道</h2>
+  <form method="post" action="{{ url_for('save_messages') }}" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label><input type="checkbox" name="enabled" value="1" {% if enabled %}checked{% endif %}> 启用自动外部消息</label>
+    <p class="muted">勾选后，后台只向下面勾选且参数完整的通道发送有证据的候选；保存本身不会发送。</p>
+    <div class="form-grid">
+      {% for channel in channels %}
+      <label><input type="checkbox" name="channels" value="{{ channel.key }}" {% if channel.selected %}checked{% endif %}> {{ channel.label }}</label>
+      {% endfor %}
+    </div>
+    <h3>企业微信群机器人</h3>
+    <p class="muted">在你自己的企业微信群添加群机器人，复制它生成的 Webhook 地址。这里只接受企业微信官方 qyapi.weixin.qq.com 地址。</p>
+    <label>Webhook 地址（完整 HTTPS 地址）<input type="password" name="WECOM_WEBHOOK_URL" autocomplete="new-password" placeholder="留空保留现有地址"></label>
+    <label><input type="checkbox" name="clear_WECOM_WEBHOOK_URL" value="1"> 清除已存企业微信地址</label>
+    <h3>个人微信 · Server酱</h3>
+    <p class="muted">先按 <a href="https://sct.ftqq.com/docs/" target="_blank" rel="noopener noreferrer">Server酱文档</a>绑定你自己的微信，再填写 SendKey。此通道由第三方服务转发消息。</p>
+    <label>SendKey<input type="password" name="SERVERCHAN_SENDKEY" autocomplete="new-password" placeholder="留空保留现有 SendKey"></label>
+    <label><input type="checkbox" name="clear_SERVERCHAN_SENDKEY" value="1"> 清除已存 SendKey</label>
+    <h3>QQ · 本机 OneBot v11</h3>
+    <p class="muted">需要你自行运行兼容的本机 OneBot v11 网关；这里不会安装或登录 QQ。群 ID 优先于用户 ID，接口格式见 <a href="https://github.com/botuniverse/onebot-11/blob/master/api/public.md" target="_blank" rel="noopener noreferrer">OneBot 文档</a>。</p>
+    <label>本机网关地址<input name="QQ_ONEBOT_BASE" value="{{ qq_base }}" placeholder="http://127.0.0.1:3000"></label>
+    <label>网关令牌<input type="password" name="QQ_ONEBOT_TOKEN" autocomplete="new-password" placeholder="留空保留现有令牌"></label>
+    <label><input type="checkbox" name="clear_QQ_ONEBOT_TOKEN" value="1"> 清除已存令牌</label>
+    <label>QQ群 ID {% if qq_group_set %}（已保存）{% endif %}<input name="QQ_GROUP_ID" inputmode="numeric" autocomplete="off" placeholder="留空保留现有群 ID"></label>
+    <label><input type="checkbox" name="clear_QQ_GROUP_ID" value="1"> 清除已存群 ID</label>
+    <label>QQ用户 ID {% if qq_user_set %}（已保存）{% endif %}<input name="QQ_USER_ID" inputmode="numeric" autocomplete="off" placeholder="留空保留现有用户 ID"></label>
+    <label><input type="checkbox" name="clear_QQ_USER_ID" value="1"> 清除已存用户 ID</label>
+    <div><button>保存消息配置</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>自动投递记录</h2>
+  {% if deliveries %}
+  <div class="table-wrap"><table><tr><th>通道</th><th>状态</th><th>条数</th></tr>
+    {% for row in deliveries %}<tr><td>{{ row.channel }}</td><td>{{ row.status }}</td><td>{{ row.total }}</td></tr>{% endfor %}
+  </table></div>
+  {% else %}<p>尚无自动外部消息投递。参数已填不等于消息已送达。</p>{% endif %}
+  <p><a href="{{ url_for('strategies') }}">查看机会提醒和逐条投递状态 →</a></p>
+</section>
+{% endblock %}
