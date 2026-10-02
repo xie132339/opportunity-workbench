@@ -28,6 +28,18 @@ def _public_url(url):
         raise ValueError("IP-address URLs cannot be scanned")
 
 
+def _local_adapter_url(url, base, prefix):
+    """Only a configured loopback service may supply adapter data."""
+    target, service = urlparse(url), urlparse(base)
+    if (service.scheme != "http" or service.hostname != "127.0.0.1"
+            or not service.port or service.username or service.password
+            or target.scheme != "http" or target.hostname != "127.0.0.1"
+            or target.port != service.port or target.username or target.password
+            or target.fragment or not target.path.startswith(prefix)
+            or ".." in target.path):
+        raise ValueError("适配器地址须是配置的本机服务和有效路径")
+
+
 def _fetch(url):
     _public_url(url)
     response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=(5, 18),
@@ -120,8 +132,11 @@ def _monitor_rows(source):
     return result
 
 
-def _rss_rows(url):
-    _public_url(url)
+def _rss_rows(url, local_base=None):
+    if local_base:
+        _local_adapter_url(url, local_base, "/")
+    else:
+        _public_url(url)
     response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=(5, 18),
                             allow_redirects=False)
     if response.status_code in (301, 302, 303, 307, 308):
@@ -144,6 +159,46 @@ def _rss_rows(url):
             continue
         snippet = BeautifulSoup(entry.get("summary", ""), "html.parser").get_text(" ", strip=True)[:1500]
         rows.append((entry.get("id") or link, title[:300], link, snippet))
+    return rows
+
+
+def _goofish_rows(url):
+    base = os.environ.get("GOOFISH_BASE", "http://127.0.0.1:8000").rstrip("/")
+    _local_adapter_url(url, base, "/api/results/")
+    if not urlparse(url).path.endswith(".jsonl"):
+        raise ValueError("闲鱼结果地址须以 .jsonl 结尾")
+    auth = None
+    if os.environ.get("GOOFISH_API_USER") and os.environ.get("GOOFISH_API_PASSWORD"):
+        auth = (os.environ["GOOFISH_API_USER"], os.environ["GOOFISH_API_PASSWORD"])
+    response = requests.get(url, params={"page": 1, "limit": 100}, auth=auth,
+                            timeout=(3, 12), allow_redirects=False)
+    if response.status_code in (401, 403):
+        raise PermissionError("闲鱼结果接口需登录")
+    if response.is_redirect:
+        raise RuntimeError("闲鱼结果接口发生跳转，需核对登录状态")
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise RuntimeError("闲鱼结果接口格式不符合预期")
+    rows = []
+    for record in data["items"]:
+        if not isinstance(record, dict):
+            continue
+        item = record.get("商品信息") or {}
+        if not isinstance(item, dict):
+            continue
+        link = str(item.get("商品链接") or "")
+        title = " ".join(str(item.get("商品标题") or "").split())[:300]
+        try:
+            _public_url(link)
+        except ValueError:
+            continue
+        if not title:
+            continue
+        ask = str(item.get("当前售价") or "未知")
+        hint = "AI 推荐" if (record.get("ai_analysis") or {}).get("is_recommended") else "未标记 AI 推荐"
+        rows.append((str(item.get("商品ID") or link), title, link,
+                     f"闲鱼挂牌价 {ask}；{hint}。挂牌价并非成交价或可转卖利润。"))
     return rows
 
 
@@ -180,6 +235,10 @@ def scan_source(source_id):
             records = _monitor_rows(source)
         elif source["method"] == "rss":
             records = _rss_rows(source["url"])
+        elif source["method"] == "rsshub":
+            records = _rss_rows(source["url"], os.environ.get("RSSHUB_BASE", "http://127.0.0.1:1200").rstrip("/"))
+        elif source["method"] == "goofish":
+            records = _goofish_rows(source["url"])
         elif source["method"] == "html":
             html = _fetch(source["url"])
             records = [(url, title, url, snippet)

@@ -8,13 +8,13 @@
 </section>
 <section class="card">
   <h2>新增来源</h2>
-  <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSS 需要真实订阅地址；人工线索在机会中心录入。</p>
+  <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSSHub 填本机 127.0.0.1:1200 的订阅 URL；闲鱼监控填本机 127.0.0.1:8000/api/results/关键词_full_data.jsonl。两项需要各自源码服务先运行并经过“现在检查”；人工线索在机会中心录入。</p>
   <form method="post" action="{{ url_for('source_add') }}" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>平台<input name="platform" required></label>
     <label>入口名称<input name="name" required></label>
     <label>类别<select name="category">{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
-    <label>方式<select name="method"><option value="html">公开网页解析</option><option value="monitor">网页变化监控</option><option value="rss">RSS 订阅</option><option value="manual">人工录入</option></select></label>
+    <label>方式<select name="method"><option value="html">公开网页解析</option><option value="monitor">网页变化监控</option><option value="rss">公开 RSS 订阅</option><option value="rsshub">本机 RSSHub 订阅</option><option value="goofish">本机闲鱼监控结果</option><option value="manual">人工录入</option></select></label>
     <label>网页解析规则（仅选公开网页解析时生效）<select name="parser"><option value="smzdm">什么值得买 www.smzdm.com</option><option value="apple">Apple 中国 www.apple.com.cn</option><option value="mi">小米商城 www.mi.com</option><option value="kongfz">孔夫子旧书网 book.kongfz.com</option><option value="suning">苏宁易购 www.suning.com</option><option value="lenovo">联想商城 www.lenovo.com.cn</option><option value="honor">荣耀商城 www.honor.com</option><option value="ccgp">中国政府采购网 www.ccgp.gov.cn</option><option value="yiwugo">义乌购 www.yiwugo.com（候选）</option></select></label>
     <label>公开 HTTPS 地址<input type="url" name="url" required></label>
     <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="60" required></label>
@@ -25,7 +25,7 @@
 {% for row in rows %}
   <article class="card">
     <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
-    <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'RSS 订阅','manual':'人工'}.get(row.method,row.method) }}</p>
+    <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}</p>
     <p><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看入口 ↗</a></p>
     <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
     {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}

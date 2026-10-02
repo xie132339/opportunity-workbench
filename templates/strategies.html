@@ -1,2 +1,33 @@
-{% extends 'base.html' %}{% block title %}筛选策略与提醒 · 多平台机会工作台{% endblock %}
-{% block content %}<h1>筛选策略与提醒</h1><section class="card"><p>策略对后续新线索的标题和类别生效。首次采集作为基线，不发送提醒。提醒目前仅在站内保存；未配置邮箱发送能力。</p><h2>新增策略</h2><form method="post" action="{{ url_for('add_strategy') }}" class="form-grid"><input type="hidden" name="csrf" value="{{ csrf }}"><label>策略名称<input name="name" required></label><label>包含词（逗号分隔）<input name="include_words"></label><label>排除词（逗号分隔）<input name="exclude_words"></label><label>类别<select name="category"><option value="">全部</option>{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label><div><button>保存策略</button></div></form></section><section class="card"><h2>已保存策略</h2>{% for row in rows %}<p><strong>{{ row.name }}</strong> · 类别 {{ row.category or '全部' }} · 包含 {{ row.include_words or '不限' }} · 排除 {{ row.exclude_words or '无' }}</p>{% endfor %}{% if not rows %}<p>暂无自定义策略。没有策略时，后续新线索均可生成站内提醒。</p>{% endif %}</section><section class="card"><h2>站内提醒</h2>{% for row in notices %}<div class="row"><span class="pill">{{ row.status }}</span><a href="{{ url_for('opportunity',opportunity_id=row.opportunity_id) }}">{{ row.title }}</a><small>{{ row.created_at|cn_time }}</small>{% if row.status=='pending' %}<form method="post" action="{{ url_for('read_notice',notification_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">标为已读</button></form>{% endif %}</div>{% endfor %}{% if not notices %}<p>暂无新提醒。</p>{% endif %}</section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}筛选策略与提醒 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>筛选策略与提醒</h1>
+<section class="card">
+  <p>策略对后续新线索的标题和类别生效。首次采集作为基线。站内保存新线索；外部消息只发送已核实买价、低于已录入历史最低样本且保守价差为正的候选。</p>
+  <p>当前已启用外部通道：{{ channels|join('、') if channels else '无' }}。个人微信通过 Server酱，企业微信通过群机器人；QQ 需要自行运行本机 OneBot 网关。通道凭据只放在本机 .env。</p>
+  <h2>新增策略</h2>
+  <form method="post" action="{{ url_for('add_strategy') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>策略名称<input name="name" required></label>
+    <label>包含词（逗号分隔）<input name="include_words"></label>
+    <label>排除词（逗号分隔）<input name="exclude_words"></label>
+    <label>类别<select name="category"><option value="">全部</option>{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
+    <div><button>保存策略</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>已保存策略</h2>
+  {% for row in rows %}<p><strong>{{ row.name }}</strong> · 类别 {{ row.category or '全部' }} · 包含 {{ row.include_words or '不限' }} · 排除 {{ row.exclude_words or '无' }}</p>{% endfor %}
+  {% if not rows %}<p>暂无自定义策略。没有策略时，后续新线索均可生成站内提醒。</p>{% endif %}
+</section>
+<section class="card">
+  <h2>站内提醒</h2>
+  {% for row in notices %}<div class="row"><span class="pill">{{ row.status }}</span><a href="{{ url_for('opportunity',opportunity_id=row.opportunity_id) }}">{{ row.title }}</a><small>{{ row.created_at|cn_time }}</small>{% if row.status=='pending' %}<form method="post" action="{{ url_for('read_notice',notification_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">标为已读</button></form>{% endif %}</div>{% endfor %}
+  {% if not notices %}<p>暂无新提醒。</p>{% endif %}
+</section>
+<section class="card">
+  <h2>外部消息投递</h2>
+  {% for d in deliveries %}<div class="row"><span class="pill {{ d.status }}">{{ {'pending':'待发送','sent':'已发送','failed':'发送失败','skipped':'条件变化已跳过'}.get(d.status,d.status) }}</span><span>{{ d.channel }} · {{ d.title }}</span><small>尝试 {{ d.attempts }} 次{% if d.sent_at %} · {{ d.sent_at|cn_time }}{% endif %}</small>{% if d.last_error %}<small class="error-text">{{ d.last_error }}</small>{% endif %}{% if d.status=='failed' %}<form method="post" action="{{ url_for('retry_delivery',delivery_id=d.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">重试</button></form>{% endif %}</div>{% endfor %}
+  {% if not deliveries %}<p>暂无外部消息投递。</p>{% endif %}
+</section>
+{% endblock %}

@@ -73,6 +73,13 @@ CREATE TABLE IF NOT EXISTS notifications (
  channel TEXT NOT NULL DEFAULT 'in_app', status TEXT NOT NULL DEFAULT 'pending',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, sent_at TEXT, error TEXT
 );
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+ id INTEGER PRIMARY KEY, notification_id INTEGER NOT NULL REFERENCES notifications(id),
+ channel TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+ attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+ sent_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(notification_id, channel)
+);
 CREATE TABLE IF NOT EXISTS trades (
  id INTEGER PRIMARY KEY, opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
  state TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1,
@@ -84,6 +91,7 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_opportunities_status ON opportunities(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_status ON notification_deliveries(status, id);
 """
 
 

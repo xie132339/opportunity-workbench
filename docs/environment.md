@@ -54,3 +54,22 @@
 - 已验证的“什么值得买首页整体变化”演示监控因不是具体商品线索，保留原始快照但在监控底座和业务来源均暂停，首个非商品机会标记为忽略。五个具体网页解析入口仍启用。
 - 首次 Git 提交 `3db71c6` 位于 `feature/bootstrap`；暂存内容未包含本机 API token，`.env`、`.venv`、`data/` 已核对为 Git 忽略。
 - 监控底座首次安装自带的 Hacker News 与 changedetection 更新日志两个示例任务已通过本机 API 暂停；本项目的首页演示任务也已暂停。当前有效自动采集由业务 worker 的 5 个具体公开入口承担。
+
+## 2026-10-02 GitHub CLI 底座检索
+
+- 执行 `gh search repos` 对通用价格追踪、闲鱼监控、京东比价、拍卖采集进行检索；`gh search code 'smzdm repo:DIYgod/RSSHub'` 核对值得买路由；`gh api repos/.../contents/...` 阅读 PriceDive 和国内采集器源码。命令和逐项目证据见 `docs/github-cli-research.md`。
+- 普通沙箱联网报 `error connecting to api.github.com`；获准联网执行后只读查询成功。未克隆、安装、运行新项目，也未录入虚构价格。
+- PriceDive 的核心取价是随机数模拟，明确排除为真实行情来源；ai-goofish-monitor 列为闲鱼候选，RSSHub 列为线索候选。当前工作台和纸品捡漏状态不因 GitHub 仓库存在而变化。
+
+## 2026-10-02 多来源与消息二开阶段
+
+- 在本仓库 `feature/bootstrap` 保留先前未提交调研文档，不覆盖用户数据。新增本机 RSSHub、闲鱼结果来源方法，同规格历史现金实付样本对比，外部消息投递队列，以及企业微信、Server酱个人微信、本机 OneBot QQ 三个可选发送适配器；配置样例为 `.env.example`，真实凭据未写入 Git，默认 `NOTIFY_ENABLED=0`。
+- 上游 RSSHub SHA `5d7e6ce62d1555b09582c3267aa0fa6f1f81c660` 与 ai-goofish-monitor SHA `f85d140b6b45029d9a0925feb96dad733b41396d` 用 `git clone --no-checkout` 后切到 `feature/opportunity-workbench`，并移除 `origin/master` 跟踪。RSSHub 用 nvm Node 24.15.0、pnpm 10.34.5，`pnpm install --frozen-lockfile --ignore-scripts` 成功；`LISTEN_INADDR_ANY=0 PORT=1200 pnpm dev` 在 `127.0.0.1:1200` 监听，首页 HTTP 200。`/jd/price/526835` 返回 503，日志显示上游 `http://p.3.cn/prices/mgets` 连接被对端关闭；HTTPS 直查也 TLS 失败，此路由未启用为真实价格源。SMZDM 路由源码要求 cookie，未配置、未宣称可用。
+- 业务源码 `py_compile` 成功，`git diff --check` 无错误。在 127.0.0.1:5003 以现有业务库临时运行新源码，`/health`、`/sources`、`/strategies`、`/market`、`/opportunities/1` 全部 HTTP 200；详情显示历史实付价区块和“样本不足”。迁移后只读核对：来源 16、事件/机会各 425、报价 0、交易 0、原站内提醒 112、新外部投递 0。此前后台继续产生新线索，不把 425 与先前的 275 视为迁移新增。
+- QQ 官方文档说明主动推送已停止，本项目接的是用户自备本机 OneBot 网关；个人微信通过用户自备 Server酱密钥，企业微信通过群机器人 Webhook。本次没有发送外部消息，真实 QQ/微信投递尚无凭据和收件结果。
+
+- RSSHub `/mi/newproducts` 实测 HTTP 200、XML 126084 字节，工作台解析器取得 55 条带小米商品原链接的条目；登记正式来源 #17 并首次扫描，结果 `healthy/new=55/baseline=True`。商品列表与相应售价仍不是本人最终结算价，未计入历史买价或利润。
+- ai-goofish-monitor 源码安装：Python 3.12 隔离 `.venv`、`uv pip install -r requirements-runtime.txt` 成功；`web-ui` 用 `npm ci --ignore-scripts` 和 `npm run build` 成功。忽略的 `.env` 使用随机本机管理密码、`SKIP_AI_ANALYSIS=true`，无 AI API key、无闲鱼登录状态。`uvicorn src.app:app --host 127.0.0.1 --port 8000` 已运行；`/health`、`/`、`/api/results/files` 均 HTTP 200，结果列表 `[]`。上游 API 路由未发现服务端统一认证门槛，因此只监听回环地址；当前不可称闲鱼自动线索已接入。
+- 正式工作台网页与 worker 从新源码重启于 `127.0.0.1:5002`。渠道页展示 RSSHub 小米上新、RSSHub/闲鱼本机来源选项；提醒页展示可选个人微信、企业微信及 QQ 投递；机会详情展示历史实付价“样本不足”。无账号、价格或消息投递结果被凭空补造。
+
+- 最终源码重启后再核对：`/`、`/?candidate=1`、`/sources`、`/strategies`、`/opportunities/1` 均 HTTP 200；双重证据候选筛选显示无符合线索。RSSHub `/mi/newproducts` 仍 HTTP 200 XML；闲鱼 `/api/results/files` 仍 `[]`。来源 #17 为 `healthy/enabled=1`，报价 0、交易 0、外部投递 0。`py_compile` 与 `git diff --check` 通过；三个仓库都在非保护功能分支，`.env`、数据库、虚拟环境及上游构建产物均被 Git 忽略。没有执行真实下单、外部消息或 Docker 部署。

@@ -7,13 +7,15 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from statistics import median
 from urllib.parse import urlparse
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 import requests
 
 from db import connect, initialize
-from scanner import _public_url, scan_all, scan_source
+from scanner import _local_adapter_url, _public_url, scan_all, scan_source
+from notifier import active_channels, deliver
 
 ROOT = Path(__file__).resolve().parent
 
@@ -129,6 +131,102 @@ def estimated_profit(opp, quotes):
     return result, basis + "；仅为保守价差，实际出售、验机及到账仍需验证"
 
 
+def historical_buy_assessment(opp, quotes):
+    """Compare cash paid including shipping, never advertised or post-rebate prices."""
+    if opp["status"] != "verified" or not opp["specification"] or opp["buy_cents"] is None or opp["buy_shipping_cents"] is None:
+        return None, "先核实当前同规格现金实付总额（含运费）", False
+    try:
+        checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - checked > timedelta(hours=24):
+            return None, "当前实付价已超过 24 小时，请重新核对", False
+    except ValueError:
+        return None, "缺少当前实付价核实时间", False
+    spec = " ".join(opp["specification"].split()).lower()
+    samples = {}
+    today = date.today()
+    for q in quotes:
+        if q["kind"] != "historical_buy" or not q["same_spec"] or not q["evidence_url"] or not q["conditions"]:
+            continue
+        if " ".join(q["specification"].split()).lower() != spec:
+            continue
+        try:
+            age = today - date.fromisoformat(q["price_at"] or "")
+        except ValueError:
+            continue
+        if timedelta(0) <= age <= timedelta(days=180):
+            key = (q["evidence_url"], q["price_at"])
+            samples[key] = min(samples.get(key, q["amount_cents"]), q["amount_cents"])
+    if len(samples) < 3:
+        return None, f"近 180 天只有 {len(samples)} 个不同日期或来源的同规格现金实付样本；至少需要 3 个", False
+    current = opp["buy_cents"] + opp["buy_shipping_cents"]
+    middle = int(median(samples.values()))
+    lowest = min(samples.values())
+    difference = lowest - current
+    return difference, f"当前含运费 {money(current)}；近 180 天 {len(samples)} 个历史样本中位数 {money(middle)}、最低 {money(lowest)}。历史条件仍需人工逐条核对。", current < lowest
+
+
+def is_evidence_candidate(opp, quotes):
+    profit, _ = estimated_profit(opp, quotes)
+    _, _, historical_low = historical_buy_assessment(opp, quotes)
+    return profit is not None and profit > 0 and historical_low
+
+
+def dispatch_verified_alerts():
+    """Fan out only evidence-backed candidates; failed sends require manual retry."""
+    channels = active_channels()
+    if not channels:
+        return {"eligible": 0, "sent": 0, "failed": 0}
+    eligible = 0
+    with connect() as db:
+        rows = db.execute("""SELECT o.*,e.id AS source_event_id FROM opportunities o
+                             JOIN events e ON e.id=o.event_id WHERE o.status='verified'""").fetchall()
+        for opp in rows:
+            quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (opp["id"],)).fetchall()
+            if not is_evidence_candidate(opp, quotes):
+                continue
+            eligible += 1
+            db.execute("""INSERT OR IGNORE INTO notifications (event_id,opportunity_id)
+                          VALUES(?,?)""", (opp["source_event_id"], opp["id"]))
+            notice_id = db.execute("SELECT id FROM notifications WHERE event_id=?",
+                                   (opp["source_event_id"],)).fetchone()[0]
+            for channel in channels:
+                db.execute("""INSERT OR IGNORE INTO notification_deliveries
+                              (notification_id,channel) VALUES(?,?)""", (notice_id, channel))
+        tasks = db.execute("""SELECT d.id,d.channel,o.id AS opportunity_id,o.title,o.url
+                              FROM notification_deliveries d
+                              JOIN notifications n ON n.id=d.notification_id
+                              JOIN opportunities o ON o.id=n.opportunity_id
+                              WHERE d.status='pending' ORDER BY d.id LIMIT 20""").fetchall()
+    sent = failed = 0
+    for task in tasks:
+        with connect() as db:
+            opp = db.execute("SELECT * FROM opportunities WHERE id=?", (task["opportunity_id"],)).fetchone()
+            quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (task["opportunity_id"],)).fetchall()
+        profit, _ = estimated_profit(opp, quotes)
+        _, buy_basis, historical_low = historical_buy_assessment(opp, quotes)
+        if profit is None or profit <= 0 or not historical_low or task["channel"] not in channels:
+            with connect() as db:
+                db.execute("UPDATE notification_deliveries SET status='skipped',last_error='条件已变化或通道已关闭' WHERE id=?",
+                           (task["id"],))
+            continue
+        title = "待人工复核的价差线索：" + task["title"][:80]
+        body = f"{buy_basis}\n保守价差 {money(profit)}。仍须核实资格、库存、成交与到账。\n原始链接：{task['url'] or '无'}"
+        try:
+            deliver(task["channel"], title, body)
+            with connect() as db:
+                db.execute("""UPDATE notification_deliveries SET status='sent',attempts=attempts+1,
+                              sent_at=CURRENT_TIMESTAMP,last_error=NULL WHERE id=?""", (task["id"],))
+            sent += 1
+        except Exception as exc:
+            with connect() as db:
+                db.execute("""UPDATE notification_deliveries SET status='failed',attempts=attempts+1,
+                              last_error=? WHERE id=?""", (str(exc)[:180], task["id"]))
+            failed += 1
+    return {"eligible": eligible, "sent": sent, "failed": failed}
+
+
 def go(endpoint, **kwargs):
     return redirect(url_for(endpoint, **kwargs))
 
@@ -147,6 +245,7 @@ def index():
     status = request.args.get("status", "").strip()
     platform = request.args.get("platform", "").strip()
     budget_text = request.args.get("budget", "").strip()
+    candidate_only = request.args.get("candidate") == "1"
     try:
         budget = cents(budget_text) if budget_text else None
     except ValueError:
@@ -177,19 +276,30 @@ def index():
     except ValueError:
         page = 1
     with connect() as db:
-        total = db.execute("SELECT COUNT(*) FROM (" + sql + ")", args).fetchone()[0]
-        rows = db.execute(sql + """ ORDER BY CASE o.category
+        order_by = """ ORDER BY CASE o.category
             WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
             WHEN '供货与清仓' THEN 3 WHEN '新品与补货' THEN 4
             WHEN '拍卖与资产' THEN 5 WHEN '服务与合作' THEN 6 ELSE 7 END,
-            o.created_at DESC,o.id DESC LIMIT 36 OFFSET ?""",
-                          [*args, (page - 1) * 36]).fetchall()
+            o.created_at DESC,o.id DESC"""
+        if candidate_only:
+            candidates = []
+            for row in db.execute(sql + " AND o.status='verified'" + order_by, args):
+                quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (row["id"],)).fetchall()
+                if is_evidence_candidate(row, quotes):
+                    candidates.append(row)
+            total = len(candidates)
+            rows = candidates[(page - 1) * 36:page * 36]
+        else:
+            total = db.execute("SELECT COUNT(*) FROM (" + sql + ")", args).fetchone()[0]
+            rows = db.execute(sql + order_by + " LIMIT 36 OFFSET ?",
+                              [*args, (page - 1) * 36]).fetchall()
         sources = db.execute("SELECT * FROM sources ORDER BY id").fetchall()
         alerts = db.execute("SELECT COUNT(*) FROM notifications WHERE status='pending'").fetchone()[0]
     return render_template("index.html", rows=rows, sources=sources,
                            alerts=alerts, query=query, category=category, status=status,
                            platform=platform, budget_text=budget_text,
-                           total=total, page=page, has_next=page * 36 < total)
+                           total=total, page=page, has_next=page * 36 < total,
+                           candidate_only=candidate_only)
 
 
 @app.post("/manual")
@@ -246,14 +356,21 @@ def source_add():
                     "yiwugo": "www.yiwugo.com", "kongfz": "book.kongfz.com",
                     "suning": "www.suning.com", "lenovo": "www.lenovo.com.cn",
                     "honor": "www.honor.com"}
-    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "html"):
+    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "rsshub", "goofish", "html"):
         flash("来源信息不完整", "error")
         return go("sources")
     try:
         interval = int(request.form.get("interval_minutes", "60"))
         if not 5 <= interval <= 1440:
             raise ValueError("检查间隔须在 5 到 1440 分钟之间")
-        _public_url(url)
+        if method == "rsshub":
+            _local_adapter_url(url, os.environ.get("RSSHUB_BASE", "http://127.0.0.1:1200"), "/")
+        elif method == "goofish":
+            _local_adapter_url(url, os.environ.get("GOOFISH_BASE", "http://127.0.0.1:8000"), "/api/results/")
+            if not urlparse(url).path.endswith(".jsonl"):
+                raise ValueError("闲鱼结果地址须以 .jsonl 结尾")
+        else:
+            _public_url(url)
         if method == "html" and (parser not in parser_hosts or urlparse(url).hostname != parser_hosts[parser]):
             raise ValueError("公开网页解析须选择与入口域名一致的已适配站点")
         with connect() as db:
@@ -336,8 +453,10 @@ def opportunity(opportunity_id):
                             (opportunity_id,)).fetchall()
         trades = db.execute("SELECT * FROM trades WHERE opportunity_id=? ORDER BY id DESC", (opportunity_id,)).fetchall()
     estimate, basis = estimated_profit(opp, quotes)
+    buy_difference, buy_basis, below_observed = historical_buy_assessment(opp, quotes)
     return render_template("opportunity.html", opp=opp, quotes=quotes, trades=trades,
-                           estimate=estimate, basis=basis)
+                           estimate=estimate, basis=basis, buy_difference=buy_difference,
+                           buy_basis=buy_basis, below_observed=below_observed)
 
 
 @app.post("/opportunities/<int:opportunity_id>/details")
@@ -368,7 +487,7 @@ def save_details(opportunity_id):
 @app.post("/opportunities/<int:opportunity_id>/quotes")
 def add_quote(opportunity_id):
     kind = request.form.get("kind", "")
-    if kind not in ("listing", "sold", "recycler", "estimate"):
+    if kind not in ("listing", "sold", "recycler", "estimate", "historical_buy"):
         abort(400)
     try:
         amount = cents(request.form.get("amount"), required=True)
@@ -379,9 +498,9 @@ def add_quote(opportunity_id):
         valid_until = request.form.get("valid_until", "").strip()
         same_spec = bool(request.form.get("same_spec"))
         final_quote = kind == "recycler" and request.form.get("final_quote") == "1"
-        if kind in ("sold", "recycler"):
+        if kind in ("sold", "recycler", "historical_buy"):
             if not same_spec or not evidence or not conditions or not price_at:
-                raise ValueError("成交与回收依据须有同规格确认、原始链接、适用条件和实际价格日期")
+                raise ValueError("历史实付、成交与回收依据须有同规格确认、原始链接、适用条件和实际价格日期")
             observed_date = date.fromisoformat(price_at)
             if observed_date > date.today():
                 raise ValueError("价格日期不能晚于今天")
@@ -390,6 +509,8 @@ def add_quote(opportunity_id):
                     raise ValueError("回收预估价不能当最终报价；须确认回收方已验机或书面承诺最终价")
                 if not valid_until or date.fromisoformat(valid_until) < observed_date:
                     raise ValueError("回收报价须填写不早于报价日的有效期")
+            if kind == "historical_buy" and valid_until:
+                raise ValueError("历史买入实付价不使用回收报价有效期")
         elif price_at:
             date.fromisoformat(price_at)
         if same_spec:
@@ -497,7 +618,12 @@ def strategies():
         notices = db.execute("""SELECT n.*,o.title FROM notifications n
                                 JOIN opportunities o ON o.id=n.opportunity_id
                                 ORDER BY n.id DESC LIMIT 100""").fetchall()
-    return render_template("strategies.html", rows=rows, notices=notices)
+        deliveries = db.execute("""SELECT d.*,o.title FROM notification_deliveries d
+                                   JOIN notifications n ON n.id=d.notification_id
+                                   JOIN opportunities o ON o.id=n.opportunity_id
+                                   ORDER BY d.id DESC LIMIT 50""").fetchall()
+    return render_template("strategies.html", rows=rows, notices=notices,
+                           deliveries=deliveries, channels=active_channels())
 
 
 @app.post("/strategies")
@@ -527,6 +653,15 @@ def read_notice(notification_id):
     return go("strategies")
 
 
+@app.post("/deliveries/<int:delivery_id>/retry")
+def retry_delivery(delivery_id):
+    with connect() as db:
+        db.execute("""UPDATE notification_deliveries SET status='pending',last_error=NULL
+                      WHERE id=? AND status='failed'""", (delivery_id,))
+    flash("已重新排队；后台会再次核对价格证据后发送", "ok")
+    return go("strategies")
+
+
 def main():
     initialize()
     command = sys.argv[1] if len(sys.argv) > 1 else "serve"
@@ -539,6 +674,9 @@ def main():
             result = scan_all(due_only=True)
             if result:
                 print(result, flush=True)
+            deliveries = dispatch_verified_alerts()
+            if deliveries["sent"] or deliveries["failed"]:
+                print(deliveries, flush=True)
             time.sleep(60)
     else:
         raise SystemExit("Usage: python app.py [serve|scan|worker]")
