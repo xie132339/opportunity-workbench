@@ -73,3 +73,9 @@
 - 正式工作台网页与 worker 从新源码重启于 `127.0.0.1:5002`。渠道页展示 RSSHub 小米上新、RSSHub/闲鱼本机来源选项；提醒页展示可选个人微信、企业微信及 QQ 投递；机会详情展示历史实付价“样本不足”。无账号、价格或消息投递结果被凭空补造。
 
 - 最终源码重启后再核对：`/`、`/?candidate=1`、`/sources`、`/strategies`、`/opportunities/1` 均 HTTP 200；双重证据候选筛选显示无符合线索。RSSHub `/mi/newproducts` 仍 HTTP 200 XML；闲鱼 `/api/results/files` 仍 `[]`。来源 #17 为 `healthy/enabled=1`，报价 0、交易 0、外部投递 0。`py_compile` 与 `git diff --check` 通过；三个仓库都在非保护功能分支，`.env`、数据库、虚拟环境及上游构建产物均被 Git 忽略。没有执行真实下单、外部消息或 Docker 部署。
+
+## 2026-10-02 续作验收
+
+- 在 feature/bootstrap 上新增四个 RSSHub 来源并实际扫描，healthy 且首次基线 141 条。
+- 新增 buy_checks 表和详情页显示，当前核价快照 0；没有伪造付款。
+- 源码语法检查通过，服务重启后 /health、/sources、/opportunities/1、/?candidate=1 返回 HTTP 200。正式库来源 21、事件与机会各 621，报价、快照、交易、外部投递为 0。

@@ -451,10 +451,12 @@ def opportunity(opportunity_id):
             abort(404)
         quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=? ORDER BY observed_at DESC,id DESC",
                             (opportunity_id,)).fetchall()
+        buy_checks = db.execute("SELECT * FROM buy_checks WHERE opportunity_id=? ORDER BY checked_at DESC,id DESC LIMIT 30",
+                                (opportunity_id,)).fetchall()
         trades = db.execute("SELECT * FROM trades WHERE opportunity_id=? ORDER BY id DESC", (opportunity_id,)).fetchall()
     estimate, basis = estimated_profit(opp, quotes)
     buy_difference, buy_basis, below_observed = historical_buy_assessment(opp, quotes)
-    return render_template("opportunity.html", opp=opp, quotes=quotes, trades=trades,
+    return render_template("opportunity.html", opp=opp, quotes=quotes, buy_checks=buy_checks, trades=trades,
                            estimate=estimate, basis=basis, buy_difference=buy_difference,
                            buy_basis=buy_basis, below_observed=below_observed)
 
@@ -473,11 +475,18 @@ def save_details(opportunity_id):
             raise ValueError("核实买入条件须填写完整规格、到手价及全部成本、核实依据，并确认当前账号可买和有货")
         checked = datetime.now(timezone.utc).isoformat() if status == "verified" else None
         with connect() as db:
-            db.execute("""UPDATE opportunities SET status=?,notes=?,specification=?,buy_checked_at=?,buy_proof=?,
+            result = db.execute("""UPDATE opportunities SET status=?,notes=?,specification=?,buy_checked_at=?,buy_proof=?,
                 buy_cents=?,buy_shipping_cents=?,sell_shipping_cents=?,platform_fee_cents=?,
                 processing_cents=?,other_cents=?,reserve_cents=? WHERE id=?""",
                 (status, request.form.get("notes", "")[:2000],
                  specification, checked, buy_proof, *values, opportunity_id))
+            if not result.rowcount:
+                abort(404)
+            if status == "verified":
+                db.execute("""INSERT INTO buy_checks
+                    (opportunity_id,specification,buy_cents,shipping_cents,proof,checked_at)
+                    VALUES(?,?,?,?,?,?)""",
+                    (opportunity_id,specification,values[0],values[1],buy_proof,checked))
         flash("规格、状态和成本已保存", "ok")
     except ValueError as exc:
         flash(str(exc), "error")

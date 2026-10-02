@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS quotes (
  evidence_url TEXT, price_at TEXT, valid_until TEXT,
  observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS buy_checks (
+ id INTEGER PRIMARY KEY, opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
+ specification TEXT NOT NULL, buy_cents INTEGER NOT NULL,
+ shipping_cents INTEGER NOT NULL, proof TEXT NOT NULL,
+ checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS strategies (
  id INTEGER PRIMARY KEY, name TEXT NOT NULL, include_words TEXT NOT NULL DEFAULT '',
  exclude_words TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
@@ -92,6 +98,7 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_opportunities_status ON opportunities(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON notification_deliveries(status, id);
+CREATE INDEX IF NOT EXISTS idx_buy_checks_opp ON buy_checks(opportunity_id, checked_at);
 """
 
 
@@ -111,6 +118,10 @@ SEEDS = [
  ("荣耀商城", "官方商品入口", "新品与补货", "https://www.honor.com/cn/shop/", "html", "honor", 1),
  ("闲鱼", "人工线索", "二手与闲置", "https://www.goofish.com/", "manual", "", 0),
  ("京东拍卖", "司法拍卖候选", "拍卖与资产", "https://auction.jd.com/sifa.html", "manual", "", 0),
+ ("小米众筹", "RSSHub 公开众筹新品", "新品与补货", "http://127.0.0.1:1200/mi/crowdfunding", "rsshub", "", 1),
+ ("宜家中国", "RSSHub 低价优选", "零售优惠", "http://127.0.0.1:1200/ikea/cn/low_price", "rsshub", "", 1),
+ ("酷比科技", "RSSHub 最新商品", "新品与补货", "http://127.0.0.1:1200/coolbuy/newest", "rsshub", "", 1),
+ ("麦当劳中国", "RSSHub 公开活动资讯", "零售优惠", "http://127.0.0.1:1200/mcdonalds/cn/sales+event", "rsshub", "", 1),
 ]
 
 

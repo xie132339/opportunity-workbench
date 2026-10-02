@@ -38,3 +38,7 @@ QQ_GROUP_ID=<your-group-id>
 - QQ 使用自行运行的本机 OneBot v11 HTTP 网关。[QQ 官方机器人文档](https://github.com/tencent-connect/bot-docs/blob/main/docs/develop/api-v2/server-inter/message/send-receive/send.md)说明主动推送已停止；本项目不把官方 QQ 机器人写成能主动发送。OneBot 网关兼容性和账号使用条件由所选实现决定。参照[OneBot 发送接口](https://github.com/botuniverse/onebot-11/blob/master/api/public.md)。
 
 每条机会每通道只排队一次；发送结果和错误码在“筛选策略与提醒”显示，失败后手动重试。外部消息开启后由 `app.py worker` 处理。消息只写“待人工复核的价差线索”，不承诺必买、可卖或已经获利。当前没有配置接收凭据，也没有向任何 QQ/微信目标发送消息。修改 `.env` 后需重启网页和 worker 进程。
+
+## 2026-10-02 核价留档
+
+本人每次在详情页确认结算价、运费、完整规格和依据后，工作台保留单独的核验快照。快照不是已付款记录，不参与三笔历史现金实付门槛。新增四个健康 RSSHub 路线见 docs/sources.md。
