@@ -5,7 +5,7 @@ from pathlib import Path
 import secrets
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
@@ -82,15 +82,51 @@ COST_FIELDS = ("buy_cents", "buy_shipping_cents", "sell_shipping_cents",
 def estimated_profit(opp, quotes):
     if opp["category"] == "服务与合作":
         return None, "服务商机需先确认资格与合同条件"
+    if opp["status"] != "verified" or not opp["specification"]:
+        return None, "买入条件与完整规格尚未核实"
+    try:
+        checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None, "缺少实际到手价的核实时间"
+    if datetime.now(timezone.utc) - checked > timedelta(hours=24):
+        return None, "买入价格已超过 24 小时，请重新核对库存、资格与结算价"
     missing = [field for field in COST_FIELDS if opp[field] is None]
     if missing:
         return None, "缺少成本：" + "、".join(missing)
-    acceptable = [q for q in quotes if q["kind"] in ("sold", "recycler") and q["same_spec"]]
-    if not acceptable:
-        return None, "缺少已确认同规格的成交或回收报价"
-    quote = acceptable[0]
-    result = quote["amount_cents"] - sum(opp[field] for field in COST_FIELDS)
-    return result, "依据：" + ("成交" if quote["kind"] == "sold" else "回收") + "报价 #" + str(quote["id"])
+    sold = {}
+    recycler = []
+    today = date.today()
+    spec = " ".join(opp["specification"].split()).lower()
+    for q in quotes:
+        if (not q["same_spec"] or not q["evidence_url"] or not q["conditions"]
+                or " ".join(q["specification"].split()).lower() != spec):
+            continue
+        try:
+            price_at = date.fromisoformat(q["price_at"] or "")
+        except ValueError:
+            continue
+        age = today - price_at
+        if q["kind"] == "sold" and timedelta(0) <= age <= timedelta(days=30):
+            url = q["evidence_url"]
+            sold[url] = min(sold.get(url, q["amount_cents"]), q["amount_cents"])
+        elif q["kind"] == "recycler" and q["final_quote"] and timedelta(0) <= age <= timedelta(days=7):
+            try:
+                if date.fromisoformat(q["valid_until"] or "") >= today:
+                    recycler.append(q)
+            except ValueError:
+                pass
+    references = []
+    if len(sold) >= 3:
+        references.append((min(sold.values()), "近 30 天至少 3 笔独立成交，取最低价"))
+    if recycler:
+        references.append((min(q["amount_cents"] for q in recycler), "仍有效的同规格回收报价，取最低价"))
+    if not references:
+        return None, "缺少 3 笔近期独立成交，或仍有效的同规格回收报价；挂牌价不计入"
+    exit_cents, basis = min(references)
+    result = exit_cents - sum(opp[field] for field in COST_FIELDS)
+    return result, basis + "；仅为保守价差，实际出售、验机及到账仍需验证"
 
 
 def go(endpoint, **kwargs):
@@ -303,12 +339,18 @@ def save_details(opportunity_id):
         abort(400)
     try:
         values = [cents(request.form.get(field)) for field in COST_FIELDS]
+        specification = request.form.get("specification", "").strip()[:300]
+        buy_proof = request.form.get("buy_proof", "").strip()[:500]
+        if status == "verified" and (not specification or any(v is None for v in values)
+                                     or not buy_proof or request.form.get("buy_confirmed") != "1"):
+            raise ValueError("核实买入条件须填写完整规格、到手价及全部成本、核实依据，并确认当前账号可买和有货")
+        checked = datetime.now(timezone.utc).isoformat() if status == "verified" else None
         with connect() as db:
-            db.execute("""UPDATE opportunities SET status=?,notes=?,specification=?,
+            db.execute("""UPDATE opportunities SET status=?,notes=?,specification=?,buy_checked_at=?,buy_proof=?,
                 buy_cents=?,buy_shipping_cents=?,sell_shipping_cents=?,platform_fee_cents=?,
                 processing_cents=?,other_cents=?,reserve_cents=? WHERE id=?""",
                 (status, request.form.get("notes", "")[:2000],
-                 request.form.get("specification", "")[:300], *values, opportunity_id))
+                 specification, checked, buy_proof, *values, opportunity_id))
         flash("规格、状态和成本已保存", "ok")
     except ValueError as exc:
         flash(str(exc), "error")
@@ -324,7 +366,24 @@ def add_quote(opportunity_id):
         amount = cents(request.form.get("amount"), required=True)
         evidence = request.form.get("evidence_url", "").strip()
         specification = request.form.get("specification", "").strip()[:300]
+        conditions = request.form.get("conditions", "").strip()[:1000]
+        price_at = request.form.get("price_at", "").strip()
+        valid_until = request.form.get("valid_until", "").strip()
         same_spec = bool(request.form.get("same_spec"))
+        final_quote = kind == "recycler" and request.form.get("final_quote") == "1"
+        if kind in ("sold", "recycler"):
+            if not same_spec or not evidence or not conditions or not price_at:
+                raise ValueError("成交与回收依据须有同规格确认、原始链接、适用条件和实际价格日期")
+            observed_date = date.fromisoformat(price_at)
+            if observed_date > date.today():
+                raise ValueError("价格日期不能晚于今天")
+            if kind == "recycler":
+                if not final_quote:
+                    raise ValueError("回收预估价不能当最终报价；须确认回收方已验机或书面承诺最终价")
+                if not valid_until or date.fromisoformat(valid_until) < observed_date:
+                    raise ValueError("回收报价须填写不早于报价日的有效期")
+        elif price_at:
+            date.fromisoformat(price_at)
         if same_spec:
             with connect() as db:
                 opp = db.execute("SELECT specification FROM opportunities WHERE id=?", (opportunity_id,)).fetchone()
@@ -334,10 +393,10 @@ def add_quote(opportunity_id):
             _public_url(evidence)
         with connect() as db:
             db.execute("""INSERT INTO quotes
-                (opportunity_id,kind,amount_cents,specification,conditions,same_spec,evidence_url)
-                VALUES(?,?,?,?,?,?,?)""",
+                (opportunity_id,kind,amount_cents,specification,conditions,same_spec,final_quote,evidence_url,price_at,valid_until)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""",
                 (opportunity_id,kind,amount,specification,
-                 request.form.get("conditions", "")[:1000],int(same_spec),evidence))
+                 conditions,int(same_spec),int(final_quote),evidence,price_at or None,valid_until or None))
         flash("行情依据已保存", "ok")
     except ValueError as exc:
         flash(str(exc), "error")

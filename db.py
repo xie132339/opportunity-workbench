@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
  source_id INTEGER REFERENCES sources(id), title TEXT NOT NULL, category TEXT NOT NULL,
  url TEXT, notes TEXT NOT NULL DEFAULT '', specification TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT 'pending', buy_cents INTEGER,
+ buy_checked_at TEXT, buy_proof TEXT NOT NULL DEFAULT '',
  buy_shipping_cents INTEGER, sell_shipping_cents INTEGER,
  platform_fee_cents INTEGER, processing_cents INTEGER,
  other_cents INTEGER, reserve_cents INTEGER,
@@ -57,8 +58,9 @@ CREATE TABLE IF NOT EXISTS quotes (
  id INTEGER PRIMARY KEY, opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
  kind TEXT NOT NULL, amount_cents INTEGER NOT NULL,
  specification TEXT NOT NULL DEFAULT '', conditions TEXT NOT NULL DEFAULT '',
- same_spec INTEGER NOT NULL DEFAULT 0,
- evidence_url TEXT, observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+ same_spec INTEGER NOT NULL DEFAULT 0, final_quote INTEGER NOT NULL DEFAULT 0,
+ evidence_url TEXT, price_at TEXT, valid_until TEXT,
+ observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS strategies (
  id INTEGER PRIMARY KEY, name TEXT NOT NULL, include_words TEXT NOT NULL DEFAULT '',
@@ -107,6 +109,18 @@ def initialize():
         trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
         if "deposit_lost_cents" not in trade_columns:
             db.execute("ALTER TABLE trades ADD COLUMN deposit_lost_cents INTEGER NOT NULL DEFAULT 0")
+        opportunity_columns = {row[1] for row in db.execute("PRAGMA table_info(opportunities)")}
+        if "buy_checked_at" not in opportunity_columns:
+            db.execute("ALTER TABLE opportunities ADD COLUMN buy_checked_at TEXT")
+        if "buy_proof" not in opportunity_columns:
+            db.execute("ALTER TABLE opportunities ADD COLUMN buy_proof TEXT NOT NULL DEFAULT ''")
+        quote_columns = {row[1] for row in db.execute("PRAGMA table_info(quotes)")}
+        if "price_at" not in quote_columns:
+            db.execute("ALTER TABLE quotes ADD COLUMN price_at TEXT")
+        if "valid_until" not in quote_columns:
+            db.execute("ALTER TABLE quotes ADD COLUMN valid_until TEXT")
+        if "final_quote" not in quote_columns:
+            db.execute("ALTER TABLE quotes ADD COLUMN final_quote INTEGER NOT NULL DEFAULT 0")
         for platform, name, category, url, method, parser, enabled in SEEDS:
             db.execute("""INSERT OR IGNORE INTO sources
                 (platform,name,category,url,method,parser,enabled)

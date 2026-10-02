@@ -1,5 +1,12 @@
 # 环境操作记录
 
+## 2026-10-02 捡漏判定门槛修正
+
+- 在 `feature/bootstrap` 上修改源码与项目文档；业务服务从源码重新启动于 `127.0.0.1:5002`。首次尝试用后台 `nohup` 启动没有保持运行，随后改用托管终端会话直接运行 `.venv/bin/python app.py serve`，启动输出确认监听成功。
+- `PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -m py_compile app.py db.py` 成功；`git diff --check` 无错误。服务 `/health`、纸品筛选页均返回 HTTP 200，详情页显示“保守价差测算／待核实”。
+- 数据库只迁移新增证据列，原记录保留。迁移后读到机会 275、报价 0、交易 0；没有真实卖价证据，故没有可确认的正价差或盈利。未录入示例交易，也未执行购买。
+- 新流程见 `docs/profit-playbook.md`；原有 `.env` 凭据和业务数据仍保持忽略，不进入 Git。
+
 ## 2026-10-02 初始化
 
 - `git init -b feature/bootstrap /Applications/work/gitRepo/opportunity-workbench`：成功；功能分支 feature/bootstrap。
