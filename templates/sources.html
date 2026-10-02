@@ -8,13 +8,14 @@
 </section>
 <section class="card">
   <h2>新增来源</h2>
-  <p class="muted">网页监控通过本机 changedetection API 建立任务；RSS 读取公开订阅；人工方式仅保存渠道与线索。</p>
+  <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSS 需要真实订阅地址；人工线索在机会中心录入。</p>
   <form method="post" action="{{ url_for('source_add') }}" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>平台<input name="platform" required></label>
     <label>入口名称<input name="name" required></label>
     <label>类别<select name="category">{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
-    <label>方式<select name="method"><option value="monitor">网页监控</option><option value="rss">RSS 订阅</option><option value="manual">人工录入</option></select></label>
+    <label>方式<select name="method"><option value="html">公开网页解析</option><option value="monitor">网页变化监控</option><option value="rss">RSS 订阅</option><option value="manual">人工录入</option></select></label>
+    <label>网页解析规则（仅选公开网页解析时生效）<select name="parser"><option value="smzdm">什么值得买 www.smzdm.com</option><option value="apple">Apple 中国 www.apple.com.cn</option><option value="mi">小米商城 www.mi.com</option><option value="kongfz">孔夫子旧书网 book.kongfz.com</option><option value="suning">苏宁易购 www.suning.com</option><option value="lenovo">联想商城 www.lenovo.com.cn</option><option value="honor">荣耀商城 www.honor.com</option><option value="ccgp">中国政府采购网 www.ccgp.gov.cn</option><option value="yiwugo">义乌购 www.yiwugo.com（候选）</option></select></label>
     <label>公开 HTTPS 地址<input type="url" name="url" required></label>
     <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="60" required></label>
     <div><button>新增来源</button></div>
@@ -29,7 +30,7 @@
     <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
     {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}
     <div class="row">
-      <form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>
+      {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>{% endif %}
       {% if row.enabled and row.method!='manual' %}<form method="post" action="{{ url_for('scan_one',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>现在检查</button></form>{% endif %}
     </div>
     {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><label>每 <input style="width:75px" name="interval_minutes" type="number" min="5" max="1440" value="{{ row.interval_minutes }}" required> 分钟检查</label><button class="secondary">更新频率</button></form>{% endif %}

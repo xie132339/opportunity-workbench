@@ -240,7 +240,13 @@ def source_add():
     category = request.form.get("category", "").strip()
     url = request.form.get("url", "").strip()
     method = request.form.get("method", "manual")
-    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss"):
+    parser = request.form.get("parser", "") if method == "html" else ""
+    parser_hosts = {"smzdm": "www.smzdm.com", "apple": "www.apple.com.cn",
+                    "mi": "www.mi.com", "ccgp": "www.ccgp.gov.cn",
+                    "yiwugo": "www.yiwugo.com", "kongfz": "book.kongfz.com",
+                    "suning": "www.suning.com", "lenovo": "www.lenovo.com.cn",
+                    "honor": "www.honor.com"}
+    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "html"):
         flash("来源信息不完整", "error")
         return go("sources")
     try:
@@ -248,6 +254,8 @@ def source_add():
         if not 5 <= interval <= 1440:
             raise ValueError("检查间隔须在 5 到 1440 分钟之间")
         _public_url(url)
+        if method == "html" and (parser not in parser_hosts or urlparse(url).hostname != parser_hosts[parser]):
+            raise ValueError("公开网页解析须选择与入口域名一致的已适配站点")
         with connect() as db:
             if db.execute("SELECT 1 FROM sources WHERE platform=? AND url=? AND method=?",
                           (platform,url,method)).fetchone():
@@ -264,9 +272,9 @@ def source_add():
             watch_uuid = resp.json()["uuid"]
         with connect() as db:
             db.execute("""INSERT INTO sources
-                (platform,name,category,url,method,watch_uuid,status,enabled,interval_minutes)
-                VALUES(?,?,?,?,?,?,?,?,?)""",
-                (platform,name,category,url,method,watch_uuid,"pending" if method != "manual" else "manual",
+                (platform,name,category,url,method,parser,watch_uuid,status,enabled,interval_minutes)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (platform,name,category,url,method,parser,watch_uuid,"pending" if method != "manual" else "manual",
                  int(method != "manual"),interval))
         flash("来源已保存", "ok")
     except Exception as exc:

@@ -7,6 +7,7 @@
 - 监控底座：独立源码工作区 `/Applications/work/gitRepo/changedetection-source`，changedetection.io 0.60.8，当前检出提交见 `docs/environment.md`。
 - 业务层：本仓库 Python 3.12、Flask/Jinja2/SQLite。两者通过 changedetection 公开 API 连接，不直接读取监控数据库。
 - 已实际提取的入口和边界见 [docs/sources.md](docs/sources.md)。产品完整范围见 [docs/requirements.md](docs/requirements.md)。
+- 在页面新增渠道的具体步骤与各方式边界也见 [docs/sources.md](docs/sources.md)；公开网页解析只接受已适配站点。
 - 判断低价是否可能盈利的实际步骤与证据门槛见 [docs/profit-playbook.md](docs/profit-playbook.md)。
 
 ## 开发期从源码启动

@@ -63,6 +63,14 @@ def _allowed(parser, url):
         return host == "www.ccgp.gov.cn" and "/cggg/" in path and "/gkzb/" in path and path.endswith(".htm")
     if parser == "yiwugo":
         return host == "www.yiwugo.com" and "/product/" in path
+    if parser == "kongfz":
+        return host == "book.kongfz.com" and re.fullmatch(r"/\d+/\d+/?", path)
+    if parser == "suning":
+        return host == "product.suning.com" and re.fullmatch(r"/\d+/\d+\.html", path)
+    if parser == "lenovo":
+        return host == "item.lenovo.com.cn" and re.fullmatch(r"/product/\d+\.html", path)
+    if parser == "honor":
+        return host == "www.honor.com" and re.fullmatch(r"/cn/shop/product/\d+\.html", path)
     return False
 
 

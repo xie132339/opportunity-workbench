@@ -97,6 +97,10 @@ SEEDS = [
  ("中国政府采购网", "中央公开招标子栏目", "服务与合作", "https://www.ccgp.gov.cn/cggg/zygg/gkzb/", "html", "ccgp", 0),
  ("中国政府采购网", "地方公开招标子栏目", "服务与合作", "https://www.ccgp.gov.cn/cggg/dfgg/gkzb/", "html", "ccgp", 1),
  ("义乌购", "库存尾货候选入口", "供货与清仓", "https://www.yiwugo.com/buy/list/1.html", "html", "yiwugo", 0),
+ ("孔夫子旧书网", "公开在售图书入口", "二手与闲置", "https://book.kongfz.com/", "html", "kongfz", 1),
+ ("苏宁易购", "公开商品入口", "零售优惠", "https://www.suning.com/", "html", "suning", 1),
+ ("联想商城", "官方商品入口", "新品与补货", "https://www.lenovo.com.cn/", "html", "lenovo", 1),
+ ("荣耀商城", "官方商品入口", "新品与补货", "https://www.honor.com/cn/shop/", "html", "honor", 1),
  ("闲鱼", "人工线索", "二手与闲置", "https://www.goofish.com/", "manual", "", 0),
  ("京东拍卖", "司法拍卖候选", "拍卖与资产", "https://auction.jd.com/sifa.html", "manual", "", 0),
 ]
