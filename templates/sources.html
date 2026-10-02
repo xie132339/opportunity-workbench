@@ -3,7 +3,7 @@
 {% block content %}
 <h1>渠道管理</h1>
 <section class="card">
-  <p>“正常”表示当前入口实际提取到条目；“失败”会显示原因。候选或人工来源不代表整个平台已自动接入。</p>
+  <p>“提取正常”只表示当前解析出条目，不代表商品仍有货或优惠有效。原文时间未知、超过 2 小时和未来日期的条目不进入默认机会列表；失败会显示原因。</p>
   <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
 </section>
 <section class="card">
@@ -24,10 +24,10 @@
 <div class="grid">
 {% for row in rows %}
   <article class="card">
-    <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
+    <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'提取正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
     <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}</p>
     <p><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看入口 ↗</a></p>
-    <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}</p>
+    <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}<br>近期有时间依据：{{ row.recent_count }} · 原文时间未知：{{ row.unknown_count }} · 未来日期：{{ row.future_count }} · 其余为超过 2 小时或来源超时</p>
     {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}
     <div class="row">
       {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>{% endif %}

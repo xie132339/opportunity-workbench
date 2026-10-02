@@ -79,6 +79,8 @@ def cents(value, required=False):
 
 COST_FIELDS = ("buy_cents", "buy_shipping_cents", "sell_shipping_cents",
                "platform_fee_cents", "processing_cents", "other_cents", "reserve_cents")
+RECENT_WINDOW = timedelta(hours=2)
+CHECKOUT_WINDOW = timedelta(minutes=15)
 
 
 def estimated_profit(opp, quotes):
@@ -92,8 +94,8 @@ def estimated_profit(opp, quotes):
             checked = checked.replace(tzinfo=timezone.utc)
     except ValueError:
         return None, "缺少实际到手价的核实时间"
-    if datetime.now(timezone.utc) - checked > timedelta(hours=24):
-        return None, "买入价格已超过 24 小时，请重新核对库存、资格与结算价"
+    if datetime.now(timezone.utc) - checked > CHECKOUT_WINDOW:
+        return None, "买入价格已超过 15 分钟，请重新核对库存、资格与结算价"
     missing = [field for field in COST_FIELDS if opp[field] is None]
     if missing:
         return None, "缺少成本：" + "、".join(missing)
@@ -139,8 +141,8 @@ def historical_buy_assessment(opp, quotes):
         checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
         if checked.tzinfo is None:
             checked = checked.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) - checked > timedelta(hours=24):
-            return None, "当前实付价已超过 24 小时，请重新核对", False
+        if datetime.now(timezone.utc) - checked > CHECKOUT_WINDOW:
+            return None, "当前实付价已超过 15 分钟，请重新核对", False
     except ValueError:
         return None, "缺少当前实付价核实时间", False
     spec = " ".join(opp["specification"].split()).lower()
@@ -167,10 +169,70 @@ def historical_buy_assessment(opp, quotes):
     return difference, f"当前含运费 {money(current)}；近 180 天 {len(samples)} 个历史样本中位数 {money(middle)}、最低 {money(lowest)}。历史条件仍需人工逐条核对。", current < lowest
 
 
+def freshness_state(opp):
+    """Published time proves recency; ingestion time alone never does."""
+    def utc(value):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+        except ValueError:
+            return None
+
+    now = datetime.now(timezone.utc)
+    if opp["source_method"] == "manual":
+        checked = utc(opp["buy_checked_at"])
+        status = opp["opp_status"] if "opp_status" in opp.keys() else opp["status"]
+        return "current" if status == "verified" and checked and timedelta(0) <= now - checked <= CHECKOUT_WINDOW else "unknown"
+    if not opp["source_enabled"] or opp["source_status"] != "healthy":
+        return "source_stale"
+    max_lag = min(timedelta(minutes=2 * int(opp["source_interval"]) + 15), RECENT_WINDOW)
+    checked = utc(opp["source_last_success"])
+    seen = utc(opp["last_seen_at"])
+    if not checked or not seen or now - checked > max_lag or now - seen > max_lag:
+        return "source_stale"
+    published = utc(opp["published_at"])
+    if not published:
+        return "unknown"
+    if published > now:
+        return "future"
+    if now - published > RECENT_WINDOW:
+        return "old"
+    return "current"
+
+
+@app.template_filter("freshness")
+def freshness_label(opp):
+    return {"current": "原文近 2 小时且来源仍在更新", "unknown": "原文时间未知，须核实",
+            "future": "原文时间晚于当前，须核实", "old": "原文超过 2 小时",
+            "source_stale": "来源或条目检查已超时"}.get(freshness_state(opp), "时效未知")
+
+
 def is_evidence_candidate(opp, quotes):
+    if freshness_state(opp) != "current":
+        return False
     profit, _ = estimated_profit(opp, quotes)
     _, _, historical_low = historical_buy_assessment(opp, quotes)
     return profit is not None and profit > 0 and historical_low
+
+
+def notice_rows(db, status=None, limit=None):
+    sql = """SELECT n.*,o.title,o.status AS opp_status,o.buy_checked_at,
+             e.published_at,e.last_seen_at,s.method AS source_method,
+             s.status AS source_status,s.enabled AS source_enabled,
+             s.interval_minutes AS source_interval,s.last_success AS source_last_success
+             FROM notifications n JOIN opportunities o ON o.id=n.opportunity_id
+             JOIN events e ON e.id=n.event_id JOIN sources s ON s.id=o.source_id"""
+    args = []
+    if status:
+        sql += " WHERE n.status=?"
+        args.append(status)
+    sql += " ORDER BY n.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        args.append(limit)
+    return db.execute(sql, args).fetchall()
 
 
 def dispatch_verified_alerts():
@@ -180,8 +242,12 @@ def dispatch_verified_alerts():
         return {"eligible": 0, "sent": 0, "failed": 0}
     eligible = 0
     with connect() as db:
-        rows = db.execute("""SELECT o.*,e.id AS source_event_id FROM opportunities o
-                             JOIN events e ON e.id=o.event_id WHERE o.status='verified'""").fetchall()
+        rows = db.execute("""SELECT o.*,e.id AS source_event_id,e.published_at,e.last_seen_at,
+                             s.method AS source_method,s.status AS source_status,
+                             s.enabled AS source_enabled,s.interval_minutes AS source_interval,
+                             s.last_success AS source_last_success
+                             FROM opportunities o JOIN events e ON e.id=o.event_id
+                             JOIN sources s ON s.id=o.source_id WHERE o.status='verified'""").fetchall()
         for opp in rows:
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (opp["id"],)).fetchall()
             if not is_evidence_candidate(opp, quotes):
@@ -202,11 +268,15 @@ def dispatch_verified_alerts():
     sent = failed = 0
     for task in tasks:
         with connect() as db:
-            opp = db.execute("SELECT * FROM opportunities WHERE id=?", (task["opportunity_id"],)).fetchone()
+            opp = db.execute("""SELECT o.*,e.published_at,e.last_seen_at,
+                s.method AS source_method,s.status AS source_status,s.enabled AS source_enabled,
+                s.interval_minutes AS source_interval,s.last_success AS source_last_success
+                FROM opportunities o JOIN events e ON e.id=o.event_id
+                JOIN sources s ON s.id=o.source_id WHERE o.id=?""", (task["opportunity_id"],)).fetchone()
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (task["opportunity_id"],)).fetchall()
         profit, _ = estimated_profit(opp, quotes)
         _, buy_basis, historical_low = historical_buy_assessment(opp, quotes)
-        if profit is None or profit <= 0 or not historical_low or task["channel"] not in channels:
+        if freshness_state(opp) != "current" or profit is None or profit <= 0 or not historical_low or task["channel"] not in channels:
             with connect() as db:
                 db.execute("UPDATE notification_deliveries SET status='skipped',last_error='条件已变化或通道已关闭' WHERE id=?",
                            (task["id"],))
@@ -246,11 +316,15 @@ def index():
     platform = request.args.get("platform", "").strip()
     budget_text = request.args.get("budget", "").strip()
     candidate_only = request.args.get("candidate") == "1"
+    show_archive = request.args.get("view") == "all"
     try:
         budget = cents(budget_text) if budget_text else None
     except ValueError:
         budget = None
-    sql = """SELECT o.*,s.platform,s.status AS source_status,e.is_baseline
+    sql = """SELECT o.*,s.platform,s.status AS source_status,s.method AS source_method,
+             s.enabled AS source_enabled,s.interval_minutes AS source_interval,
+             s.last_success AS source_last_success,
+             e.is_baseline,e.published_at,e.last_seen_at
              FROM opportunities o LEFT JOIN sources s ON s.id=o.source_id
              LEFT JOIN events e ON e.id=o.event_id WHERE 1=1"""
     args = []
@@ -271,6 +345,13 @@ def index():
         args.append(status)
     else:
         sql += " AND o.status!='ignored'"
+    if not show_archive:
+        sql += """ AND ((s.method='manual' AND o.status='verified'
+                         AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP)
+                     OR (s.method!='manual' AND s.enabled=1 AND s.status='healthy'
+                         AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
+                         AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
+                         AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP))"""
     try:
         page = max(1, int(request.args.get("page", "1")))
     except ValueError:
@@ -294,12 +375,12 @@ def index():
             rows = db.execute(sql + order_by + " LIMIT 36 OFFSET ?",
                               [*args, (page - 1) * 36]).fetchall()
         sources = db.execute("SELECT * FROM sources ORDER BY id").fetchall()
-        alerts = db.execute("SELECT COUNT(*) FROM notifications WHERE status='pending'").fetchone()[0]
+        alerts = sum(freshness_state(row) == "current" for row in notice_rows(db, "pending"))
     return render_template("index.html", rows=rows, sources=sources,
                            alerts=alerts, query=query, category=category, status=status,
                            platform=platform, budget_text=budget_text,
                            total=total, page=page, has_next=page * 36 < total,
-                           candidate_only=candidate_only)
+                           candidate_only=candidate_only, show_archive=show_archive)
 
 
 @app.post("/manual")
@@ -338,7 +419,15 @@ def manual():
 @app.get("/sources")
 def sources():
     with connect() as db:
-        rows = db.execute("""SELECT s.*,(SELECT COUNT(*) FROM events e WHERE e.source_id=s.id) event_count
+        rows = db.execute("""SELECT s.*,
+                             (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id) event_count,
+                             (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id
+                               AND s.enabled=1 AND s.status='healthy'
+                               AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
+                               AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
+                               AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')) recent_count,
+                             (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at IS NULL) unknown_count,
+                             (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at>CURRENT_TIMESTAMP) future_count
                              FROM sources s ORDER BY s.enabled DESC,s.id""").fetchall()
     return render_template("sources.html", rows=rows)
 
@@ -444,7 +533,11 @@ def scan_everything():
 @app.get("/opportunities/<int:opportunity_id>")
 def opportunity(opportunity_id):
     with connect() as db:
-        opp = db.execute("""SELECT o.*,s.platform,s.name AS source_name,e.snippet,e.is_baseline,e.observed_at
+        opp = db.execute("""SELECT o.*,s.platform,s.name AS source_name,
+                             s.method AS source_method,s.status AS source_status,
+                             s.enabled AS source_enabled,s.interval_minutes AS source_interval,
+                             s.last_success AS source_last_success,
+                             e.snippet,e.is_baseline,e.observed_at,e.published_at,e.last_seen_at
                              FROM opportunities o LEFT JOIN sources s ON s.id=o.source_id
                              LEFT JOIN events e ON e.id=o.event_id WHERE o.id=?""", (opportunity_id,)).fetchone()
         if not opp:
@@ -622,17 +715,19 @@ def settle_trade(trade_id):
 
 @app.get("/strategies")
 def strategies():
+    show_archive = request.args.get("view") == "all"
     with connect() as db:
         rows = db.execute("SELECT * FROM strategies ORDER BY id DESC").fetchall()
-        notices = db.execute("""SELECT n.*,o.title FROM notifications n
-                                JOIN opportunities o ON o.id=n.opportunity_id
-                                ORDER BY n.id DESC LIMIT 100""").fetchall()
+        notices = notice_rows(db, limit=500)
+        if not show_archive:
+            notices = [row for row in notices if freshness_state(row) == "current"]
+        notices = notices[:100]
         deliveries = db.execute("""SELECT d.*,o.title FROM notification_deliveries d
                                    JOIN notifications n ON n.id=d.notification_id
                                    JOIN opportunities o ON o.id=n.opportunity_id
                                    ORDER BY d.id DESC LIMIT 50""").fetchall()
     return render_template("strategies.html", rows=rows, notices=notices,
-                           deliveries=deliveries, channels=active_channels())
+                           deliveries=deliveries, channels=active_channels(), show_archive=show_archive)
 
 
 @app.post("/strategies")

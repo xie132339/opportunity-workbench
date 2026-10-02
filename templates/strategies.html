@@ -3,7 +3,7 @@
 {% block content %}
 <h1>筛选策略与提醒</h1>
 <section class="card">
-  <p>策略对后续新线索的标题和类别生效。首次采集作为基线。站内保存新线索；外部消息只发送已核实买价、低于已录入历史最低样本且保守价差为正的候选。</p>
+  <p>策略对后续新线索的标题和类别生效。首次采集作为基线。站内提醒只展示原文近 2 小时且来源仍有效的新线索；外部消息只发送已核实买价、低于已录入历史最低样本且保守价差为正的候选。</p>
   <p>当前已启用外部通道：{{ channels|join('、') if channels else '无' }}。个人微信通过 Server酱，企业微信通过群机器人；QQ 需要自行运行本机 OneBot 网关。通道凭据只放在本机 .env。</p>
   <h2>新增策略</h2>
   <form method="post" action="{{ url_for('add_strategy') }}" class="form-grid">
@@ -18,12 +18,12 @@
 <section class="card">
   <h2>已保存策略</h2>
   {% for row in rows %}<p><strong>{{ row.name }}</strong> · 类别 {{ row.category or '全部' }} · 包含 {{ row.include_words or '不限' }} · 排除 {{ row.exclude_words or '无' }}</p>{% endfor %}
-  {% if not rows %}<p>暂无自定义策略。没有策略时，后续新线索均可生成站内提醒。</p>{% endif %}
+  {% if not rows %}<p>暂无自定义策略。没有策略时，后续通过时效核验的新线索才会生成站内提醒。</p>{% endif %}
 </section>
 <section class="card">
-  <h2>站内提醒</h2>
+  <h2>站内提醒</h2><p><a href="{{ url_for('strategies',view=('' if show_archive else 'all')) }}">{{ '只看当前提醒' if show_archive else '查看历史提醒（含过期）' }}</a></p>
   {% for row in notices %}<div class="row"><span class="pill">{{ row.status }}</span><a href="{{ url_for('opportunity',opportunity_id=row.opportunity_id) }}">{{ row.title }}</a><small>{{ row.created_at|cn_time }}</small>{% if row.status=='pending' %}<form method="post" action="{{ url_for('read_notice',notification_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">标为已读</button></form>{% endif %}</div>{% endfor %}
-  {% if not notices %}<p>暂无新提醒。</p>{% endif %}
+  {% if not notices %}<p>当前没有仍符合时效门槛的提醒。</p>{% endif %}
 </section>
 <section class="card">
   <h2>外部消息投递</h2>

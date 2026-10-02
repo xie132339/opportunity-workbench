@@ -6,6 +6,8 @@ only after it extracts at least one candidate with a usable title and URL.
 import hashlib
 import os
 import re
+import calendar
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -95,8 +97,15 @@ def extract_html(parser, page_url, html):
         if not 6 <= len(title) <= 300 or not _allowed(parser, href):
             continue
         canonical = href.split("?", 1)[0] if parser != "mi" else href.split("&", 1)[0]
+        published_at = None
+        if parser == "ccgp":
+            parent_text = link.parent.get_text(" ", strip=True) if link.parent else ""
+            match = re.search(r"发布时间\s*[:：]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", parent_text)
+            if match:
+                local_time = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M")
+                published_at = local_time.replace(tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         if canonical not in found or len(title) > len(found[canonical][0]):
-            found[canonical] = (title, canonical, "")
+            found[canonical] = (title, canonical, "", published_at)
         if len(found) >= 80:
             break
     return list(found.values())
@@ -147,6 +156,8 @@ def _rss_rows(url, local_base=None):
     if len(response.content) > 2_000_000:
         raise RuntimeError("订阅内容超过 2 MB 限制")
     feed = feedparser.parse(response.content)
+    if feed.bozo and not feed.entries:
+        raise RuntimeError("订阅格式无效或没有可解析条目")
     rows = []
     for entry in feed.entries[:80]:
         link = entry.get("link", "")
@@ -158,7 +169,9 @@ def _rss_rows(url, local_base=None):
         if not title:
             continue
         snippet = BeautifulSoup(entry.get("summary", ""), "html.parser").get_text(" ", strip=True)[:1500]
-        rows.append((entry.get("id") or link, title[:300], link, snippet))
+        published = entry.get("published_parsed") or entry.get("updated_parsed")
+        published_at = datetime.fromtimestamp(calendar.timegm(published), timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if published else None
+        rows.append((entry.get("id") or link, title[:300], link, snippet, published_at))
     return rows
 
 
@@ -241,8 +254,8 @@ def scan_source(source_id):
             records = _goofish_rows(source["url"])
         elif source["method"] == "html":
             html = _fetch(source["url"])
-            records = [(url, title, url, snippet)
-                       for title, url, snippet in extract_html(source["parser"], source["url"], html)]
+            records = [(url, title, url, snippet, published_at)
+                       for title, url, snippet, published_at in extract_html(source["parser"], source["url"], html)]
         else:
             raise RuntimeError("此来源仅支持人工录入")
         if not records and source["method"] == "monitor" and prior:
@@ -262,19 +275,30 @@ def scan_source(source_id):
 
     added = 0
     with connect() as db:
-        for key, title, url, snippet in records:
+        for record in records:
+            key, title, url, snippet = record[:4]
+            published_at = record[4] if len(record) > 4 else None
             digest = hashlib.sha256((title + "\n" + snippet).encode()).hexdigest()
             result = db.execute("""INSERT OR IGNORE INTO events
-                (source_id,external_key,title,url,snippet,fingerprint,is_baseline)
-                VALUES(?,?,?,?,?,?,?)""",
-                (source_id,key,title,url,snippet,digest,int(prior == 0)))
+                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (source_id,key,title,url,snippet,digest,published_at,int(prior == 0)))
             if not result.rowcount:
+                db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
+                    published_at=COALESCE(?,published_at)
+                    WHERE source_id=? AND external_key=? AND fingerprint=?""",
+                    (published_at,source_id,key,digest))
                 continue
             added += 1
             opp = db.execute("""INSERT INTO opportunities
                 (event_id,source_id,title,category,url) VALUES(?,?,?,?,?)""",
                 (result.lastrowid, source_id, title, source["category"], url))
-            if prior and _passes_strategy(db, title, source["category"]):
+            recent_publication = False
+            if published_at:
+                published = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                age = datetime.now(timezone.utc) - published
+                recent_publication = timedelta(0) <= age <= timedelta(hours=2)
+            if prior and recent_publication and _passes_strategy(db, title, source["category"]):
                 db.execute("""INSERT OR IGNORE INTO notifications
                     (event_id,opportunity_id) VALUES(?,?)""",
                     (result.lastrowid, opp.lastrowid))

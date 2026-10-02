@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
  external_key TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
  snippet TEXT, fingerprint TEXT NOT NULL, observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
- published_at TEXT, is_baseline INTEGER NOT NULL DEFAULT 0,
+ published_at TEXT, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ is_baseline INTEGER NOT NULL DEFAULT 0,
  UNIQUE(source_id, external_key, fingerprint)
 );
 CREATE TABLE IF NOT EXISTS opportunities (
@@ -138,6 +139,10 @@ def initialize():
         if "buy_proof" not in opportunity_columns:
             db.execute("ALTER TABLE opportunities ADD COLUMN buy_proof TEXT NOT NULL DEFAULT ''")
         quote_columns = {row[1] for row in db.execute("PRAGMA table_info(quotes)")}
+        event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
+        if "last_seen_at" not in event_columns:
+            db.execute("ALTER TABLE events ADD COLUMN last_seen_at TEXT")
+            db.execute("UPDATE events SET last_seen_at=observed_at WHERE last_seen_at IS NULL")
         if "price_at" not in quote_columns:
             db.execute("ALTER TABLE quotes ADD COLUMN price_at TEXT")
         if "valid_until" not in quote_columns:
