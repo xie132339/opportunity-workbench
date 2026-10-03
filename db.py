@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import os
 import sqlite3
+from offer import detected_offer_type
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("WORKBENCH_DB", ROOT / "data" / "workbench.sqlite3"))
@@ -49,6 +50,8 @@ CREATE TABLE IF NOT EXISTS opportunities (
  source_id INTEGER REFERENCES sources(id), title TEXT NOT NULL, category TEXT NOT NULL,
  url TEXT, notes TEXT NOT NULL DEFAULT '', specification TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT 'pending', buy_cents INTEGER,
+ offer_type TEXT NOT NULL DEFAULT 'unknown', eligibility TEXT NOT NULL DEFAULT 'unknown',
+ purchase_limit INTEGER,
  buy_checked_at TEXT, buy_proof TEXT NOT NULL DEFAULT '',
  buy_shipping_cents INTEGER, sell_shipping_cents INTEGER,
  platform_fee_cents INTEGER, processing_cents INTEGER,
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
 CREATE TABLE IF NOT EXISTS quotes (
  id INTEGER PRIMARY KEY, opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
  kind TEXT NOT NULL, amount_cents INTEGER NOT NULL,
+ offer_type TEXT NOT NULL DEFAULT 'unknown',
  specification TEXT NOT NULL DEFAULT '', conditions TEXT NOT NULL DEFAULT '',
  same_spec INTEGER NOT NULL DEFAULT 0, final_quote INTEGER NOT NULL DEFAULT 0,
  evidence_url TEXT, price_at TEXT, valid_until TEXT,
@@ -138,6 +142,15 @@ def initialize():
             db.execute("ALTER TABLE opportunities ADD COLUMN buy_checked_at TEXT")
         if "buy_proof" not in opportunity_columns:
             db.execute("ALTER TABLE opportunities ADD COLUMN buy_proof TEXT NOT NULL DEFAULT ''")
+        if "offer_type" not in opportunity_columns:
+            db.execute("ALTER TABLE opportunities ADD COLUMN offer_type TEXT NOT NULL DEFAULT 'unknown'")
+        if "eligibility" not in opportunity_columns:
+            db.execute("ALTER TABLE opportunities ADD COLUMN eligibility TEXT NOT NULL DEFAULT 'unknown'")
+        if "purchase_limit" not in opportunity_columns:
+            db.execute("ALTER TABLE opportunities ADD COLUMN purchase_limit INTEGER")
+        for row in db.execute("SELECT id,title FROM opportunities WHERE offer_type='unknown'").fetchall():
+            if detected_offer_type(row["title"]) == "suspected_new_user":
+                db.execute("UPDATE opportunities SET offer_type='suspected_new_user' WHERE id=?", (row["id"],))
         quote_columns = {row[1] for row in db.execute("PRAGMA table_info(quotes)")}
         event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
         if "last_seen_at" not in event_columns:
@@ -149,6 +162,8 @@ def initialize():
             db.execute("ALTER TABLE quotes ADD COLUMN valid_until TEXT")
         if "final_quote" not in quote_columns:
             db.execute("ALTER TABLE quotes ADD COLUMN final_quote INTEGER NOT NULL DEFAULT 0")
+        if "offer_type" not in quote_columns:
+            db.execute("ALTER TABLE quotes ADD COLUMN offer_type TEXT NOT NULL DEFAULT 'unknown'")
         for platform, name, category, url, method, parser, enabled in SEEDS:
             db.execute("""INSERT OR IGNORE INTO sources
                 (platform,name,category,url,method,parser,enabled)

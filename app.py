@@ -14,6 +14,7 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 import requests
 
 from db import connect, initialize
+from offer import detected_offer_type
 from scanner import _local_adapter_url, _public_url, scan_all, scan_source
 from notifier import (CHANNEL_LABELS, active_channels, channel_ready, deliver,
                       notification_settings, save_notification_settings)
@@ -89,6 +90,8 @@ def estimated_profit(opp, quotes):
         return None, "服务商机需先确认资格与合同条件"
     if opp["status"] != "verified" or not opp["specification"]:
         return None, "买入条件与完整规格尚未核实"
+    if opp["offer_type"] in ("unknown", "suspected_new_user") or opp["eligibility"] != "eligible":
+        return None, "优惠类型或本人账号资格尚未确认"
     try:
         checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
         if checked.tzinfo is None:
@@ -138,6 +141,8 @@ def historical_buy_assessment(opp, quotes):
     """Compare cash paid including shipping, never advertised or post-rebate prices."""
     if opp["status"] != "verified" or not opp["specification"] or opp["buy_cents"] is None or opp["buy_shipping_cents"] is None:
         return None, "先核实当前同规格现金实付总额（含运费）", False
+    if opp["offer_type"] in ("unknown", "suspected_new_user") or opp["eligibility"] != "eligible":
+        return None, "先确认优惠类型和本人账号资格", False
     try:
         checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
         if checked.tzinfo is None:
@@ -152,6 +157,8 @@ def historical_buy_assessment(opp, quotes):
     for q in quotes:
         if q["kind"] != "historical_buy" or not q["same_spec"] or not q["evidence_url"] or not q["conditions"]:
             continue
+        if q["offer_type"] != opp["offer_type"]:
+            continue
         if " ".join(q["specification"].split()).lower() != spec:
             continue
         try:
@@ -162,7 +169,7 @@ def historical_buy_assessment(opp, quotes):
             key = (q["evidence_url"], q["price_at"])
             samples[key] = min(samples.get(key, q["amount_cents"]), q["amount_cents"])
     if len(samples) < 3:
-        return None, f"近 180 天只有 {len(samples)} 个不同日期或来源的同规格现金实付样本；至少需要 3 个", False
+        return None, f"近 180 天只有 {len(samples)} 个同规格、同优惠资格的现金实付样本；至少需要 3 个", False
     current = opp["buy_cents"] + opp["buy_shipping_cents"]
     middle = int(median(samples.values()))
     lowest = min(samples.values())
@@ -315,6 +322,7 @@ def index():
     category = request.args.get("category", "").strip()
     status = request.args.get("status", "").strip()
     platform = request.args.get("platform", "").strip()
+    offer_filter = request.args.get("offer", "").strip()
     budget_text = request.args.get("budget", "").strip()
     candidate_only = request.args.get("candidate") == "1"
     show_archive = request.args.get("view") == "all"
@@ -338,6 +346,11 @@ def index():
     if platform:
         sql += " AND s.platform=?"
         args.append(platform)
+    if offer_filter == "new_user":
+        sql += " AND o.offer_type IN ('suspected_new_user','new_user')"
+    elif offer_filter in ("standard", "other_restricted", "unknown"):
+        sql += " AND o.offer_type=?"
+        args.append(offer_filter)
     if budget is not None:
         sql += " AND o.buy_cents IS NOT NULL AND o.buy_cents<=?"
         args.append(budget)
@@ -380,6 +393,7 @@ def index():
     return render_template("index.html", rows=rows, sources=sources,
                            alerts=alerts, query=query, category=category, status=status,
                            platform=platform, budget_text=budget_text,
+                           offer_filter=offer_filter,
                            total=total, page=page, has_next=page * 36 < total,
                            candidate_only=candidate_only, show_archive=show_archive)
 
@@ -411,8 +425,8 @@ def manual():
             VALUES(?,?,?,?,?,?)""", (source_id,url,title,url,"人工录入",key))
         if event.rowcount:
             db.execute("""INSERT INTO opportunities
-                (event_id,source_id,title,category,url) VALUES(?,?,?,?,?)""",
-                (event.lastrowid,source_id,title,category,url))
+                (event_id,source_id,title,category,url,offer_type) VALUES(?,?,?,?,?,?)""",
+                (event.lastrowid,source_id,title,category,url,detected_offer_type(title)))
     flash("人工线索已保存；价格、规格和利润仍需核实", "ok")
     return go("index")
 
@@ -561,19 +575,32 @@ def save_details(opportunity_id):
     if status not in ("pending", "verified", "ignored", "expired"):
         abort(400)
     try:
+        offer_type = request.form.get("offer_type", "unknown")
+        eligibility = request.form.get("eligibility", "unknown")
+        if offer_type not in ("unknown", "suspected_new_user", "new_user", "standard", "other_restricted") or eligibility not in ("unknown", "eligible", "ineligible"):
+            raise ValueError("优惠类型或本人资格无效")
+        limit_text = request.form.get("purchase_limit", "").strip()
+        purchase_limit = int(limit_text) if limit_text else None
+        if purchase_limit is not None and not 1 <= purchase_limit <= 100000:
+            raise ValueError("限购数量须为正整数")
         values = [cents(request.form.get(field)) for field in COST_FIELDS]
         specification = request.form.get("specification", "").strip()[:300]
         buy_proof = request.form.get("buy_proof", "").strip()[:500]
         if status == "verified" and (not specification or any(v is None for v in values)
                                      or not buy_proof or request.form.get("buy_confirmed") != "1"):
             raise ValueError("核实买入条件须填写完整规格、到手价及全部成本、核实依据，并确认当前账号可买和有货")
+        if status == "verified" and (offer_type in ("unknown", "suspected_new_user") or eligibility != "eligible"):
+            raise ValueError("先确认优惠类型及本人账号确实有购买资格；疑似新人价不能直接标为已核实")
+        if status == "verified" and offer_type == "new_user" and (purchase_limit is None or request.form.get("new_user_checked") != "1"):
+            raise ValueError("新人价须核对本人账号的首单资格、限购数量和当前结算价")
         checked = datetime.now(timezone.utc).isoformat() if status == "verified" else None
         with connect() as db:
             result = db.execute("""UPDATE opportunities SET status=?,notes=?,specification=?,buy_checked_at=?,buy_proof=?,
+                offer_type=?,eligibility=?,purchase_limit=?,
                 buy_cents=?,buy_shipping_cents=?,sell_shipping_cents=?,platform_fee_cents=?,
                 processing_cents=?,other_cents=?,reserve_cents=? WHERE id=?""",
                 (status, request.form.get("notes", "")[:2000],
-                 specification, checked, buy_proof, *values, opportunity_id))
+                 specification, checked, buy_proof, offer_type, eligibility, purchase_limit, *values, opportunity_id))
             if not result.rowcount:
                 abort(404)
             if status == "verified":
@@ -593,6 +620,9 @@ def add_quote(opportunity_id):
     if kind not in ("listing", "sold", "recycler", "estimate", "historical_buy"):
         abort(400)
     try:
+        offer_type = request.form.get("offer_type", "unknown")
+        if offer_type not in ("unknown", "new_user", "standard", "other_restricted"):
+            raise ValueError("历史买价的优惠资格无效")
         amount = cents(request.form.get("amount"), required=True)
         evidence = request.form.get("evidence_url", "").strip()
         specification = request.form.get("specification", "").strip()[:300]
@@ -614,6 +644,8 @@ def add_quote(opportunity_id):
                     raise ValueError("回收报价须填写不早于报价日的有效期")
             if kind == "historical_buy" and valid_until:
                 raise ValueError("历史买入实付价不使用回收报价有效期")
+            if kind == "historical_buy" and offer_type == "unknown":
+                raise ValueError("历史买价须标明普通价、新人价或其他资格价")
         elif price_at:
             date.fromisoformat(price_at)
         if same_spec:
@@ -625,9 +657,9 @@ def add_quote(opportunity_id):
             _public_url(evidence)
         with connect() as db:
             db.execute("""INSERT INTO quotes
-                (opportunity_id,kind,amount_cents,specification,conditions,same_spec,final_quote,evidence_url,price_at,valid_until)
-                VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (opportunity_id,kind,amount,specification,
+                (opportunity_id,kind,offer_type,amount_cents,specification,conditions,same_spec,final_quote,evidence_url,price_at,valid_until)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (opportunity_id,kind,offer_type,amount,specification,
                  conditions,int(same_spec),int(final_quote),evidence,price_at or None,valid_until or None))
         flash("行情依据已保存", "ok")
     except ValueError as exc:

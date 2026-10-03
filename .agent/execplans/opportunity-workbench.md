@@ -4,6 +4,8 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 ## Purpose and observable outcome
 
+2026-10-03 增量：跨来源新人价标题疑似标记、首页筛选、本人账号资格与限购核验、同优惠类型历史实付比较已编码。正式库 879 条旧机会未命中标题规则，已核实新人价和历史买价均为 0；功能可用不等于已有真实可买新人价。服务从源码运行，页面 HTTP 200；记录见 docs/environment.md。
+
 在本机运行中文机会工作台，接入多个中国市场公开来源，展示来源、时效与错误；支持筛选、人工行情和成本核算、买入/库存/出售/退款记录。每阶段保存环境命令与结果并同步 Obsidian。完整首版是 M1—M5，监控启动仅代表部分完成。
 
 ## Scope, constraints, and assumptions

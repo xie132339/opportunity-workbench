@@ -15,6 +15,7 @@ import feedparser
 import requests
 
 from db import connect
+from offer import detected_offer_type
 
 USER_AGENT = "OpportunityWorkbench/0.1 (personal low-frequency public-source research)"
 
@@ -291,8 +292,8 @@ def scan_source(source_id):
                 continue
             added += 1
             opp = db.execute("""INSERT INTO opportunities
-                (event_id,source_id,title,category,url) VALUES(?,?,?,?,?)""",
-                (result.lastrowid, source_id, title, source["category"], url))
+                (event_id,source_id,title,category,url,offer_type) VALUES(?,?,?,?,?,?)""",
+                (result.lastrowid, source_id, title, source["category"], url, detected_offer_type(title)))
             recent_publication = False
             if published_at:
                 published = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
