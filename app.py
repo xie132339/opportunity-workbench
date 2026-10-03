@@ -511,6 +511,47 @@ def source_toggle(source_id):
     return go("sources")
 
 
+@app.post("/sources/bulk")
+def source_bulk():
+    action = request.form.get("action", "")
+    raw_ids = request.form.getlist("source_ids")
+    if action not in ("enable", "pause", "interval", "scan") or not raw_ids or len(raw_ids) > 50:
+        flash("请选择 1 到 50 个渠道和有效的批量操作", "error")
+        return go("sources")
+    try:
+        if any(not value.isdecimal() or int(value) <= 0 for value in raw_ids):
+            raise ValueError("渠道编号无效")
+        ids = sorted(set(int(value) for value in raw_ids))
+        placeholders = ",".join("?" for _ in ids)
+        with connect() as db:
+            rows = db.execute(f"SELECT id,method,enabled FROM sources WHERE id IN ({placeholders})", ids).fetchall()
+            if len(rows) != len(ids) or any(row["method"] == "manual" for row in rows):
+                raise ValueError("所选渠道不存在或为人工来源，无法批量修改")
+            if action == "scan":
+                if any(not row["enabled"] for row in rows):
+                    raise ValueError("请先启用所选渠道，再批量检查")
+            elif action == "interval":
+                interval = int(request.form.get("interval_minutes", ""))
+                if not 5 <= interval <= 1440:
+                    raise ValueError("检查间隔须在 5 到 1440 分钟之间")
+                db.execute(f"UPDATE sources SET interval_minutes=? WHERE id IN ({placeholders})", [interval, *ids])
+            elif action == "enable":
+                db.execute(f"UPDATE sources SET enabled=1,status=CASE WHEN enabled=0 THEN 'pending' ELSE status END WHERE id IN ({placeholders})", ids)
+            else:
+                db.execute(f"UPDATE sources SET enabled=0,status='paused' WHERE id IN ({placeholders})", ids)
+        if action == "scan":
+            results = [scan_source(source_id) for source_id in ids]
+            healthy = sum(result["status"] == "healthy" for result in results)
+            flash(f"已检查 {len(results)} 个渠道；正常 {healthy} 个，新增 {sum(result['new'] for result in results)} 条" ,
+                  "ok" if healthy == len(results) else "error")
+        else:
+            label = {"enable": "启用", "pause": "暂停", "interval": "更新频率"}[action]
+            flash(f"已批量{label} {len(ids)} 个渠道", "ok")
+    except ValueError as exc:
+        flash(str(exc), "error")
+    return go("sources")
+
+
 @app.post("/sources/<int:source_id>/interval")
 def source_interval(source_id):
     try:

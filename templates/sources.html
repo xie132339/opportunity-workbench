@@ -6,8 +6,7 @@
   <p>“提取正常”只表示当前解析出条目，不代表商品仍有货或优惠有效。原文时间未知、超过 2 小时和未来日期的条目不进入默认机会列表；失败会显示原因。</p>
   <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
 </section>
-<section class="card">
-  <h2>新增来源</h2>
+<details class="card"><summary>新增来源</summary><div class="source-add">
   <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSSHub 填本机 127.0.0.1:1200 的订阅 URL；闲鱼监控填本机 127.0.0.1:8000/api/results/关键词_full_data.jsonl。两项需要各自源码服务先运行并经过“现在检查”；人工线索在机会中心录入。</p>
   <form method="post" action="{{ url_for('source_add') }}" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -19,22 +18,50 @@
     <label>公开 HTTPS 地址<input type="url" name="url" required></label>
     <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="60" required></label>
     <div><button>新增来源</button></div>
+  </form></div>
+</details>
+<section class="card">
+  <h2>渠道列表 <span class="pill">{{ rows|length }} 个</span></h2>
+  <p class="muted">先勾选渠道，再批量启用、暂停、修改检查间隔或立即检查。人工来源不参与自动检查。最近检查仅表示来源被访问，不能证明商品价格仍有效。</p>
+  <div class="source-view-switch" role="group" aria-label="渠道展示方式"><button id="source-list-view" type="button" class="secondary" aria-pressed="true">列表</button><button id="source-card-view" type="button" class="secondary" aria-pressed="false">卡片</button><small>浏览器会记住上次选择</small></div>
+  <form id="bulk-sources" method="post" action="{{ url_for('source_bulk') }}" class="source-toolbar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>批量操作 <select name="action" required><option value="">请选择</option><option value="enable">启用</option><option value="pause">暂停</option><option value="interval">更新检查间隔</option><option value="scan">现在检查</option></select></label>
+    <label>间隔（分钟，仅更新频率时使用）<input name="interval_minutes" type="number" min="5" max="1440" placeholder="5–1440"></label>
+    <button>应用到勾选渠道</button>
   </form>
+  <div id="source-view" class="table-wrap"><table class="source-table">
+    <thead><tr><th><label><input id="select-all-sources" type="checkbox" aria-label="全选可操作渠道"> 全选</label></th><th>平台 / 入口</th><th>方式 / 类别</th><th>状态</th><th>线索与时效</th><th>最近检查</th><th>检查间隔</th><th>单条操作</th></tr></thead>
+    <tbody>{% for row in rows %}<tr>
+      <td data-label="选择">{% if row.method!='manual' %}<input class="source-check" form="bulk-sources" type="checkbox" name="source_ids" value="{{ row.id }}" aria-label="选择 {{ row.platform }} {{ row.name }}">{% else %}—{% endif %}</td>
+      <td data-label="平台 / 入口"><strong>{{ row.platform }}</strong><br><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">{{ row.name }} ↗</a></td>
+      <td data-label="方式 / 类别">{{ {'html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}<br><small>{{ row.category }}</small></td>
+      <td data-label="状态"><span class="pill {{ row.status if row.enabled else 'manual' }}">{{ '已暂停' if not row.enabled else {'healthy':'提取正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工'}.get(row.status,row.status) }}</span>{% if row.last_error %}<details><summary>失败原因</summary><small class="error-text">{{ row.last_error }}</small></details>{% endif %}</td>
+      <td data-label="线索与时效">已存 {{ row.event_count }}<br><small>近期有时间依据 {{ row.recent_count }}<br>原文时间未知 {{ row.unknown_count }} · 未来 {{ row.future_count }}</small></td>
+      <td data-label="最近检查"><small>{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}</small></td>
+      <td data-label="检查间隔">{% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="source-inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="interval_minutes" type="number" min="5" max="1440" value="{{ row.interval_minutes }}" aria-label="{{ row.platform }} {{ row.name }} 检查间隔" required><button class="secondary">保存</button></form>{% else %}—{% endif %}</td>
+      <td data-label="单条操作">{% if row.method!='manual' %}<div class="source-actions"><form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>{% if row.enabled %}<form method="post" action="{{ url_for('scan_one',source_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查</button></form>{% endif %}</div>{% else %}人工录入{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
 </section>
-<div class="grid">
-{% for row in rows %}
-  <article class="card">
-    <h2>{{ row.platform }} <span class="pill {{ row.status }}">{{ {'healthy':'提取正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工','paused':'已暂停'}.get(row.status,row.status) }}</span></h2>
-    <p><strong>{{ row.name }}</strong> · {{ row.category }} · {{ {'html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}</p>
-    <p><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看入口 ↗</a></p>
-    <p class="muted">最近检查：{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>最近成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}<br>已保存条目：{{ row.event_count }}<br>近期有时间依据：{{ row.recent_count }} · 原文时间未知：{{ row.unknown_count }} · 未来日期：{{ row.future_count }} · 其余为超过 2 小时或来源超时</p>
-    {% if row.last_error %}<p class="error-text">{{ row.last_error }}</p>{% endif %}
-    <div class="row">
-      {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>{% endif %}
-      {% if row.enabled and row.method!='manual' %}<form method="post" action="{{ url_for('scan_one',source_id=row.id) }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>现在检查</button></form>{% endif %}
-    </div>
-    {% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><label>每 <input style="width:75px" name="interval_minutes" type="number" min="5" max="1440" value="{{ row.interval_minutes }}" required> 分钟检查</label><button class="secondary">更新频率</button></form>{% endif %}
-  </article>
-{% endfor %}
-</div>
+<script>
+  const view = document.getElementById('source-view');
+  const listButton = document.getElementById('source-list-view');
+  const cardButton = document.getElementById('source-card-view');
+  function setSourceView(mode) {
+    const cards = mode === 'cards';
+    view.classList.toggle('source-card-mode', cards);
+    listButton.setAttribute('aria-pressed', String(!cards));
+    cardButton.setAttribute('aria-pressed', String(cards));
+    try { localStorage.setItem('opportunity-sources-view', cards ? 'cards' : 'list'); } catch (_) {}
+  }
+  let savedView = 'list';
+  try { savedView = localStorage.getItem('opportunity-sources-view') || 'list'; } catch (_) {}
+  setSourceView(savedView);
+  listButton.addEventListener('click', () => setSourceView('list'));
+  cardButton.addEventListener('click', () => setSourceView('cards'));
+  document.getElementById('select-all-sources').addEventListener('change', function () {
+    document.querySelectorAll('.source-check').forEach(box => { box.checked = this.checked; });
+  });
+</script>
 {% endblock %}

@@ -4,6 +4,8 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 ## Purpose and observable outcome
 
+2026-10-03 渠道管理增量：21 个来源改为同一份数据的列表／卡片双视图，用户选择由浏览器 localStorage 保留；新增来源折叠，勾选后的批量启用、暂停、频率更新和检查已接入。浏览器实际切换与刷新均保留模式，两个现有 60 分钟渠道的批量频率更新回执和数值已核对。运行记录见 docs/environment.md。
+
 2026-10-03 空页修复：用户新人价筛选本身为 0 条；默认页还因 worker 停止、部分原文无发布时间及新事件 last_seen_at 未写入而为空。已恢复业务 worker、RSSHub 与 5 个 RSS 来源，并修正 last_seen_at 插入与旧值回填；默认页实见 1 条有时效依据的公告，留档页 923 条未忽略线索。留档不得冒充当前机会，账号买价和新人资格仍未核实。详见 docs/environment.md。
 
 2026-10-03 增量：跨来源新人价标题疑似标记、首页筛选、本人账号资格与限购核验、同优惠类型历史实付比较已编码。正式库 879 条旧机会未命中标题规则，已核实新人价和历史买价均为 0；功能可用不等于已有真实可买新人价。服务从源码运行，页面 HTTP 200；记录见 docs/environment.md。
