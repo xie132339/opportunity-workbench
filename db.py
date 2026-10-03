@@ -155,7 +155,7 @@ def initialize():
         event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
         if "last_seen_at" not in event_columns:
             db.execute("ALTER TABLE events ADD COLUMN last_seen_at TEXT")
-            db.execute("UPDATE events SET last_seen_at=observed_at WHERE last_seen_at IS NULL")
+        db.execute("UPDATE events SET last_seen_at=observed_at WHERE last_seen_at IS NULL")
         if "price_at" not in quote_columns:
             db.execute("ALTER TABLE quotes ADD COLUMN price_at TEXT")
         if "valid_until" not in quote_columns:

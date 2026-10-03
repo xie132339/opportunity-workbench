@@ -4,6 +4,8 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 ## Purpose and observable outcome
 
+2026-10-03 空页修复：用户新人价筛选本身为 0 条；默认页还因 worker 停止、部分原文无发布时间及新事件 last_seen_at 未写入而为空。已恢复业务 worker、RSSHub 与 5 个 RSS 来源，并修正 last_seen_at 插入与旧值回填；默认页实见 1 条有时效依据的公告，留档页 923 条未忽略线索。留档不得冒充当前机会，账号买价和新人资格仍未核实。详见 docs/environment.md。
+
 2026-10-03 增量：跨来源新人价标题疑似标记、首页筛选、本人账号资格与限购核验、同优惠类型历史实付比较已编码。正式库 879 条旧机会未命中标题规则，已核实新人价和历史买价均为 0；功能可用不等于已有真实可买新人价。服务从源码运行，页面 HTTP 200；记录见 docs/environment.md。
 
 在本机运行中文机会工作台，接入多个中国市场公开来源，展示来源、时效与错误；支持筛选、人工行情和成本核算、买入/库存/出售/退款记录。每阶段保存环境命令与结果并同步 Obsidian。完整首版是 M1—M5，监控启动仅代表部分完成。

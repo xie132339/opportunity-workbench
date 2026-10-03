@@ -281,8 +281,8 @@ def scan_source(source_id):
             published_at = record[4] if len(record) > 4 else None
             digest = hashlib.sha256((title + "\n" + snippet).encode()).hexdigest()
             result = db.execute("""INSERT OR IGNORE INTO events
-                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline)
-                VALUES(?,?,?,?,?,?,?,?)""",
+                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at)
+                VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
                 (source_id,key,title,url,snippet,digest,published_at,int(prior == 0)))
             if not result.rowcount:
                 db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
