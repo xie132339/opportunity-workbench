@@ -1,4 +1,4 @@
-"""Search and evidence-qualified product listing route."""
+"""Search fresh source leads and optionally filter for comparison readiness."""
 from flask import render_template, request
 from db import connect
 from comparison import load_comparisons, assess_readiness
@@ -26,12 +26,11 @@ def index():
         layout_mode = "list"
     page_size = 100 if layout_mode == "list" else 36
     candidate_only = request.args.get("candidate") == "1"
-    # The main product search is the evidence-qualified view. Keep the broad
-    # fresh-lead inbox explicitly available so incomplete posts are not destroyed
-    # or silently promoted to products.
-    view_mode = request.args.get("view") or "ready"
+    # Default to the current source inbox so incomplete fresh records stay visible.
+    # The explicit "ready" mode applies the stricter product-comparison gate.
+    view_mode = request.args.get("view") or "current"
     if view_mode not in ("ready", "current", "all"):
-        view_mode = "ready"
+        view_mode = "current"
     show_archive = view_mode == "all"
     ready_only = view_mode == "ready"
     try:
@@ -91,9 +90,8 @@ def index():
         sql += " AND o.status!='ignored'"
     if not show_archive:
         if not candidate_only:
-            # Product search and the lead inbox start from fresh purchase-like source
-            # records. Product search applies the shared evidence gate after enrichment;
-            # the current view intentionally keeps incomplete leads.
+            # Product search and the current lead inbox start from fresh purchase-like
+            # records. The explicit ready view applies the shared evidence gate below.
             sql += " AND o.resource_kind IN ('purchase','unknown')"
         sql += " AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')"
         sql += """ AND ((s.method='manual' AND o.status='verified'
@@ -135,53 +133,15 @@ def index():
             source_match_counts = {}
             for matched_row in all_rows:
                 source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
-            if not show_archive and not ready_only and not candidate_only:
-                # Do not make parsability a visibility gate. Price, quantity,
-                # specifications and promotion certainty are readiness evidence,
-                # not reasons to hide a fresh lead from the user's search.
-                source_offer_count = len(all_rows)
-                grouped = {}
-                for row in all_rows:
-                    brief = offer_summary(row['title'], row['url'], row.get('snippet'), row.get('auto_conditions'),
-                                          row.get('metadata_json'), row.get('detail_json'),
-                                          dict(checked_at=row.get('review_checked_at'),
-                                               detail_checked_at=row.get('detail_checked_at'),
-                                               detail_error=row.get('detail_error')))
-                    identity = (''.join(ch for ch in row['title'].casefold() if ch.isalnum()),
-                                brief.get('selected_spec'), brief.get('total_cents'), brief.get('quantity'),
-                                row.get('auto_state'), row.get('resource_kind'))
-                    platform_name = (row.get('platform') or '').strip()
-                    feed_name = (row.get('source_name') or '').strip()
-                    source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name)
-                    names = {source_label} if source_label else {'人工录入'}
-                    score = (bool(row.get('detail_checked_at')), len(row.get('auto_conditions') or row.get('snippet') or ''))
-                    if identity not in grouped:
-                        row['source_channels'] = names
-                        row['_evidence_score'] = score
-                        grouped[identity] = row
-                    else:
-                        existing = grouped[identity]
-                        existing['source_channels'].update(names)
-                        if score > existing['_evidence_score']:
-                            row['source_channels'] = existing['source_channels']
-                            row['_evidence_score'] = score
-                            grouped[identity] = row
-                all_rows = list(grouped.values())
-                for row in all_rows:
-                    row['source_channels'] = sorted(row.pop('source_channels'))
-                    row.pop('_evidence_score', None)
-                    row['source_count'] = len(row['source_channels'])
-            else:
-                source_offer_count = len(all_rows)
-                # Archive rows are not deduplicated, but still identify the exact
-                # configured feed so separate sources on one platform stay visible.
-                for row in all_rows:
-                    platform_name = (row.get('platform') or '').strip()
-                    feed_name = (row.get('source_name') or '').strip()
-                    source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name or '人工录入')
-                    row['source_channels'] = [source_label]
-                    row['source_count'] = 1
-            candidate_pool_count=len(all_rows)
+            # Keep every source record visible. Similar title/price text is not
+            # enough evidence to merge channels or merchants into one offer.
+            source_offer_count = candidate_pool_count = len(all_rows)
+            for row in all_rows:
+                platform_name = (row.get('platform') or '').strip()
+                feed_name = (row.get('source_name') or '').strip()
+                source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name or '人工录入')
+                row['source_channels'] = [source_label]
+                row['source_count'] = 1
             search_assessments={row['id']:assess_readiness(row,comparisons.get(row['id'],{})) for row in all_rows}
             quality_counts=dict(
                 search_ready=sum(bool(value['search_ready']) for value in search_assessments.values()),

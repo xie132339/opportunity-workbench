@@ -1,7 +1,6 @@
 """Freshness, eligibility, comparable-price and profit assessment rules."""
 import json
 from datetime import date, datetime, timedelta, timezone
-from statistics import median
 
 from db import connect
 from offer import TOPIC_LABELS, product_subcategory
@@ -73,7 +72,6 @@ def public_profit_estimate(opp, quotes, brief, review, mode='sold'):
                     category_large=TOPIC_LABELS.get(opp['topic'],opp['category']),
                     category_small=product_subcategory(brief.get('title') or opp['title'],opp['topic']),
                     category_note='大类/小类用于整理与找同款；利润公式统一，不用类目均值替代商品行情。')
-    import json
     detail = {}
     if review and review['detail_json']:
         try:
@@ -92,45 +90,6 @@ def public_profit_estimate(opp, quotes, brief, review, mode='sold'):
     estimate['category_small'] = product_subcategory(brief.get('title') or opp['title'], opp['topic'])
     estimate['category_note'] = '大类/小类用于整理与找同款；利润公式统一，不用类目均值替代商品行情。'
     return estimate
-
-def historical_buy_assessment(opp, quotes):
-    """Compare cash paid including shipping, never advertised or post-rebate prices."""
-    if opp["status"] != "verified" or not opp["specification"] or opp["buy_cents"] is None or opp["buy_shipping_cents"] is None:
-        return None, "先核实当前同规格现金实付总额（含运费）", False
-    if opp["offer_type"] in ("unknown", "suspected_new_user") or opp["eligibility"] != "eligible":
-        return None, "先确认优惠类型和本人账号资格", False
-    try:
-        checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
-        if checked.tzinfo is None:
-            checked = checked.replace(tzinfo=timezone.utc)
-        if not timedelta(0) <= datetime.now(timezone.utc) - checked <= CHECKOUT_WINDOW:
-            return None, "当前实付价核实时间在未来或超过 15 分钟", False
-    except ValueError:
-        return None, "缺少当前实付价核实时间", False
-    spec = " ".join(opp["specification"].split()).lower()
-    samples = {}
-    today = date.today()
-    for q in quotes:
-        if q["kind"] != "historical_buy" or not q["same_spec"] or not q["evidence_url"] or not q["conditions"]:
-            continue
-        if q["offer_type"] != opp["offer_type"]:
-            continue
-        if " ".join(q["specification"].split()).lower() != spec:
-            continue
-        try:
-            age = today - date.fromisoformat(q["price_at"] or "")
-        except ValueError:
-            continue
-        if timedelta(0) <= age <= timedelta(days=180):
-            key = (q["evidence_url"], q["price_at"])
-            samples[key] = min(samples.get(key, q["amount_cents"]), q["amount_cents"])
-    if len(samples) < 3:
-        return None, f"近 180 天只有 {len(samples)} 个同规格、同优惠资格的现金实付样本；至少需要 3 个", False
-    current = opp["buy_cents"] + opp["buy_shipping_cents"]
-    middle = int(median(samples.values()))
-    lowest = min(samples.values())
-    difference = lowest - current
-    return difference, f"当前含运费 {money(current)}；近 180 天 {len(samples)} 个历史样本中位数 {money(middle)}、最低 {money(lowest)}。历史条件仍需人工逐条核对。", current < lowest
 
 def freshness_state(opp):
     """Published time proves recency; ingestion time alone never does."""
@@ -193,7 +152,7 @@ def resale_assessment(opp, quotes, rules=None):
         if profit >= rule["min_profit_cents"] and buy_total <= rule["max_buy_cents"]:
             return True, (f"满足策略「{rule['name']}」：价差 {money(profit)} ≥ 最低净利 {money(rule['min_profit_cents'])}；"
                           f"买入含运费 {money(buy_total)} ≤ 预算 {money(rule['max_buy_cents'])}。"
-                          "历史低价独立展示；回报率、周转、资金占用与退出承接量尚未完整验证，不代表可执行盈利。")
+                          "本规则只核算公开来源价差；回报率、周转、资金占用与退出承接量尚未完整验证，不代表可执行盈利。")
     return False, "未同时满足同一条策略的最低净利和含运费买入预算；不会拼接不同策略的门槛"
 
 def is_evidence_candidate(opp, quotes, rules=None):

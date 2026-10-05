@@ -43,16 +43,18 @@ class AdmissionTests(unittest.TestCase):
     def test_default_product_search_uses_evidence_gate_and_keeps_lead_inbox(self):
         self.seed('限时活动5元','没有具体商品和规格','observed',500)
         with app.test_client() as c:
-            self.assertNotIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=all').get_data(as_text=True))
-            self.assertIn('当前没有通过商品搜索准入的报价',c.get('/').get_data(as_text=True))
+            self.assertIn('资料达到商品搜索准入 0 条',c.get('/').get_data(as_text=True))
 
     def test_missing_price_is_visible_as_a_fresh_lead_not_a_notice(self):
         self.seed('终于活动开始了','没有具体价格','missing_price',None)
         with app.test_client() as c:
             page=c.get('/').get_data(as_text=True)
-            self.assertNotIn('/opportunities/1',page)
+            self.assertIn('/opportunities/1',page)
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
             lead_page=c.get('/?view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',lead_page)
             self.assertIn('金额未提取',lead_page)
@@ -65,12 +67,13 @@ class AdmissionTests(unittest.TestCase):
         self.seed('纸巾2元','包邮','queued',200)
         with app.test_client() as c:
             page=c.get('/').get_data(as_text=True)
-            self.assertNotIn('/opportunities/1',page)
+            self.assertIn('/opportunities/1',page)
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
             lead_page=c.get('/?view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',lead_page)
             self.assertIn('自动复查排队中',lead_page)
             with db.connect() as sql:sql.execute("UPDATE auto_reviews SET state='observed'")
-            self.assertNotIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertIn('/opportunities/1',c.get('/').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=all').get_data(as_text=True))
         self.assertFalse(is_current_notice(dict(opp_status='pending',auto_state='queued')))
@@ -81,7 +84,7 @@ class AdmissionTests(unittest.TestCase):
             page=c.get('/?view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',page)
             self.assertIn('原文报价／规格冲突',page)
-            self.assertNotIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
         self.assertFalse(is_current_notice(dict(opp_status='pending',auto_state='conflict')))
 
     def test_activity_not_forced_into_cash_price(self):
@@ -98,7 +101,7 @@ class AdmissionTests(unittest.TestCase):
         with app.test_client() as c:
             text=c.get('/').get_data(as_text=True)
             self.assertIn('/opportunities/1',text)
-            self.assertIn('商品搜索（资料达到准入）',text)
+            self.assertIn('商品搜索（仅资料达到准入）',text)
             self.assertIn('来源原文声称',text)
             self.assertIn('¥5.00',text)
             self.assertIn('aria-label="商品结果展示方式"',text)
@@ -106,7 +109,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('线索来源<select name="platform"',text)
             self.assertIn('不是对京东、淘宝、拼多多等商城实时全站搜价',text)
             self.assertNotIn('已核实整单价',text)
-            verified=c.get('/?view=verified').get_data(as_text=True)
+            verified=c.get('/?view=ready').get_data(as_text=True)
             self.assertIn('/opportunities/1',verified)
             self.assertIn('自动分析不会等待商家人工核实',verified)
             archive=c.get('/?view=all&layout=cards').get_data(as_text=True)
@@ -123,7 +126,7 @@ class AdmissionTests(unittest.TestCase):
             sql.execute("UPDATE events SET snippet=snippet || '\n随机领2元券'")
         with app.test_client() as c:
             text=c.get('/').get_data(as_text=True)
-            self.assertNotIn('/opportunities/1',text)
+            self.assertIn('/opportunities/1',text)
             self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
             self.assertIn('条件报价（含优惠／资格限制）',c.get('/?view=current').get_data(as_text=True))
             self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))

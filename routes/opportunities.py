@@ -10,7 +10,7 @@ from offer import detected_offer_type
 from scanner import _public_url
 from link_resolution import enrich as enrich_links
 from services.money import COST_FIELDS, cents
-from services.opportunity_analysis import (estimated_profit, historical_buy_assessment, public_profit_estimate, resale_assessment)
+from services.opportunity_analysis import (estimated_profit, public_profit_estimate, resale_assessment)
 from routes.common import go
 
 def opportunity(opportunity_id):
@@ -47,7 +47,6 @@ def opportunity(opportunity_id):
     estimate, basis = estimated_profit(opp, quotes)
     profit_mode = request.args.get('profit_mode','sold')
     public_estimate = public_profit_estimate(opp, quotes, brief, review, profit_mode)
-    buy_difference, buy_basis, below_observed = historical_buy_assessment(opp, quotes)
     resale_allowed, resale_basis = resale_assessment(opp, quotes)
     return render_template("opportunity.html", opp=opp, quotes=quotes, buy_checks=buy_checks, trades=trades, review=review,
                            public_offer=public_offer(opp['url'],opp['snippet'],opp['title']),comparison=comparison,
@@ -55,8 +54,7 @@ def opportunity(opportunity_id):
                            product_benefit_candidates=product_benefit_candidates,
                            product_benefit_searchable=product_identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not product_identity['conflict'],
                            estimate=estimate, basis=basis, public_estimate=public_estimate,
-                           profit_mode=public_estimate['mode'], buy_difference=buy_difference,
-                           buy_basis=buy_basis, below_observed=below_observed,
+                           profit_mode=public_estimate['mode'],
                            resale_allowed=resale_allowed, resale_basis=resale_basis)
 
 def save_details(opportunity_id):
@@ -104,12 +102,9 @@ def save_details(opportunity_id):
 
 def add_quote(opportunity_id):
     kind = request.form.get("kind", "")
-    if kind not in ("listing", "sold", "recycler", "estimate", "historical_buy"):
+    if kind not in ("listing", "sold", "recycler", "estimate"):
         abort(400)
     try:
-        offer_type = request.form.get("offer_type", "unknown")
-        if offer_type not in ("unknown", "new_user", "standard", "other_restricted"):
-            raise ValueError("历史买价的优惠资格无效")
         amount = cents(request.form.get("amount"), required=True)
         evidence = request.form.get("evidence_url", "").strip()
         specification = request.form.get("specification", "").strip()[:300]
@@ -118,9 +113,9 @@ def add_quote(opportunity_id):
         valid_until = request.form.get("valid_until", "").strip()
         same_spec = bool(request.form.get("same_spec"))
         final_quote = kind == "recycler" and request.form.get("final_quote") == "1"
-        if kind in ("sold", "recycler", "historical_buy"):
+        if kind in ("sold", "recycler"):
             if not same_spec or not evidence or not conditions or not price_at:
-                raise ValueError("历史实付、成交与回收依据须有同规格确认、原始链接、适用条件和实际价格日期")
+                raise ValueError("成交与回收依据须有同规格确认、原始链接、适用条件和实际价格日期")
             observed_date = date.fromisoformat(price_at)
             if observed_date > date.today():
                 raise ValueError("价格日期不能晚于今天")
@@ -129,10 +124,6 @@ def add_quote(opportunity_id):
                     raise ValueError("回收预估价不能当最终报价；须确认回收方已验机或书面承诺最终价")
                 if not valid_until or date.fromisoformat(valid_until) < observed_date:
                     raise ValueError("回收报价须填写不早于报价日的有效期")
-            if kind == "historical_buy" and valid_until:
-                raise ValueError("历史买入实付价不使用回收报价有效期")
-            if kind == "historical_buy" and offer_type == "unknown":
-                raise ValueError("历史买价须标明普通价、新人价或其他资格价")
         elif price_at:
             date.fromisoformat(price_at)
         if same_spec:
@@ -146,7 +137,7 @@ def add_quote(opportunity_id):
             db.execute("""INSERT INTO quotes
                 (opportunity_id,kind,offer_type,amount_cents,specification,conditions,same_spec,final_quote,evidence_url,price_at,valid_until)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (opportunity_id,kind,offer_type,amount,specification,
+                (opportunity_id,kind,"unknown",amount,specification,
                  conditions,int(same_spec),int(final_quote),evidence,price_at or None,valid_until or None))
         flash("行情依据已保存", "ok")
     except ValueError as exc:

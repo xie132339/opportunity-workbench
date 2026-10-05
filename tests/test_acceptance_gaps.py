@@ -22,12 +22,13 @@ class AcceptanceGapTests(unittest.TestCase):
         r=test_comparison.ComparisonTests().row(1,title='某品牌 抽纸100抽 5元',tail='包邮');r['topic']='home';r['advertised_cents']=1000
         r['metadata_json']=json.dumps({'activity_links':['https://item.jd.com/123.html']})
         cohort=freeze([r]);result=evaluate([r],cohort,{})
-        self.assertEqual(result['sample_size'],1);self.assertEqual(result['passed'],0);self.assertFalse(result['coverage_passed'])
+        self.assertEqual(result['sample_size'],1);self.assertEqual(result['source_claim_low_count'],0);self.assertFalse(result['coverage_passed'])
+        self.assertNotIn('overall_passed',result)
         self.assertNotIn('merchant_rules',result['items'][0]['checks'])
     def test_disappearing_frozen_sample_counts_failure(self):
         r=test_comparison.ComparisonTests().row(1);r['topic']='home';r['advertised_cents']=1000
         result=evaluate([],freeze([r]),{})
-        self.assertEqual(result['sample_size'],1);self.assertEqual(result['passed'],0);self.assertIn('样本已缺失',result['items'][0]['failures'])
+        self.assertEqual(result['sample_size'],1);self.assertEqual(result['source_claim_low_count'],0);self.assertIn('样本已缺失',result['items'][0]['failures'])
     def test_duplicate_title_does_not_fill_sample_quota(self):
         a=test_comparison.ComparisonTests().row(1);b=test_comparison.ComparisonTests().row(2);a['topic']=b['topic']='home'
         self.assertEqual(len(freeze([b,a])['items']),1)

@@ -528,3 +528,10 @@ git diff --check
 ## 2026-10-05 D24 撤下商家公开价历史抓取
 
 根据用户对核心业务的纠正，移除仅能读公开HTML结构化标价、且长期无有效数据的商家页采集器与P10历史低价候选模块。清除了worker调用、搜索/详情页状态与候选展示及对应模块测试；`merchant_page_checks` / `public_price_observations` 在新库不再创建。没有执行 DROP、DELETE 或清表；既有数据库内的表和记录均保留。验证：全量165项回归、Python编译、差异检查通过；活动代码无残留引用；隔离新库不创建旧表，隔离旧库初始化后两张表各1条记录仍保留。未启动真实worker或访问商城。
+
+
+## 2026-10-05 D25：来源展示和旧规则收敛验收
+
+操作仓库 `/Applications/work/gitRepo/opportunity-workbench`，非保护分支 `feature/bootstrap`。全量 `unittest discover -s tests` 168项通过；核心业务模块 `py_compile` 和 `git diff --check` 通过。已定向重启本项目源码服务：旧 PID 8574，当前 PID 23636，命令 `.venv/bin/python app.py serve`，工作目录为该仓库；未重启 worker、未触碰数据库、未发送通知。
+
+真实浏览器打开 `http://127.0.0.1:5002/?q=纸&layout=list`，页面默认选中“当前采集线索（默认，含待补证据）”，显示45条当前新鲜来源记录，其中5条达到商品搜索资料准入；34个启用来源中4个有“纸”查询命中。行内来源分别可见逛丢、线报酷、GUANGDIU等不同入口。该运行时样本随worker变化，仅证明工作台当前库中这些来源分别产出过记录；剩余30个入口的本次未命中不证明平台无货或已完成全站采集。`view=ready` 的严格准入及历史报价只读/拒绝新增由隔离自动化回归覆盖。

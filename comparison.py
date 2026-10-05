@@ -110,7 +110,7 @@ def assess_readiness(row, comparison=None, brief=None):
     }
     return dict(checks=checks, search_ready=checks['search_ready'], comparable=checks['two_comparable_offers'],
                 # This is only a low source-claim rank. It is not proven saving or a bargain.
-                source_claim_low=checks['decision'], proven_better=checks['decision'], identity_label=identity['label'],
+                source_claim_low=checks['decision'], identity_label=identity['label'],
                 search_failures=[messages[key] for key in search_keys if not checks[key]],
                 decision_failures=[messages[key] for key in ('two_comparable_offers','decision') if not checks[key]],
                 failures=[messages[key] for key,value in checks.items() if not value and key in messages],

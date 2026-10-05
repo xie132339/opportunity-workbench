@@ -34,7 +34,6 @@ class CoreRulesTests(unittest.TestCase):
 
     def test_not_historical_low_does_not_block_resale(self):
         self.assertTrue(self.allowed())  # No history samples at all; exit evidence stays required.
-        self.assertFalse(workbench.historical_buy_assessment(self.opp,self.quotes)[2])
 
     def test_profit_boundary_and_one_cent(self):
         self.assertTrue(self.allowed())  # Exactly the configured threshold.
@@ -81,7 +80,6 @@ class CoreRulesTests(unittest.TestCase):
                 self.assertFalse(workbench.is_evidence_candidate(opp,self.quotes,[self.rule]),field)
         self.opp['buy_checked_at']=(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
         self.assertIsNone(workbench.estimated_profit(self.opp,self.quotes)[0])
-        self.assertFalse(workbench.historical_buy_assessment(self.opp,self.quotes)[2])
 
 
 class CoreFlowTests(unittest.TestCase):
@@ -139,6 +137,41 @@ class CoreFlowTests(unittest.TestCase):
         second=self.client.get('/benefits?page=2').get_data(as_text=True)
         self.assertIn('第 2 页',second)
         self.assertIn('优惠入口04',second)
+
+    def test_default_search_shows_fresh_incomplete_record_and_ready_view_filters_it(self):
+        with db.connect() as c:
+            c.execute("UPDATE sources SET last_success=CURRENT_TIMESTAMP WHERE id=1")
+        current=self.client.get('/').get_data(as_text=True)
+        self.assertIn('/opportunities/1',current)
+        self.assertIn('当前采集线索（默认，含待补证据）',current)
+        self.assertIn('row-gaps',current)
+        ready=self.client.get('/?view=ready').get_data(as_text=True)
+        self.assertNotIn('/opportunities/1',ready)
+        self.assertIn('商品搜索（仅资料达到准入）',ready)
+
+    def test_default_search_keeps_same_offer_captured_by_separate_sources(self):
+        with db.connect() as c:
+            c.execute("UPDATE sources SET last_success=CURRENT_TIMESTAMP WHERE id=1")
+            c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,last_success) VALUES(2,'另一个平台','另一入口','零售优惠','https://example.com/feed2','rss','healthy',CURRENT_TIMESTAMP)")
+            c.execute("INSERT INTO events(id,source_id,external_key,title,url,fingerprint,published_at) VALUES(2,2,'same','测试纸','https://example.com/item2','same',CURRENT_TIMESTAMP)")
+            c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(2,2,2,'测试纸','零售优惠','pending','https://example.com/item2','standard')")
+        page=self.client.get('/?q=测试纸').get_data(as_text=True)
+        self.assertIn('/opportunities/1',page)
+        self.assertIn('/opportunities/2',page)
+        self.assertIn('测试 · 测试',page)
+        self.assertIn('另一个平台 · 另一入口',page)
+
+    def test_historical_buy_quotes_are_archive_only_and_cannot_be_added_again(self):
+        with db.connect() as c:
+            c.execute("INSERT INTO quotes(opportunity_id,kind,amount_cents,offer_type,specification,conditions,same_spec) VALUES(1,'historical_buy',900,'standard','TEST-SKU 1整单','旧记录',1)")
+        detail=self.client.get('/opportunities/1').get_data(as_text=True)
+        self.assertIn('历史实付（旧记录，仅留档）',detail)
+        self.assertIn('不参与当前买前低价或利润判断',detail)
+        self.assertNotIn('同规格历史实付价</h2>',detail)
+        response=self.client.post('/opportunities/1/quotes',data={'csrf':'test-csrf','kind':'historical_buy','amount':'9'})
+        self.assertEqual(response.status_code,400)
+        with db.connect() as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM quotes WHERE kind='historical_buy'").fetchone()[0],1)
 
     def test_search_price_sort_orders_visible_quotes_and_keeps_unpriced_last(self):
         with db.connect() as c:

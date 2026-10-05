@@ -70,25 +70,26 @@ def evaluate(rows,cohort,cache,now=None):
     for sample in cohort['items']:
         r=latest.get(sample['url']);fail=[]
         if r is None:
-            items.append(dict(sample,passed=False,failures=['样本已缺失'],checks={}));continue
+            items.append(dict(sample,source_claim_low=False,failures=['样本已缺失'],checks={}));continue
         b=brief_of(r);c=index[r['id']];assessment=assess_readiness(r,c,b);checks=assessment['checks']
         items.append(dict(sample,id=r['id'],identity_label=assessment['identity_label'],checks=checks,
-                          passed=assessment['proven_better'],failures=assessment['failures'],
+                          source_claim_low=assessment['source_claim_low'],failures=assessment['failures'],
                           total_cents=b.get('total_cents'),quantity=b.get('quantity'),
                           plan_state=assessment['plan_state'],published_at=r.get('published_at'),comparison=c['message']))
     markets=Counter(i['market'] for i in items);topics=Counter(i['topic'] for i in items)
     totals=Counter(k for i in items for k,v in i['checks'].items() if v)
     coverage=len(items)==50 and len(set(markets)-{'购买平台未明确'})>=3 and len(set(topics)-{'other'})>=5
-    passed=sum(i['passed'] for i in items)
-    return dict(evaluated_at=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),frozen_at=cohort['frozen_at'],target=40,sample_size=len(items),passed=passed,
+    source_claim_low_count=sum(bool(i.get('source_claim_low')) for i in items)
+    return dict(evaluated_at=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),frozen_at=cohort['frozen_at'],sample_size=len(items),source_claim_low_count=source_claim_low_count,
                 search_ready=totals['search_ready'],comparable=totals['two_comparable_offers'],coverage_passed=coverage,
-                overall_passed=coverage and passed>=40,market_counts=dict(markets),topic_counts={TOPIC_LABELS.get(k,k):v for k,v in topics.items()},checks=dict(totals),failures=dict(Counter(x for i in items for x in i['failures'])),items=items)
+                market_counts=dict(markets),topic_counts={TOPIC_LABELS.get(k,k):v for k,v in topics.items()},checks=dict(totals),failures=dict(Counter(x for i in items for x in i['failures'])),items=items)
 
 def report_md(r):
-    lines=['# 50条公开来源报价比较验收',f"\n结论：{r['passed']}/{r['sample_size']} 条在样本同口径来源报价中最低或并列最低；目标40/50；平台/品类覆盖达标：{'是' if r['coverage_passed'] else '否'}。",f"\n冻结时间（UTC）：{r['frozen_at']}；计算时间（UTC）：{r['evaluated_at']}。",'\n固定样本不会用新通过条目替换失败条目。本文只评估冻结批次里的来源公开报价比较，不证明账号可买、到手价最低或存在净利润；不能外推全市场成功率。','\n购买平台：'+json.dumps(r['market_counts'],ensure_ascii=False),'\n商品类别：'+json.dumps(r['topic_counts'],ensure_ascii=False),'\n样本平台由原文/链接识别，仅表示线索涉及该平台，不代表一手数据已接通。主题沿用冻结时自动分类，会员关键词等存在误分类，未据此替换样本或增加通过数。', '\n单项完成数：'+json.dumps(r['checks'],ensure_ascii=False),'\n缺口计数（同条可有多项）：'+json.dumps(r['failures'],ensure_ascii=False),'\n条件算术吻合只代表按来源描述能算出该金额，不证明券可用。商品地址解析时间不作为价格验证时间。零笔个人购买记录不影响本验收。','\n|记录|购买平台|商品|商品金额/件数|结果与缺口|','|---|---|---|---|---|']
+    lines=['# 50条公开来源报价比较验收',f"\n本批次：{r['source_claim_low_count']}/{r['sample_size']} 条在现有同口径来源声称价中最低或并列最低；平台/品类覆盖：{'符合' if r['coverage_passed'] else '不足'}。",f"\n冻结时间（UTC）：{r['frozen_at']}；计算时间（UTC）：{r['evaluated_at']}。",'\n固定样本不会用新通过条目替换失败条目。本文只评估冻结批次里的来源公开报价比较，不证明账号可买、到手价最低或存在净利润；不能外推全市场成功率。','\n购买平台：'+json.dumps(r['market_counts'],ensure_ascii=False),'\n商品类别：'+json.dumps(r['topic_counts'],ensure_ascii=False),'\n样本平台由原文/链接识别，仅表示线索涉及该平台，不代表一手数据已接通。主题沿用冻结时自动分类，会员关键词等存在误分类，未据此替换样本或增加通过数。', '\n单项完成数：'+json.dumps(r['checks'],ensure_ascii=False),'\n缺口计数（同条可有多项）：'+json.dumps(r['failures'],ensure_ascii=False),'\n条件算术吻合只代表按来源描述能算出该金额，不证明券可用。商品地址解析时间不作为价格验证时间。零笔个人购买记录不影响本验收。','\n|记录|购买平台|商品|商品金额/件数|结果与缺口|','|---|---|---|---|---|']
     for i in r['items']:
         oid=i.get('id',i['first_id']);price='未知' if i.get('total_cents') is None else f"{i['total_cents']/100:.2f}元"
-        lines.append(f"|[#{oid}](http://127.0.0.1:5002/opportunities/{oid})|{i['market']}|{i['title'].replace('|','/')}|{price} / {i.get('quantity') or '未知'}件|{'；'.join(i['failures']) or '通过'}|")
+        outcome = '样本内来源声称价最低或并列最低（非省钱结论）' if i.get('source_claim_low') else ('；'.join(i['failures']) or '未排到最低来源声称价；不判省钱/捡漏')
+        lines.append(f"|[#{oid}](http://127.0.0.1:5002/opportunities/{oid})|{i['market']}|{i['title'].replace('|','/')}|{price} / {i.get('quantity') or '未知'}件|{outcome}|")
     return '\n'.join(lines)+'\n'
 
 if __name__=='__main__':

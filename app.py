@@ -33,7 +33,7 @@ from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
 from offer import RESOURCE_LABELS, TOPIC_LABELS, product_subcategory, paper_package_prices
 from services.money import COST_FIELDS, cents, money
 from services.opportunity_analysis import (CHECKOUT_WINDOW, RECENT_WINDOW, estimated_profit, public_profit_estimate,
-    historical_buy_assessment, freshness_state, freshness_label, resale_assessment, is_evidence_candidate,
+    freshness_state, freshness_label, resale_assessment, is_evidence_candidate,
     is_current_notice, notice_rows)
 from services.alert_dispatch import dispatch_verified_alerts
 

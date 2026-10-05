@@ -2,7 +2,7 @@
 {% block content %}
 <h1>自动核验</h1>
 {% if acceptance %}<section class="card"><h2>来源数据支持到哪一步？</h2>
-<p><strong>具备完整自动分析字段 {{ acceptance.search_ready }} / {{ acceptance.sample_size }}；同口径来源可比较 {{ acceptance.comparable }} / {{ acceptance.sample_size }}；来源报价最低或并列最低 {{ acceptance.passed }} / {{ acceptance.sample_size }}。</strong></p>
+<p><strong>具备完整自动分析字段 {{ acceptance.search_ready }} / {{ acceptance.sample_size }}；同口径来源可比较 {{ acceptance.comparable }} / {{ acceptance.sample_size }}；来源声称价最低或并列最低 {{ acceptance.source_claim_low_count }} / {{ acceptance.sample_size }}（仅为已采样线索内排序，不是省钱/捡漏通过率）。</strong></p>
 <p>评估当前商品的来源、身份、规格、整单价、时效、优惠算术和独立同口径报价。商家账号规则、个人资格价、下单库存和实际运费不作为采集准入或本页通过条件；缺少这些信息时只限制“最终净价/利润结论”，不会生成要求你完成的商家核实状态。该批次从近两小时、来源健康且已提取报价的商品中实时取样；<a href="/benefits">优惠入口按公开来源归属商品</a>。</p>
 <div class="table-wrap"><table><thead><tr><th>关键资料</th><th>本批次具备条数</th></tr></thead><tbody>
 {% for key,label in [('identity','稳定商品身份或严格型号/规格指纹'),('merchant_product_id','来源含明确商家商品ID'),('selected_spec','原文选中规格可提取'),('order_amount','明确来源整单报价及购买件数'),('current','原文、采集来源与更新时间均有效'),('conditional_arithmetic','有优惠时算术吻合（只检算式，不代表优惠已生效）'),('conditional_product_binding','有条件优惠时能绑定到具体商品'),('two_comparable_offers','至少两个独立、同口径的当前来源报价')] %}<tr><td>{{ label }}</td><td>{{ acceptance.checks.get(key,0) }} / {{ acceptance.sample_size }}</td></tr>{% endfor %}

@@ -2,9 +2,9 @@
 {% block content %}
 <h1>商品搜索</h1>
 <p class="row"><a href="/?topic=home">家用日用品</a><a href="{{ url_for('benefits_page',kind='free_claim') }}">免费领取线索</a><a href="{{ url_for('benefits_page',kind='trial') }}">申请试用</a><a href="{{ url_for('benefits_page',kind='coupon') }}">优惠券与权益</a><a href="{{ url_for('benefits_page',kind='points') }}">积分兑换</a><a href="{{ url_for('benefits_page',kind='campaign') }}">优惠会场</a></p>
-<p>默认只显示通过商品身份、规格、来源报价与时效准入的记录；这表示资料可比较，不表示已经证明低于全市场或能盈利。</p>
-<p><a href="{{ url_for('index',view='current',q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,sort=sort_mode,layout=layout_mode) }}">查看当前采集线索与待补证据 →</a> · <a href="{{ url_for('index',view='all',q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,sort=sort_mode,layout=layout_mode) }}">查看全部来源与历史 →</a> · <a href="{{ url_for('verification') }}">查看自动采集与核验缺口 →</a></p>
-<p class="muted">此处搜索工作台已采集且仍新鲜的线索，不是对京东、淘宝、拼多多等商城实时全站搜价。购买平台是原文提及的商家；线索来源是发布/聚合信息的平台。逛丢等爆料不是商家报价，相同内容转载只算一份报价。来源标价不等于账号结算价、全网最低或利润；自动分析不会等待商家人工核实。</p>
+<p>默认展示所有仍新鲜的商品类来源记录，包括资料未齐的线索；每条标出缺项。只有切换到“资料达到准入”才会隐藏未达比较条件的记录。任何来源报价都不等于已经证明省钱、捡漏或盈利。</p>
+<p><a href="{{ url_for('index',view='ready',q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,sort=sort_mode,layout=layout_mode) }}">查看资料达到准入的报价 →</a> · <a href="{{ url_for('index',view='all',q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,sort=sort_mode,layout=layout_mode) }}">查看全部来源与历史 →</a> · <a href="{{ url_for('verification') }}">查看自动采集与核验缺口 →</a></p>
+<p class="muted">此处搜索工作台已采集且仍新鲜的线索，不是对京东、淘宝、拼多多等商城实时全站搜价。购买平台是原文提及的商家；线索来源是发布/聚合信息的平台。逛丢等爆料不是商家报价；相同内容会按来源分别展示，但转载不算独立购买方案。来源标价不等于账号结算价、全网最低或利润；自动分析不会等待商家人工核实。</p>
 
 <div class="grid search-layout">
 <section class="card search-summary">
@@ -15,8 +15,8 @@
   {% if ready_only %}
   <p>当前商品资料准入 {{ total }} 条；{{ quality_counts.comparable }} 条有同口径来源线索可比较；{{ quality_counts.source_claim_low }} 条低于已采集来源声称价。来源声称价差不等于实际省钱或捡漏。</p>
   {% else %}
-  <p>{{ source_offer_count }} 条新鲜商品/未分类线索合并为 {{ candidate_pool_count }} 个方案；其中资料达到商品搜索准入 {{ quality_counts.search_ready }} 条；具备同口径来源线索对比 {{ quality_counts.comparable }} 条；低于已采集来源声称价 {{ quality_counts.source_claim_low }} 条。</p>
-  <p class="muted">低价线索不直接判为省钱或捡漏：省钱须比较同款、同数量、同资格的当前实际可得总价；捡漏还须有该商品的有效历史价格基准。当前缺少的证据不会按零或按标题猜测。</p>
+  <p>{{ source_offer_count }} 条新鲜来源记录；每条保留自己的渠道与原始报价，不因标题相似而合并。其中资料达到商品搜索准入 {{ quality_counts.search_ready }} 条；具备同口径来源线索对比 {{ quality_counts.comparable }} 条；低于已采集来源声称价 {{ quality_counts.source_claim_low }} 条。</p>
+  <p class="muted">低价线索不直接判为省钱或捡漏：省钱须比较同款、同数量、同资格的当前含强制费用价格；捡漏还须有真实、同条件的历史价格基准。当前系统没有接入可靠历史价格数据，因此不会自动判定捡漏。</p>
   <p class="muted">本视图保留缺价、规格/数量缺口、自动复查排队和报价冲突等待补证据线索；它们不等于通过商品搜索准入。过期、来源失效和优惠资源不作为当前商品线索。</p>
   {% endif %}
   {% endif %}
@@ -29,8 +29,8 @@
 <input type="hidden" name="layout" value="{{ layout_mode }}">
 <label>关键词<input name="q" value="{{ query }}" placeholder="例如：纸、牛奶、手机"></label>
 <label>数据范围<select name="view">
-<option value="ready" {% if view_mode=="ready" %}selected{% endif %}>商品搜索（资料达到准入）</option>
-<option value="current" {% if view_mode=="current" %}selected{% endif %}>当前采集线索（含待补证据）</option>
+<option value="current" {% if view_mode=="current" %}selected{% endif %}>当前采集线索（默认，含待补证据）</option>
+<option value="ready" {% if view_mode=="ready" %}selected{% endif %}>商品搜索（仅资料达到准入）</option>
 <option value="all" {% if view_mode=="all" %}selected{% endif %}>全部线索与历史数据</option>
 </select></label>
 <label>排序<select name="sort"><option value="comparison" {% if sort_mode=="comparison" %}selected{% endif %}>同口径证据较完整者优先</option><option value="latest" {% if sort_mode=="latest" %}selected{% endif %}>最新发布优先</option><option value="price_low" {% if sort_mode=="price_low" %}selected{% endif %}>来源报价从低到高</option><option value="price_high" {% if sort_mode=="price_high" %}selected{% endif %}>来源报价从高到低</option><option value="paper_unit_low" {% if sort_mode=="paper_unit_low" %}selected{% endif %}>纸品每包/卷价从低到高</option></select><small>无唯一报价的线索排在最后；排序不代表同款或最低价。</small></label>
@@ -83,7 +83,7 @@
   <td data-label="购买平台">{{ brief.store or brief.platforms or '原文未注明' }}</td>
   <td data-label="线索来源">{% set channels=row.source_channels|default([]) %}{{ channels|join('、') if channels else row.platform or '人工录入' }}{% if row.source_count|default(1)>1 %}<small>{{ row.source_count }} 个采集入口；不代表独立报价</small>{% endif %}</td>
   <td data-label="本商品优惠">{% set relations=benefit_link_counts.get(row.id,{}) %}{% if relations.get('confirmed',0) %}<a href="{{ url_for('opportunity',opportunity_id=row.id) }}#product-benefits">已确认适用 {{ relations.confirmed }} 条</a>{% elif brief.promotions or brief.qualifications or relations.get('source_linked',0) %}<a href="{{ url_for('opportunity',opportunity_id=row.id) }}#product-benefits">优惠线索 {{ brief.promotions|length + relations.get('source_linked',0) }} 条</a><small>原文关联 {{ relations.get('source_linked',0) }} 个入口；适用/叠加未确认</small>{% else %}未识别到明确优惠{% endif %}</td>
-  <td data-label="发布时间 / 状态"><span>{{ row.published_at|cn_time }}</span><small>{{ row|freshness }} · {{ review_labels.get(row.auto_state,'自动核验状态待生成') }}{% if search_assessments.get(row.id) and search_assessments[row.id].search_ready %} · 可分析{% endif %}</small></td>
+  <td data-label="发布时间 / 状态"><span>{{ row.published_at|cn_time }}</span><small>{{ row|freshness }} · {{ review_labels.get(row.auto_state,'自动核验状态待生成') }}{% if search_assessments.get(row.id) and search_assessments[row.id].search_ready %} · 资料可分析{% endif %}</small>{% set assessment=search_assessments.get(row.id) %}{% if assessment and not assessment.search_ready and assessment.search_failures %}<details class="row-gaps"><summary>缺 {{ assessment.search_failures|length }} 项</summary><ul>{% for reason in assessment.search_failures %}<li>{{ reason }}</li>{% endfor %}</ul></details>{% endif %}</td>
   <td data-label="操作"><div class="offer-row-actions"><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">详情</a>{% if row.url and (row.url.startswith('https://') or row.url.startswith('http://')) %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">源页面 ↗</a>{% else %}<span class="muted">无源页面链接</span>{% endif %}</div></td>
 </tr>
 {% endfor %}
