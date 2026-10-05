@@ -59,6 +59,11 @@ def structured_spec(text):
     text=unicodedata.normalize('NFKC',html.unescape(text or ''))
     if re.search(r'任选|多规格|多款|随机|NB\s*/\s*S\s*/\s*M\s*/\s*L|S\s*/\s*M\s*/\s*L',text,re.I):
         return ''
+    option_unit=r'(毫升|ml|千克|kg|克|g|升|L|斤|层|抽|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
+    alternatives=re.search(r'(?<![\d.])(\d+(?:\.\d+)?)\s*'+option_unit+
+                            r'\s*/\s*(\d+(?:\.\d+)?)\s*\2(?![A-Za-z邮])',text,re.I)
+    if alternatives and Decimal(alternatives[1]) != Decimal(alternatives[3]):
+        return ''
     unit=r'(?:毫升|ml|kg|千克|克|g|升|L|斤|层|抽|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
     tokens=re.findall(r'(?<![\d.])\d+(?:\.\d+)?\s*'+unit,text,re.I)
     tokens+=re.findall(r'(?<![A-Za-z])(?:NB|S|M|L|XL|XXL|XXXL)\s*\d+(?!\d)',text,re.I)
@@ -90,6 +95,10 @@ def selected_spec_conflict(title, body):
     headline_units, selected_units = quantities(title), quantities(selected[1])
     for unit in sorted(headline_units.keys() & selected_units.keys()):
         a, b = headline_units[unit], selected_units[unit]
+        if len(b) > 1:
+            return f"该价格选中规格包含多个{unit}数量选项，无法确定对应包装，不能比较"
+        if len(a) > 1 and b.isdisjoint(a):
+            return f"标题列出多个{unit}规格，该价格选中 {next(iter(b))}{unit} 不在标题选项中；数量口径冲突"
         if len(a) == len(b) == 1 and a != b:
             return f"标题标注 {next(iter(a))}{unit}，该报价选中规格标注 {next(iter(b))}{unit}；数量口径冲突，不能按标题折算单价或利润"
     return None

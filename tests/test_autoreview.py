@@ -98,7 +98,20 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertIsNone(ar.selected_spec_conflict(title,'另有1包体验装，赠品2包，满24元可用券'))
         self.assertIsNone(ar.selected_spec_conflict(title,'该价格商品规格：24包 天猫商城任选1件'))
         self.assertIsNone(ar.selected_spec_conflict('抽纸12元','该价格商品规格：24包'))
-        self.assertIsNone(ar.selected_spec_conflict('抽纸10包/20包','该价格商品规格：1包'))
+        self.assertIn('数量口径冲突',ar.selected_spec_conflict('抽纸10包/20包','该价格商品规格：1包京东商城'))
+        self.assertIsNone(ar.selected_spec_conflict('抽纸10包/20包','该价格商品规格：10包京东商城'))
+
+    def test_slash_separated_same_unit_options_are_not_a_combined_spec(self):
+        self.assertEqual(ar.structured_spec('抽纸10包/20包'),'')
+        self.assertEqual(ar.structured_spec('卫生纸5层/6层'),'')
+        self.assertEqual(ar.structured_spec('抽纸400抽/包*18包'),'400抽 × 18包')
+
+    def test_selected_pack_outside_title_options_is_automatically_conflicted(self):
+        row=dict(self.row,title='抽纸10包/20包 10元',
+                 snippet='该价格商品规格：1包 京东商城')
+        result=ar.classify(row,self.now)
+        self.assertEqual(result['state'],'conflict')
+        self.assertIn('不在标题选项中',result['reason'])
 
     def test_all_feeds_keep_body_restrictions_without_using_body_coupon_as_price(self):
         row=dict(self.row,title='抽纸24包12.32元',snippet='限新客，会员可领2元券，需买2件，返现需到账。')

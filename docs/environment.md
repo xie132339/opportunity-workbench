@@ -549,3 +549,10 @@ git diff --check
 只读仓库引用检查确认 `rank`、`identity_evidence`、`source_claim_delta_cents` 无页面、路由或验收消费者。移除比较结果构造字段及身份证据数组收集；没有更改正式数据或启动运行服务。
 
 验证：全量 `unittest discover -s tests` 173项通过；相关模块编译和 `git diff --check` 通过；活动代码扫描仅剩测试里的“字段不应存在”断言，无运行时读取。
+
+
+## 2026-10-05 D28：规格斜杠备选项处理
+
+隔离回归先确认旧代码把“10包/20包”生成成组合规格，并漏掉选中1包与标题候选不一致。现对同单位不同数量的斜杠备选采取保守隔离；清晰选择其中一个值时保留，对标题外数量或多个选中值写冲突理由。`400抽/包×18包`比例结构作为反例，确保不误删真实组合。
+
+验证：全量 `unittest discover -s tests` 175项通过；`py_compile autoreview.py comparison.py tests/test_autoreview.py` 与 `git diff --check` 通过。使用隔离样本，无正式库写入、worker运行或商城网络请求。
