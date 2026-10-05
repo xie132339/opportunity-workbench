@@ -19,6 +19,15 @@ def product_key(title):
     return re.sub(r'\s+','',text)
 
 
+def specification_key(value):
+    """Return a conservative key for an explicitly selected product variant."""
+    text=unicodedata.normalize('NFKC',value or '').strip()
+    if not text or re.search(r'任选|多规格|多款|随机|待选择|请选择|未选择',text,re.I):
+        return ''
+    text=re.sub(r'^(?:(?:该价格商品规格|商品规格|套餐类型|规格|型号|颜色分类|颜色|尺码|净含量)\s*[:：]\s*)+','',text,flags=re.I)
+    return re.sub(r'[\s，,；;]+','',text).casefold()
+
+
 def merchant_identity(row):
     """Read explicit merchant product IDs; never infer them from coupon/shop/tracking IDs."""
     metadata=json.loads(row.get('metadata_json') or '{}')
@@ -80,7 +89,7 @@ def assess_readiness(row, comparison=None, brief=None):
                     if item['id'] == row.get('id')), None)
     identity_ok = not identity['key'].startswith(('title:','ambiguous:')) and not identity['conflict']
     merchant_id_ok = identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not identity['conflict']
-    selected_spec_ok = bool(brief.get('selected_spec')) and not brief.get('error')
+    selected_spec_ok = bool(specification_key(brief.get('selected_spec'))) and not brief.get('error')
     amount_ok = brief.get('total_cents') is not None and bool(brief.get('quantity')) and not brief.get('error')
     current_ok = current is not None and current.get('source_current') is True
     conditional = (row.get('auto_state') == 'conditional' or bool(brief['promotions'])
@@ -170,6 +179,8 @@ def comparison_index(rows, now=None):
         if re.search(r'凑单|返现|返后|积分|淘金币|概率|随机领|部分账号|预售|定金',body):optimization_gaps.append('含额外支出、非现金权益或不确定条件')
         if json.loads(row.get('metadata_json') or '{}').get('content_truncated'):problems.append('原文正文被截断，可能缺少条件')
         if brief.get('error'):problems.append(brief['error'])
+        selected_spec_key=specification_key(brief.get('selected_spec'))
+        if not selected_spec_key:problems.append('缺明确选中规格，不能比较商品或数量方案')
         if total is None or not quantity:problems.append('缺整单金额或购买件数')
         if row.get('auto_state') not in ('observed','conditional'):
             problems.append('当前原文核验或时效未通过');current_problems.append('当前原文核验或时效未通过')
@@ -190,7 +201,7 @@ def comparison_index(rows, now=None):
                   total_cents=total,quantity=quantity,unit=Fraction(total,quantity) if total is not None and quantity else None,
                   unit_cents=round(Fraction(total,quantity)) if total is not None and quantity else None,
                   published_at=row.get('published_at'),conditions='；'.join(conditions) or '原文未注明资格限制（不代表人人适用）',
-                  partition=((identity['key'] if not identity['key'].startswith(('title:','ambiguous:')) else brief.get('selected_spec','')),conditions,quantity),problems=list(dict.fromkeys(problems)),
+                  partition=(identity['key'],selected_spec_key,conditions,quantity),problems=list(dict.fromkeys(problems)),
                   source_current=not current_problems,shipping_cents=brief['audit']['plan']['shipping_cents'])
         groups[key].append(item)
     result={}

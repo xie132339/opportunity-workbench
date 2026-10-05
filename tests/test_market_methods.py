@@ -97,6 +97,33 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['saving_cents'],0)
         self.assertIn('不能判断省钱或捡漏',result[1]['message'])
 
+    def test_variants_on_one_merchant_page_are_not_quantity_options_for_each_other(self):
+        sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
+        rows=[
+            self.row(1,'12345',title='某品牌抽纸100抽6包 10元',snippet='该价格商品规格：100抽6包 京东商城',metadata_json=sku),
+            self.row(2,'12345',title='某品牌抽纸120抽6包 12元',snippet='该价格商品规格：120抽6包 京东商城',metadata_json=sku),
+        ]
+        result=comparison_index(rows)
+        self.assertEqual(result[1]['quantity_options']['count'],1)
+        self.assertEqual(result[2]['quantity_options']['count'],1)
+
+    def test_missing_selected_specification_cannot_enter_quantity_options(self):
+        row=self.row(1,'12345',title='纸巾 10元',snippet='购买1件 实付10元',
+                     metadata_json=json.dumps({'activity_links':['https://item.jd.com/12345.html']}))
+        result=comparison_index([row])
+        self.assertEqual(result[1]['quantity_options']['count'],0)
+        self.assertTrue(any('缺明确选中规格' in reason for reason in result[1]['items'][0]['problems']))
+
+    def test_selected_variant_labels_are_preserved_in_comparison_partition(self):
+        sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
+        rows=[
+            self.row(1,'12345',title='某品牌抽纸红色100抽6包 10元',snippet='该价格商品规格：颜色分类：红色 100抽6包 京东商城',metadata_json=sku),
+            self.row(2,'12345',title='某品牌抽纸蓝色100抽6包 8元',snippet='该价格商品规格：颜色分类：蓝色 100抽6包 京东商城',metadata_json=sku),
+        ]
+        result=comparison_index(rows)
+        self.assertEqual(result[1]['quantity_options']['count'],1)
+        self.assertEqual(result[2]['quantity_options']['count'],1)
+
     def test_unrecalculated_optimization_gap_cannot_be_a_comparison_peer(self):
         a=self.row(1,total='4.37')
         b=self.row(2,total='4.00',tail='需凑单其他商品')

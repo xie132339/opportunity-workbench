@@ -1,4 +1,5 @@
 """Core regressions D01/D02/D08; all prices are synthetic, never production evidence."""
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone, date
@@ -172,6 +173,25 @@ class CoreFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code,400)
         with db.connect() as c:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM quotes WHERE kind='historical_buy'").fetchone()[0],1)
+
+    def test_opportunity_detail_does_not_recommend_other_variant_from_same_listing(self):
+        sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
+        with db.connect() as c:
+            for opportunity_id,variant,price in [(2,'100抽6包',10),(3,'120抽6包',8)]:
+                title=f'清风 抽纸 {variant} {price}元'
+                cursor=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,metadata_json,fingerprint,published_at)
+                    VALUES(1,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",(f'variant-{opportunity_id}',title,f'https://guangdiu.com/detail.php?id={opportunity_id}',
+                     f'该价格商品规格：{variant} 京东商城',sku,f'variant-{opportunity_id}'))
+                c.execute("""INSERT INTO opportunities(id,event_id,source_id,title,category,url)
+                    VALUES(?,?,1,?,'零售优惠',?)""",
+                    (opportunity_id,cursor.lastrowid,title,f'https://guangdiu.com/detail.php?id={opportunity_id}'))
+                c.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
+                    VALUES(?,'observed','隔离测试',?)""",(opportunity_id,price*100))
+        response=self.client.get('/opportunities/2')
+        self.assertEqual(response.status_code,200)
+        page=response.get_data(as_text=True)
+        self.assertIn('只有1条满足字段要求的方案',page)
+        self.assertNotIn('参与2条方案比较',page)
 
     def test_search_price_sort_orders_visible_quotes_and_keeps_unpriced_last(self):
         with db.connect() as c:

@@ -535,3 +535,10 @@ git diff --check
 操作仓库 `/Applications/work/gitRepo/opportunity-workbench`，非保护分支 `feature/bootstrap`。全量 `unittest discover -s tests` 168项通过；核心业务模块 `py_compile` 和 `git diff --check` 通过。已定向重启本项目源码服务：旧 PID 8574，当前 PID 23636，命令 `.venv/bin/python app.py serve`，工作目录为该仓库；未重启 worker、未触碰数据库、未发送通知。
 
 真实浏览器打开 `http://127.0.0.1:5002/?q=纸&layout=list`，页面默认选中“当前采集线索（默认，含待补证据）”，显示45条当前新鲜来源记录，其中5条达到商品搜索资料准入；34个启用来源中4个有“纸”查询命中。行内来源分别可见逛丢、线报酷、GUANGDIU等不同入口。该运行时样本随worker变化，仅证明工作台当前库中这些来源分别产出过记录；剩余30个入口的本次未命中不证明平台无货或已完成全站采集。`view=ready` 的严格准入及历史报价只读/拒绝新增由隔离自动化回归覆盖。
+
+
+## 2026-10-05 D26：规格变体比较隔离
+
+环境操作：未执行数据库迁移、正式库写入、采集任务、通知发送或服务器重启。使用仓库 `.venv` 编译 `comparison.py` 和新增回归模块；隔离合成报价验证同一商家商品ID的不同包装、不同颜色各自只进入自己的数量方案，缺少选中规格的报价不给数量推荐。
+
+验证：全量 `unittest discover -s tests` 172项通过；`py_compile comparison.py tests/test_market_methods.py tests/test_core_rules.py` 与 `git diff --check` 通过。正式数据库和运行服务未被本项测试触碰。此结果验证本地分区及隔离详情页，不证明上游原文提供了完整真实SKU或完成跨平台同款匹配。
