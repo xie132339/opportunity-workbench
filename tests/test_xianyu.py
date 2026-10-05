@@ -99,7 +99,7 @@ class XianyuPageTests(unittest.TestCase):
             return session['csrf']
 
     def test_unified_page_and_csrf(self):
-        with patch('app.xianyu_snapshot', return_value=([], [], [])):
+        with patch('routes.xianyu.xianyu_snapshot', return_value=([], [], [])):
             page = self.client.get('/xianyu')
         self.assertEqual(page.status_code, 200)
         self.assertIn('闲鱼账号与搜索任务'.encode(), page.data)
@@ -114,7 +114,7 @@ class XianyuPageTests(unittest.TestCase):
                 'is_running': False, 'enabled': True, 'decision_mode': 'keyword',
                 'max_pages': 3, 'keyword_rules': ['手机'], 'personal_only': True,
                 'free_shipping': False}
-        with patch('app.xianyu_snapshot', return_value=([account], [task], ['phone_full_data.jsonl'])):
+        with patch('routes.xianyu.xianyu_snapshot', return_value=([account], [task], ['phone_full_data.jsonl'])):
             page = self.client.get('/xianyu')
         self.assertEqual(page.status_code, 200)
         self.assertIn('编辑条件'.encode(), page.data)
@@ -122,7 +122,7 @@ class XianyuPageTests(unittest.TestCase):
         self.assertNotIn(b'127.0.0.1:8000/api/', page.data)
 
     def test_backend_down_is_visible_without_fake_accounts(self):
-        with patch('app.xianyu_snapshot', side_effect=xianyu.XianyuError('闲鱼采集服务未运行')):
+        with patch('routes.xianyu.xianyu_snapshot', side_effect=xianyu.XianyuError('闲鱼采集服务未运行')):
             page = self.client.get('/xianyu')
         self.assertEqual(page.status_code, 200)
         self.assertIn('闲鱼采集服务未运行'.encode(), page.data)
@@ -130,18 +130,18 @@ class XianyuPageTests(unittest.TestCase):
         self.assertIn(b'disabled', page.data)
 
     def test_result_sync_requires_real_file_then_registers_once(self):
-        with patch('app.xianyu_snapshot', return_value=([], [], [])):
+        with patch('routes.xianyu.xianyu_snapshot', return_value=([], [], [])):
             self.client.get('/xianyu')
         token = self.token()
-        with patch('app.xianyu_api', return_value={'files': []}), patch('app.scan_source') as scan:
+        with patch('routes.xianyu.xianyu_api', return_value={'files': []}), patch('routes.xianyu.scan_source') as scan:
             self.client.post('/xianyu/results', data={'csrf': token,
                               'filename': 'phone_full_data.jsonl'})
             scan.assert_not_called()
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM sources WHERE method='goofish'").fetchone()[0], 0)
 
-        with patch('app.xianyu_api', return_value={'files': ['phone_full_data.jsonl']}), \
-             patch('app.scan_source', return_value={'status': 'healthy', 'seen': 2}) as scan:
+        with patch('routes.xianyu.xianyu_api', return_value={'files': ['phone_full_data.jsonl']}), \
+             patch('routes.xianyu.scan_source', return_value={'status': 'healthy', 'seen': 2}) as scan:
             for _ in range(2):
                 self.client.post('/xianyu/results', data={'csrf': token,
                                   'filename': 'phone_full_data.jsonl'})

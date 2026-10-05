@@ -1,5 +1,15 @@
 # 核心目标、验收清单与缺陷台账
 
+## 2026-10-05 D23：按业务职责拆分 Flask 单文件（结构验收 PASS）
+
+用户要求代码按业务功能拆分并验证。此前 `app.py` 有1,440行，混放金额工具、时效/利润规则、告警派发，以及搜索、优惠、来源、闲鱼、账本、消息等全部HTTP处理器。现将工具/规则/告警分别迁到 `services/money.py`、`services/opportunity_analysis.py`、`services/alert_dispatch.py`；路由迁到 `routes/search.py`、`routes/opportunities.py`、`routes/benefits.py`、`routes/sources.py`、`routes/xianyu.py`、`routes/ledger.py`、`routes/notifications.py`、`routes/system.py`，共享跳转工具在 `routes/common.py`。`app.py` 保留环境加载、Flask装配、全局过滤器/CSRF/模板上下文和命令行/worker编排，缩至130行。
+
+为了不改页面模板里的 `url_for()` 和现有 HTTP 地址，路由模块通过显式 `add_url_rule(endpoint=旧名称)` 注册；`add_strategy` 原有两个POST路径均保留。旧的 `from app import ...` 业务规则调用仍由 `app.py` 导出兼容引用。单元测试 mock 改为指向现在实际拥有依赖的模块。
+
+验证：`.venv/bin/python -m unittest discover -s tests` **177项通过**；隔离SQLite Flask test client 的 `/health`、商品搜索、优惠、核验、渠道、闲鱼、行情、交易、策略和消息页面均HTTP 200；人工线索、来源、消息、策略4个POST缺少CSRF时均返回400；`url_for('index')`、`url_for('opportunity',opportunity_id=1)`、`url_for('add_strategy')`及带ID的策略编辑链接解析正常。`py_compile app.py services/*.py routes/*.py` 与 `git diff --check` 通过。`app.py` 从1,440降至130行；当前34个应用HTTP endpoint（加Flask static共35条规则）均已实际注册。
+
+边界：这是结构拆分，不改价格/利润业务规则、数据库或采集算法；未重启用户当前运行的服务，未连接真实上游、运行采集器或发送消息。捡漏/盈利目标状态仍沿用本台账，不因模块化而提升。
+
 ## 2026-10-05 D19：授权接口优惠商品范围入库（PARTIAL）
 
 在 D18 同商品ID候选匹配基础上，增加 `benefits.import_authorized_record()` 作为各平台授权客户端的统一归一化入库边界，并提供 `app.py benefits-import <jsonl>` 命令。字段保存提供方、平台、券入口与依据链接、范围类型、明确参与商品ID、券额/门槛（整数分）、资格、地区、有效期、叠加状态、接口观察时间和规则原文；重复导入幂等，不把观察时间写成原文发布时间。机会详情仅匹配精确平台商品ID、两小时内观察且当前有效的记录；未知范围、SKU专属范围、未给商品ID清单的店铺/品类/平台券不自动挂商品。授权接口候选仍不算已适用、不扣价、不计利润。

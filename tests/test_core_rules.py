@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import db
 import app as workbench
+from services import alert_dispatch, opportunity_analysis
 
 
 def fixture():
@@ -236,7 +237,7 @@ class CoreFlowTests(unittest.TestCase):
                 with db.connect() as c:
                     c.execute('UPDATE strategies SET enabled=0')
             return original(opp,quotes,rules)
-        with patch.object(workbench,'active_channels',return_value=['qq']),patch.object(workbench,'deliver') as send,patch.object(workbench,'resale_assessment',side_effect=change_before_send):
+        with patch.object(alert_dispatch,'active_channels',return_value=['qq']),patch.object(alert_dispatch,'deliver') as send,patch.object(opportunity_analysis,'resale_assessment',side_effect=change_before_send),patch.object(alert_dispatch,'resale_assessment',side_effect=change_before_send):
             result=workbench.dispatch_verified_alerts()
             self.assertEqual(result,dict(eligible=1,sent=0,failed=0))
             send.assert_not_called()
@@ -244,7 +245,7 @@ class CoreFlowTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT status FROM notification_deliveries').fetchone()[0],'skipped')
 
     def test_dispatch_uses_new_gate_without_historical_samples(self):
-        with patch.object(workbench,'active_channels',return_value=['qq']),patch.object(workbench,'deliver') as send:
+        with patch.object(alert_dispatch,'active_channels',return_value=['qq']),patch.object(alert_dispatch,'deliver') as send:
             self.assertEqual(workbench.dispatch_verified_alerts()['sent'],1)
             self.assertEqual(workbench.dispatch_verified_alerts()['sent'],0)
             send.assert_called_once()

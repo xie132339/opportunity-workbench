@@ -508,3 +508,18 @@ quantity_options对已采集方案比较最低整单与最低折合单件，金�
 用户确认把完整源码上传到已创建的公开仓库 `https://github.com/xie132339/opportunity-workbench`。本机仓库为 `/Applications/work/gitRepo/opportunity-workbench`，操作前确认工作区干净、当前分支为非保护分支 `feature/bootstrap`。GitHub 远端已有一个 README 初始化提交 `e6975b0`，与本地历史无共同祖先；在 `feature/bootstrap` 上用 `git merge --allow-unrelated-histories --no-edit origin/main` 合并，README 出现 add/add 冲突后保留完整本地安装与项目说明，并改为准确指向公开仓库和功能分支。随后提交合并并执行 `git push -u origin feature/bootstrap:feature/bootstrap`。
 
 远端回执：新建 `feature/bootstrap` 分支；浏览器打开 `https://github.com/xie132339/opportunity-workbench/tree/feature/bootstrap`，实见分支名、Public 标记、18 Commits，以及 `.agent/execplans`、`docs`、`static`、`templates`、`tests` 与业务源码文件。README 显示本项目仓库链接、公开状态、功能分支和克隆安装步骤。`main` 未推送、未合并、未修改。发布可见范围为公开互联网；仓库不含本机 SQLite 数据库、`.env`、账号或采集历史。
+
+
+## 2026-10-05 按业务职责拆分代码与隔离验收
+
+操作仓库：`/Applications/work/gitRepo/opportunity-workbench`；分支：`feature/bootstrap`。先后执行：
+
+```sh
+PYTHONPYCACHEPREFIX=/private/tmp/workbench-split-pycache .venv/bin/python -m unittest discover -s tests
+PYTHONPYCACHEPREFIX=/private/tmp/workbench-split-pycache .venv/bin/python -m py_compile app.py services/*.py routes/*.py
+git diff --check
+```
+
+全量177项 unittest 通过；编译通过；diff检查通过。隔离临时目录SQLite + Flask test client 对 `/health`、`/`、`/benefits`、`/verification`、`/sources`、`/xianyu`、`/market`、`/trades`、`/strategies`、`/messages` 请求均返回200；`/manual`、`/sources`、`/messages`、`/strategies` 不带CSRF的POST均返回400。旧 endpoint 的首页、详情、来源新增、策略新增/编辑URL反向解析通过。与HEAD旧 `app.py` AST逐项比较34个(path, endpoint, method)，缺少0、多余0；隔离CLI无效命令打印原Usage并以1退出。HTTP应用endpoint共34个，含Flask static规则共35条。
+
+代码边界：`app.py` 由1440行收至130行，现只做环境加载、Flask装配、公共模板/CSRF与CLI/worker编排。`services/` 独立管理金额、时效/资格/利润评估和通知派发；`routes/` 按搜索、机会、优惠、渠道、闲鱼、账本、通知、系统分区。无数据库迁移、线上采集、服务重启或外部消息发送；这次只证明隔离回归和请求处理行为，不能证明真实上游、价格或利润。
