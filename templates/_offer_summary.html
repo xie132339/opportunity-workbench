@@ -6,6 +6,8 @@
 {% elif brief.total_cents is defined and brief.total_cents is not none and brief.quantity and brief.quantity > 1 %}
 <div><span class="muted">折合每件（由整单换算）</span><div><strong>{{ money(brief.display_unit_cents) }}</strong><span> / 件</span></div></div>
 <div><span class="muted">来源原文整单报价 · {{ brief.quantity }}件</span><div class="order-price">{{ money(brief.total_cents) }}</div><small>显示来源公开声称值</small></div>
+{% elif brief.total_cents is defined and brief.total_cents is not none %}
+<div><span class="muted">来源原文金额 · 购买件数未提取</span><div class="order-price">{{ money(brief.total_cents) }}</div><small>未确认商品总件数，不能折算单件价或比较整单方案。</small></div>
 {% else %}
 <div><span class="muted">来源声称报价（计价单位未明确）</span><div><strong>{{ money(quoted) if quoted is not none else '价格未明确' }}</strong></div></div>
 {% endif %}
@@ -15,7 +17,7 @@
 <dl class="offer-facts">
 <div><dt>{{ '活动平台' if brief.kind not in ('purchase','unknown') else '哪里买' }}</dt><dd>{{ brief.store or brief.platforms or '平台未注明' }}<small>信息来自 {{ source_label }}{% if brief.source_category %} · {{ brief.source_category }}{% endif %}</small></dd></div>
 {% if brief.selected_spec %}<div><dt>原文明确的报价规格</dt><dd>{{ brief.selected_spec }}</dd></div>{% elif brief.source_spec %}<div><dt>标题规格线索</dt><dd>{{ brief.source_spec }}<small>原文未明确该报价对应此变体，不能据此完成同款比较</small></dd></div>{% endif %}
-{% if brief.quantity %}<div><dt>购买数量</dt><dd>{{ brief.quantity }}件<span class="muted"> · 件数不等于包数</span></dd></div>{% endif %}
+<div><dt>购买件数</dt><dd>{% if brief.quantity %}{{ brief.quantity }}件<span class="muted"> · 件数不等于包数</span>{% else %}原文未提取{% endif %}</dd></div>
 <div><dt>优惠条件同步</dt><dd><strong>{{ brief.promotion_sync.label }}</strong><small>{{ brief.promotion_sync.explanation }}</small>{% if brief.promotion_sync.source_checked_at %}<small>规则解析时间：{{ brief.promotion_sync.source_checked_at|cn_time }}</small>{% endif %}{% if brief.promotion_sync.detail_checked_at %}<small>详情同步时间：{{ brief.promotion_sync.detail_checked_at|cn_time }}</small>{% endif %}{% if brief.promotions or brief.qualifications %}<div class="offer-tags">{% for item in brief.promotions + brief.qualifications %}<span>{{ item }}</span>{% endfor %}</div><small>原文提及不代表优惠已生效；资格、适用商品和叠加关系仍按可取得的公开证据判断。</small>{% endif %}</dd></div>
 {% if brief.previous_cents is not none %}<div><dt>此前报价</dt><dd>{{ money(brief.previous_cents) }}<small>来源自述的降价前价格，尚未独立比价</small></dd></div>{% endif %}
 {% if brief.kind not in ('purchase','unknown') %}<div><dt>领取条件</dt><dd>尚未完整核清<small>需核对现金支出、运费、资格、截止时间及名额；券面值和奖品价值不等于现金收益。</small></dd></div>{% else %}<div><dt>利润估算</dt><dd>详情页提供公开行情模式<small>按同款成交或挂牌参考，列明样本数、公式和费用缺口。</small></dd></div>{% endif %}

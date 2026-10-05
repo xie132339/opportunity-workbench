@@ -78,8 +78,10 @@ def structured_spec(text):
 
 def price_conflicts(price, conditions):
     paid = {int(Decimal(v)*100) for v in re.findall(r'实付(?:低至)?\s*(\d+(?:\.\d{1,2})?)元', conditions)}
-    quantity = re.search(r'需买(\d+)件', conditions)
-    multiplier = int(quantity[1]) if quantity else 1
+    quantities = {int(v) for v in re.findall(r'(?:购买|需买|下单|拍|买)\s*(\d+)\s*件(?!\s*(?:返|送|赠|享|折))', conditions)}
+    if len(quantities) != 1:
+        return False
+    multiplier = next(iter(quantities))
     return bool(price is not None and paid and all(abs(v-price*multiplier)>multiplier for v in paid))
 
 
@@ -117,11 +119,9 @@ def public_offer(url, body, title=''):
         return {}
     unit, total, counts = (set(fields[key]) for key in ('unit','total','quantity'))
     if title and resource_kind(title,body)=='purchase':
-        title_price,_,_=extract(title)
-        if title_price is not None and not total:total.add(title_price)
         if not counts:
             title_counts={int(v) for v in re.findall(r'(?:购买|需买|下单|拍|买)\s*(\d+)\s*件(?!\s*(?:返|送|赠|享|折))',title)}
-            counts=title_counts or {1}
+            counts=title_counts
     selected = re.search(r'该价格商品规格\s*[:：]\s*(.+?)(?=[\r\n，,。；;]|天猫|京东|拼多多|淘宝|苏宁|$)', body)
     store = re.search(r'店铺\s*[:：]?\s*(.+?)\s*,商品面价', body)
     result = dict(unit_cents=next(iter(unit)) if len(unit)==1 else None,

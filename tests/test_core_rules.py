@@ -181,7 +181,7 @@ class CoreFlowTests(unittest.TestCase):
                 title=f'清风 抽纸 {variant} {price}元'
                 cursor=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,metadata_json,fingerprint,published_at)
                     VALUES(1,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",(f'variant-{opportunity_id}',title,f'https://guangdiu.com/detail.php?id={opportunity_id}',
-                     f'该价格商品规格：{variant} 京东商城',sku,f'variant-{opportunity_id}'))
+                     f'该价格商品规格：{variant} 京东商城\n购买1件，实付{price}元',sku,f'variant-{opportunity_id}'))
                 c.execute("""INSERT INTO opportunities(id,event_id,source_id,title,category,url)
                     VALUES(?,?,1,?,'零售优惠',?)""",
                     (opportunity_id,cursor.lastrowid,title,f'https://guangdiu.com/detail.php?id={opportunity_id}'))

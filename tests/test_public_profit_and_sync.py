@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from autoreview import promotion_sync_status
 from offer import product_subcategory
 from pricing import public_market_profit
+from services.opportunity_analysis import public_profit_estimate
 
 
 class PublicProfitTests(unittest.TestCase):
@@ -35,6 +36,18 @@ class PublicProfitTests(unittest.TestCase):
         result = public_market_profit(self.opp, listings, 2000, 'TEST SKU 6包', 'listing', 0)
         self.assertEqual(result['mode'], 'listing')
         self.assertEqual(result['amount_cents'], 1000)
+
+    def test_source_headline_amount_is_not_promoted_to_total_profit_input(self):
+        now=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        opp=dict(source_method='rss',source_enabled=1,source_status='healthy',source_interval=10,
+                 source_last_success=now,last_seen_at=now,published_at=now,
+                 category='零售优惠',topic='home',title='抽纸100抽3层6包 20元')
+        brief=dict(title=opp['title'],total_cents=None,quantity=None,selected_spec='')
+        review=dict(advertised_cents=2000,specification='100抽3层6包',detail_json=None)
+        result=public_profit_estimate(opp,self.quotes,brief,review)
+        self.assertIsNone(result['amount_cents'])
+        self.assertIsNone(result['buy_cents'])
+        self.assertIn('整单报价未解析',result['reason'])
 
     def test_category_subcategory_recognizes_household_paper(self):
         self.assertEqual(product_subcategory('抽纸100抽3层6包', 'home'), '纸品')

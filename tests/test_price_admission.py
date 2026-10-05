@@ -63,6 +63,20 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('终于活动开始了',c.get('/verification?state=missing_price').get_data(as_text=True))
         self.assertFalse(is_current_notice(dict(opp_status='pending',auto_state='missing_price')))
 
+    def test_title_price_and_pack_size_do_not_display_a_fake_one_item_order(self):
+        self.seed('某品牌抽纸100抽3层6包 5元','原文只有包邮提示，未写购买件数或实付方案','observed',500)
+        with app.test_client() as c:
+            page=c.get('/?view=current&layout=cards').get_data(as_text=True)
+            self.assertIn('来源声称报价（计价单位待核）',page)
+            self.assertIn('原文未提取',page)
+            self.assertNotIn('来源原文报价 · 1件',page)
+            detail=c.get('/opportunities/1').get_data(as_text=True)
+            self.assertIn('计价单位未明确',detail)
+            self.assertIn('购买件数',detail)
+            self.assertIn('原文未提取',detail)
+            self.assertIn('计价单位未明确',detail)
+            self.assertNotIn('单件订单，单价与整单金额相同',detail)
+
     def test_queued_price_is_visible_but_not_promoted_to_a_notice(self):
         self.seed('纸巾2元','包邮','queued',200)
         with app.test_client() as c:
@@ -113,11 +127,11 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('/opportunities/1',verified)
             self.assertIn('自动分析不会等待商家人工核实',verified)
             archive=c.get('/?view=all&layout=cards').get_data(as_text=True)
-            self.assertIn('/opportunities/1',archive);self.assertIn('来源原文报价 · 1件',archive)
+            self.assertIn('/opportunities/1',archive);self.assertIn('来源原文整单报价 · 1件',archive)
             cards=c.get('/?layout=cards').get_data(as_text=True)
             self.assertIn('可分析来源报价',cards)
             self.assertNotIn('公开商品页观测：',cards)
-            self.assertIn('来源原文报价 · 1件',cards)
+            self.assertIn('来源原文整单报价 · 1件',cards)
             detail=c.get('/opportunities/1').get_data(as_text=True)
             self.assertIn('本商品当前结论',detail);self.assertIn('自动分析资料',detail);self.assertIn('同口径价格比较',detail)
 
@@ -160,7 +174,7 @@ class AdmissionTests(unittest.TestCase):
         self.seed('某品牌抽纸100抽3层6包 5元',body,'observed',500)
         with app.test_client() as c:
             text=c.get('/?view=all&layout=cards').get_data(as_text=True)
-        self.assertIn('来源原文报价 · 1件',text)
+        self.assertIn('来源原文整单报价 · 1件',text)
         self.assertIn('单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。',text)
         self.assertNotIn('折合每件（由整单换算）',text)
         self.assertEqual(text.count('¥5.00'),1)

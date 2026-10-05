@@ -105,7 +105,7 @@
   <h2 class="offer-title"><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ brief.title }}</a></h2>
   <div class="price-panel">
     {% if brief.get('total_cents') is not none %}
-      <div class="source-total"><span>{% if brief.get('quantity') and brief.get('quantity') > 1 %}{% if row.auto_state=='conditional' %}来源报价 · 扣减算术相符{% else %}可分析来源报价{% endif %} · 来源原文整单报价 · {{ brief.get('quantity') }}件{% else %}{% if row.auto_state=='conditional' %}来源报价 · 扣减算术相符{% else %}可分析来源报价{% endif %} · 来源原文报价 · 1件{% endif %}</span><strong>{{ money(brief.get('total_cents')) }}</strong><small>{% if brief.get('quantity') and brief.get('quantity') > 1 %}按原文购买方案计价，不是账号最终结算价{% else %}单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。{% endif %}</small></div>
+      <div class="source-total"><span>{% if row.auto_state=='conditional' %}来源报价 · 扣减算术相符{% else %}可分析来源报价{% endif %}{% if brief.get('quantity') %} · 来源原文整单报价 · {{ brief.get('quantity') }}件{% else %} · 来源原文金额 · 购买件数未提取{% endif %}</span><strong>{{ money(brief.get('total_cents')) }}</strong><small>{% if brief.get('quantity') == 1 %}单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。{% elif brief.get('quantity') %}按原文购买方案计价，不是账号最终结算价{% else %}购买件数不明，不能折算单件价或比较整单方案。{% endif %}</small></div>
       {% if brief.get('quantity') and brief.get('quantity') > 1 %}<div class="price-side"><span>折合每件（由整单换算）</span><b>{{ money(brief.get('display_unit_cents')) }}</b></div>{% endif %}
     {% elif row.advertised_cents is not none %}
       <div class="source-total"><span>来源声称报价（计价单位待核）</span><strong>{{ money(row.advertised_cents) }}</strong></div>
@@ -122,7 +122,7 @@
   <div class="offer-meta-grid">
     <div><span>购买平台</span><b>{{ brief.store or brief.platforms or '来源未注明' }}</b><small>{% set source_channels=row.source_channels|default([]) %}{% set source_count=row.source_count|default(1) %}线索来源：{{ source_channels|join('、') if source_channels else row.platform or '人工录入' }}{% if source_count>1 %}（{{ source_count }} 个采集入口；不代表独立报价）{% endif %}</small></div>
     <div><span>{% if brief.selected_spec %}原文明示报价规格{% elif brief.source_spec %}标题规格线索{% else %}报价规格{% endif %}</span><b>{{ brief.selected_spec or brief.source_spec or '尚未提取，不能按同款比较' }}</b>{% if brief.source_spec and not brief.selected_spec %}<small>未确认来源报价对应此变体，不能据此完成同款比较</small>{% endif %}</div>
-    <div><span>购买数量</span><b>{% if brief.quantity %}{{ brief.quantity }} 件{% else %}尚未确认{% endif %}</b></div>
+    <div><span>购买件数</span><b>{% if brief.quantity %}{{ brief.quantity }} 件{% else %}原文未提取{% endif %}</b></div>
     <div><span>优惠信息</span><b>{{ brief.promotion_sync.label }}</b><small class="clamp-2">{{ brief.promotion_sync.explanation }}</small></div>
     <div><span>原文发布时间</span><b>{{ row.published_at|cn_time }}</b></div>
   </div>

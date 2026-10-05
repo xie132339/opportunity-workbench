@@ -1,6 +1,7 @@
 import json
 import unittest
 from comparison import merchant_identity,comparison_index,quantity_options,assess_readiness
+from offer import paper_package_prices
 import test_comparison as fixtures
 
 class MarketMethodsTests(unittest.TestCase):
@@ -14,6 +15,10 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertTrue(merchant_identity(row)['key'].startswith('catalog:'))
         row['metadata_json']=json.dumps({'activity_links':['https://item.m.jd.com/ware/view.action?wareId=12345']})
         self.assertEqual(merchant_identity(row)['key'],'jd:12345')
+
+    def test_paper_unit_price_does_not_default_missing_order_quantity_to_one(self):
+        self.assertIsNone(paper_package_prices('抽纸100抽3层6包',500,None))
+        self.assertIsNone(paper_package_prices('抽纸100抽3层6包',500))
 
     def test_same_sku_different_title_can_be_grouped(self):
         rows=[self.row(1,'12345'),self.row(2,'12345',title='另一写法同一商品 4元',total='8')]
@@ -100,8 +105,8 @@ class MarketMethodsTests(unittest.TestCase):
     def test_variants_on_one_merchant_page_are_not_quantity_options_for_each_other(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
-            self.row(1,'12345',title='某品牌抽纸100抽6包 10元',snippet='该价格商品规格：100抽6包 京东商城',metadata_json=sku),
-            self.row(2,'12345',title='某品牌抽纸120抽6包 12元',snippet='该价格商品规格：120抽6包 京东商城',metadata_json=sku),
+            self.row(1,'12345',title='某品牌抽纸100抽6包 10元',snippet='该价格商品规格：100抽6包 京东商城。下单1件，实付10元',metadata_json=sku),
+            self.row(2,'12345',title='某品牌抽纸120抽6包 12元',snippet='该价格商品规格：120抽6包 京东商城。下单1件，实付12元',metadata_json=sku),
         ]
         result=comparison_index(rows)
         self.assertEqual(result[1]['quantity_options']['count'],1)
@@ -140,8 +145,8 @@ class MarketMethodsTests(unittest.TestCase):
     def test_selected_variant_labels_are_preserved_in_comparison_partition(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
-            self.row(1,'12345',title='某品牌抽纸红色100抽6包 10元',snippet='该价格商品规格：颜色分类：红色 100抽6包 京东商城',metadata_json=sku),
-            self.row(2,'12345',title='某品牌抽纸蓝色100抽6包 8元',snippet='该价格商品规格：颜色分类：蓝色 100抽6包 京东商城',metadata_json=sku),
+            self.row(1,'12345',title='某品牌抽纸红色100抽6包 10元',snippet='该价格商品规格：颜色分类：红色 100抽6包 京东商城。下单2件，实付20元',metadata_json=sku),
+            self.row(2,'12345',title='某品牌抽纸蓝色100抽6包 8元',snippet='该价格商品规格：颜色分类：蓝色 100抽6包 京东商城。下单2件，实付16元',metadata_json=sku),
         ]
         result=comparison_index(rows)
         self.assertEqual(result[1]['quantity_options']['count'],1)

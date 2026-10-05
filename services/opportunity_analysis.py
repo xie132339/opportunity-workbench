@@ -79,9 +79,6 @@ def public_profit_estimate(opp, quotes, brief, review, mode='sold'):
         except (TypeError, ValueError):
             detail = {}
     total = brief.get('total_cents')
-    quantity = brief.get('quantity')
-    if total is None and review and review['advertised_cents'] is not None:
-        total = review['advertised_cents'] * (quantity or 1)
     spec = (brief.get('selected_spec') or detail.get('specification')
             or (review['specification'] if review else '') or opp['specification'])
     shipping = brief.get('audit', {}).get('plan', {}).get('shipping_cents')

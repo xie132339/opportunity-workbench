@@ -73,7 +73,7 @@ def resource_topic(title, source_category=''):
         if re.search(pattern,title,re.I):return kind
     return 'other'
 
-def paper_package_prices(title, total_cents, order_quantity=1):
+def paper_package_prices(title, total_cents, order_quantity=None):
     """Normalize explicit paper containers and sheet counts; never infer missing units."""
     if total_cents is None or not title:
         return None

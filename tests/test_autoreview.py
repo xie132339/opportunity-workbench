@@ -36,6 +36,8 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertTrue(ar.price_conflicts(329950,'下单1件，实付低至6599元'))
         self.assertFalse(ar.price_conflicts(483,'需买6件，实付29元'))
         self.assertFalse(ar.price_conflicts(465,'需买4件，实付18.6元'))
+        self.assertFalse(ar.price_conflicts(483,'实付29元'))
+        self.assertFalse(ar.price_conflicts(483,'买6件或买12件，实付29元'))
 
     def test_closed_wanted_and_duplicate(self):
         for title in ['【已出】手机','[求购] 手机','抽纸已售罄']:
@@ -149,12 +151,12 @@ class ReviewRulesTests(unittest.TestCase):
         rounded=ar.public_offer('https://guangdiu.com/detail.php?id=1989','购买3件 实付38.18元 ( 实付单件12.73元 )')
         self.assertFalse(rounded['error'])
 
-    def test_xianbao_ocr_payment_typo_extracts_explicit_order_total(self):
+    def test_xianbao_ocr_payment_typo_does_not_invent_order_quantity(self):
         url='https://new.ixbk.net/haodan/7144218.html'
         title='维达线条小狗悬挂抽纸M码210抽大提 3.5元，维达线条小狗悬挂抽纸6提装 21元'
         body='🎀维达线条小狗悬挂抽纸\n💰3.5🉐M碼210抽大提‼️\n按图进秒刹+琻壁+天绛\n需.拍6提装，实.咐21元\n下单:'
         offer=ar.public_offer(url,body,title)
-        self.assertEqual((offer['total_cents'],offer['quantity']),(2100,1))
+        self.assertEqual((offer['total_cents'],offer['quantity']),(2100,None))
         self.assertFalse(offer['error'])
         row=dict(self.row,url=url,title=title,snippet=body)
         self.assertEqual(ar.classify(row,self.now)['advertised_cents'],2100)
@@ -183,16 +185,23 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertEqual(ar.classify(row,self.now)['state'],'conditional')
         self.assertEqual(ar.classify(dict(row,title='精华液15.19元'),self.now)['state'],'conflict')
 
-    def test_title_offer_structures_order_and_spec_without_guessing_variant(self):
+    def test_title_price_and_pack_size_do_not_become_order_total_or_purchase_quantity(self):
         url='https://new.ixbk.net/haodan/1.html'
         offer=ar.public_offer(url,'','氏蜂社土蜂蜜1500g*1盒礼盒装 59元')
-        self.assertEqual((offer['total_cents'],offer['quantity']),(5900,1))
+        self.assertEqual((offer['total_cents'],offer['quantity']),(None,None))
         self.assertEqual(offer['selected_spec'],'')
-        self.assertEqual(ar.offer_summary('氏蜂社土蜂蜜1500g*1盒礼盒装 59元',url,'')['source_spec'],'1500g × 1盒')
+        brief=ar.offer_summary('氏蜂社土蜂蜜1500g*1盒礼盒装 59元',url,'')
+        self.assertEqual(brief['source_spec'],'1500g × 1盒')
+        self.assertEqual(brief['price_status']['label'],'金额口径待确认')
         multi=ar.public_offer(url,'','纸尿裤NB/S/M/L 多规格 20.49元')
         self.assertEqual(multi['selected_spec'],'')
         two=ar.public_offer(url,'','拖鞋拍2件 10.8元')
-        self.assertEqual((two['total_cents'],two['quantity']),(1080,2))
+        self.assertEqual((two['total_cents'],two['quantity']),(None,2))
+
+    def test_explicit_order_body_keeps_total_and_quantity(self):
+        offer=ar.public_offer('https://new.ixbk.net/haodan/1.html','购买1件，实付59元',
+                              '氏蜂社土蜂蜜1500g*1盒礼盒装 59元')
+        self.assertEqual((offer['total_cents'],offer['quantity']),(5900,1))
 
     def test_readable_summary_keeps_discount_basis_without_inventing_stacking(self):
         title='小米 REDMI 红米 Note 17 手机 6GB+128GB 浅水青 券后1104.15元'
