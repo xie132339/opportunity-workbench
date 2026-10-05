@@ -3,6 +3,7 @@ from flask import render_template, request
 from db import connect
 from benefits import KINDS as BENEFIT_KINDS, listing as list_benefits, stats as benefit_stats
 from acceptance import QUERY, evaluate, freeze
+from autoreview import offer_summary
 
 def benefits_page():
     query=request.args.get('q','').strip()
@@ -23,16 +24,24 @@ def verification():
     with connect() as db:
         counts = dict(db.execute('SELECT state,COUNT(*) FROM auto_reviews GROUP BY state').fetchall())
         run = db.execute('SELECT * FROM review_runs WHERE id=1').fetchone()
-        rows = db.execute('''SELECT a.*,o.title,o.url FROM auto_reviews a
-            JOIN opportunities o ON o.id=a.opportunity_id WHERE (?='' OR a.state=?)
+        rows = db.execute('''SELECT a.*,o.title,o.url,e.snippet,e.metadata_json FROM auto_reviews a
+            JOIN opportunities o ON o.id=a.opportunity_id LEFT JOIN events e ON e.id=o.event_id
+            WHERE (?='' OR a.state=?)
             ORDER BY o.id DESC LIMIT 100''', (state,state)).fetchall()
+    display_rows=[]
+    for row in rows:
+        item=dict(row)
+        current_summary=offer_summary(item['title'],item['url'],item.get('snippet') or '',
+            metadata=item.get('metadata_json') or '{}',detail_json=item.get('detail_json'))
+        item['display_specification']=current_summary.get('selected_spec') or '未能从来源原文确定'
+        display_rows.append(item)
     from acceptance import QUERY,evaluate,freeze
     with connect() as db:
         evidence=[dict(r) for r in db.execute(QUERY)]
         cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
     cohort=freeze(evidence,current_only=True)
     acceptance=evaluate(evidence,cohort,cache)
-    return render_template('verification.html',counts=counts,run=run,rows=rows,state=state,acceptance=acceptance)
+    return render_template('verification.html',counts=counts,run=run,rows=display_rows,state=state,acceptance=acceptance)
 
 def register(app):
     app.add_url_rule('/benefits', endpoint='benefits_page', view_func=benefits_page, methods=['GET'])

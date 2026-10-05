@@ -104,6 +104,23 @@ class XianbaoTests(unittest.TestCase):
             app_module.main()
         review.assert_not_called()
 
+    def test_verification_list_shows_currently_parsed_spec_without_updating_snapshot(self):
+        item=sample();item['title']='得宝迷你系列手帕纸5片*54小包 20元'
+        with patch('scanner.xianbao_rows',return_value=parse_items([item])):
+            scanner.scan_source(1)
+        with db.connect() as c:
+            c.execute("UPDATE auto_reviews SET specification='5片' WHERE opportunity_id=1")
+        with app.test_client() as client:
+            response=client.get('/verification?state=queued')
+            page=response.get_data(as_text=True)
+        self.assertEqual(response.status_code,200)
+        self.assertIn('5片 × 54小包',page)
+        self.assertIn('来源报价、状态与复查时间来自最近一次核验快照',page)
+        self.assertIn('自动复查排队中',page)
+        with db.connect() as c:
+            row=c.execute('SELECT state,specification FROM auto_reviews WHERE opportunity_id=1').fetchone()
+        self.assertEqual((row['state'],row['specification']),('queued','5片'))
+
     def test_source_form_requires_allowlisted_url(self):
         with app.test_client() as client:
             with client.session_transaction() as session:session['csrf']='x'
