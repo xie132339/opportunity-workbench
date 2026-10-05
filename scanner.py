@@ -268,7 +268,7 @@ def _passes_strategy(db, title, category):
     return any(strategy_matches(rule, title, category) for rule in rules)
 
 
-def scan_source(source_id):
+def scan_source(source_id, *, review=True):
     with connect() as db:
         source = db.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
         if not source:
@@ -308,8 +308,9 @@ def scan_source(source_id):
         with connect() as db:
             db.execute("UPDATE sources SET status=?,last_error=? WHERE id=?",
                        (status, str(exc)[:400], source_id))
-        from autoreview import review_all
-        review_all()
+        if review:
+            from autoreview import review_all
+            review_all()
         return {"source_id": source_id, "status": status, "new": 0, "error": str(exc)[:400]}
 
     added = 0
@@ -346,8 +347,9 @@ def scan_source(source_id):
                     (result.lastrowid, opp.lastrowid))
         db.execute("""UPDATE sources SET status='healthy',last_success=CURRENT_TIMESTAMP,
             last_error=NULL WHERE id=?""", (source_id,))
-    from autoreview import review_all
-    review_all()
+    if review:
+        from autoreview import review_all
+        review_all()
     return {"source_id": source_id, "status": "healthy", "new": added,
             "baseline": prior == 0, "seen": len(records)}
 
@@ -359,4 +361,8 @@ def scan_all(due_only=False):
             sql += " AND (last_checked IS NULL OR datetime(last_checked, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP)"
         sql += " ORDER BY CASE WHEN method='xianbao' THEN 0 ELSE 1 END, last_checked, id"
         ids = [r[0] for r in db.execute(sql)]
-    return [scan_source(source_id) for source_id in ids]
+    results = [scan_source(source_id, review=False) for source_id in ids]
+    if results:
+        from autoreview import review_all
+        review_all()
+    return results

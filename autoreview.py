@@ -49,7 +49,8 @@ def extract(text):
     values = {int(Decimal(a or b) * 100) for a, b in amounts}
     ambiguous = re.search(r'\d+(?:\.\d+)?\s*元?\s*[-~～至]\s*\d+(?:\.\d+)?\s*元|\d\s*[万亿]元', text)
     price = next(iter(values)) if len(values) == 1 and not ambiguous else None
-    specs = re.findall(r'\d+(?:\.\d+)?\s*(?:毫升|ml|mL|kg|克|g|升|层|抽|包|卷|提|箱|盒|片|GB|TB)(?![a-zA-Z邮])', text)
+    specs = list(dict.fromkeys(re.findall(
+        r'\d+(?:\.\d+)?\s*(?:毫升|ml|mL|kg|克|g|升|层|抽|小包|小袋|包|卷|提|箱|盒|片|GB|TB)(?![a-zA-Z邮])', text)))
     terms = [term for term in ('新客','新人','首单','首购','88VIP','会员','省钱卡','直播','用券','券后','返现','返后','礼金','限购','起','每月','/月','/M','多人团','淘金币','补贴','移动端','折合','需买') if term.lower() in text.lower()]
     return price, ' · '.join(specs), '、'.join(terms)
 
@@ -59,12 +60,12 @@ def structured_spec(text):
     text=unicodedata.normalize('NFKC',html.unescape(text or ''))
     if re.search(r'任选|多规格|多款|随机|NB\s*/\s*S\s*/\s*M\s*/\s*L|S\s*/\s*M\s*/\s*L',text,re.I):
         return ''
-    option_unit=r'(毫升|ml|千克|kg|克|g|升|L|斤|层|抽|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
+    option_unit=r'(毫升|ml|千克|kg|克|g|升|L|斤|层|抽|小包|小袋|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
     alternatives=re.search(r'(?<![\d.])(\d+(?:\.\d+)?)\s*'+option_unit+
                             r'\s*/\s*(\d+(?:\.\d+)?)\s*\2(?![A-Za-z邮])',text,re.I)
     if alternatives and Decimal(alternatives[1]) != Decimal(alternatives[3]):
         return ''
-    unit=r'(?:毫升|ml|kg|千克|克|g|升|L|斤|层|抽|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
+    unit=r'(?:毫升|ml|kg|千克|克|g|升|L|斤|层|抽|小包|小袋|包|卷|提|箱|盒|片|支|袋|瓶|罐|套|枚|只|个|条|块|双|cm|mm|英寸|寸|GB|TB|G)'
     tokens=re.findall(r'(?<![\d.])\d+(?:\.\d+)?\s*'+unit,text,re.I)
     tokens+=re.findall(r'(?<![A-Za-z])(?:NB|S|M|L|XL|XXL|XXXL)\s*\d+(?!\d)',text,re.I)
     normalized=[]

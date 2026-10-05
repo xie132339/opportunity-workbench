@@ -107,6 +107,18 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['quantity_options']['count'],1)
         self.assertEqual(result[2]['quantity_options']['count'],1)
 
+    def test_small_pack_count_separates_otherwise_similar_same_sku_claims(self):
+        sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
+        rows=[
+            self.row(1,'12345',title='得宝迷你手帕纸5片*54小包 20元',metadata_json=sku),
+            self.row(2,'12345',title='得宝迷你手帕纸5片*48小包 18元',metadata_json=sku),
+        ]
+        result=comparison_index(rows)
+        self.assertEqual(result[1]['peers'],1)
+        self.assertEqual(result[2]['peers'],1)
+        self.assertEqual(result[1]['quantity_options']['count'],1)
+        self.assertEqual(result[2]['quantity_options']['count'],1)
+
     def test_missing_selected_specification_cannot_enter_quantity_options(self):
         row=self.row(1,'12345',title='纸巾 10元',snippet='购买1件 实付10元',
                      metadata_json=json.dumps({'activity_links':['https://item.jd.com/12345.html']}))

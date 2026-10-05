@@ -23,7 +23,7 @@ def load_env():
 load_env()
 
 from db import connect, initialize
-from autoreview import LABELS as REVIEW_LABELS, review_all, run_cycle, offer_summary
+from autoreview import LABELS as REVIEW_LABELS, run_cycle, offer_summary
 from benefits import KINDS as BENEFIT_KINDS, run_cycle as refresh_benefits, import_authorized_record
 from channel_discovery import refresh as refresh_channel_candidates, validate_many as validate_channel_candidates
 from link_resolution import run_cycle as resolve_links
@@ -96,7 +96,6 @@ def main():
                 imported += 1
         print({"imported": imported})
         return
-    review_all()
     if command == "serve":
         app.run(host="127.0.0.1", port=5002, debug=False)
     elif command == "scan":

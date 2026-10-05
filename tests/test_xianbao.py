@@ -1,4 +1,5 @@
 import json
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -6,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import db
+import app as app_module
 import scanner
 import autoreview
 from app import app
@@ -86,6 +88,21 @@ class XianbaoTests(unittest.TestCase):
         with app.test_client() as client:
             self.assertNotIn('/opportunities/1',client.get('/?resource=coupon').get_data(as_text=True))
             self.assertNotIn('100元打车立减券包',client.get('/?resource=free_claim').get_data(as_text=True))
+
+    def test_scan_all_reclassifies_once_after_the_batch(self):
+        with patch('scanner.scan_source', side_effect=lambda source_id, **kwargs:
+                   dict(source_id=source_id, review=kwargs['review'])) as scan, \
+             patch('autoreview.review_all') as review:
+            results=scanner.scan_all()
+        self.assertEqual([item['review'] for item in results],[False,False])
+        self.assertEqual(scan.call_count,2)
+        review.assert_called_once_with()
+
+    def test_serving_application_does_not_reclassify_all_records(self):
+        with patch.object(app_module,'initialize'), patch.object(app_module.app,'run'), \
+             patch('autoreview.review_all') as review, patch.object(sys,'argv',['app.py','serve']):
+            app_module.main()
+        review.assert_not_called()
 
     def test_source_form_requires_allowlisted_url(self):
         with app.test_client() as client:

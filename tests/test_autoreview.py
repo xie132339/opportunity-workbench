@@ -106,6 +106,14 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertEqual(ar.structured_spec('卫生纸5层/6层'),'')
         self.assertEqual(ar.structured_spec('抽纸400抽/包*18包'),'400抽 × 18包')
 
+    def test_small_pack_count_is_part_of_spec_and_duplicate_layers_are_removed(self):
+        title='得宝迷你系列手帕纸5片*54小包 20元'
+        self.assertEqual(ar.structured_spec(title),'5片 × 54小包')
+        self.assertEqual(ar.extract('洁柔卷纸4层 4层 135g/卷*10卷')[1],
+                         '4层 · 135g · 10卷')
+        result=ar.classify(dict(self.row,title=title),self.now)
+        self.assertEqual(result['specification'],'5片 · 54小包')
+
     def test_selected_pack_outside_title_options_is_automatically_conflicted(self):
         row=dict(self.row,title='抽纸10包/20包 10元',
                  snippet='该价格商品规格：1包 京东商城')

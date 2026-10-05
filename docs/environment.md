@@ -556,3 +556,21 @@ git diff --check
 隔离回归先确认旧代码把“10包/20包”生成成组合规格，并漏掉选中1包与标题候选不一致。现对同单位不同数量的斜杠备选采取保守隔离；清晰选择其中一个值时保留，对标题外数量或多个选中值写冲突理由。`400抽/包×18包`比例结构作为反例，确保不误删真实组合。
 
 验证：全量 `unittest discover -s tests` 175项通过；`py_compile autoreview.py comparison.py tests/test_autoreview.py` 与 `git diff --check` 通过。使用隔离样本，无正式库写入、worker运行或商城网络请求。
+
+
+## 2026-10-05 D29：小包装规格识别回归
+
+真实库只读抽样读到 #10198“得宝迷你系列手帕纸5片*54小包 20元”，旧规格字段漏掉54小包；标题含“小包”记录共37条。只用该已采集原文形态构造隔离回归，没有修改正式SQLite。
+
+全量 `unittest discover -s tests` 177项通过。`py_compile autoreview.py comparison.py tests/test_autoreview.py tests/test_market_methods.py` 指定 `PYTHONPYCACHEPREFIX=/private/tmp/workbench-d29-pycache` 后通过，`git diff --check` 通过。第一次编译默认缓存目录写入遇到沙箱 `Operation not permitted`，没有留下仓库缓存文件。
+
+本条最初记录时代码服务尚未重启；后续复验已重启5002，首页搜索“得宝”真实浏览器显示#10198“5片 × 54小包”。没有运行全量 review 重写已存核验状态、没有启动worker、请求商城或发送通知。旧自动核验规格仍待下次常规复查更新。
+
+
+## 2026-10-05 D30：压缩重复全库自动核验
+
+静态调用链核实旧普通 `scan` 有 N 个启用渠道时会对全部记录运行 N+3 次全库核验：`app.py` 启动时1次、`scan_source`每渠道1次、`run_cycle`详情采集前后各1次。此前尝试重启旧命令在 `initialize()` 阶段因沙箱只读数据库退出，旧监听已正常停止；这次没有复用会在服务启动时重算的旧代码路径。
+
+改动将 `scan_all()` 整批的复核合并为一次，直接调用 `scan_source()` 时仍复核；移除 `app.py` 在命令分发前的无条件 `review_all()`。全量179项回归覆盖单源不变、批扫一次、serve启动不复核；代码编译与diff检查通过。正式库未触发 `review_all()`。
+
+服务以 `.venv/bin/python app.py serve` 在提升后的本地进程权限下启动，使用既有 `initialize()` 的幂等 schema/seed 检查；本轮没有运行worker、扫描商城、派发消息或重新核验旧快照。`lsof` 证实监听 `127.0.0.1:5002`；真实浏览器请求 `/?q=得宝&layout=list` 成功并显示#10198完整的“5片 × 54小包”、不同来源结果及来源链接，证明前台加载本轮代码。
