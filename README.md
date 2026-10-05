@@ -38,13 +38,11 @@
 
 业务数据默认位于忽略的 `data/workbench.sqlite3`；`.env`、虚拟环境和数据库均不提交 Git。源码按业务职责拆分：采集与渠道发现、商品链接解析、商家页核验、优惠、比价与低价历史、通知及闲鱼接入分别位于独立模块；Flask 页面路由目前集中在 `app.py`。
 
-## 用 GitHub Desktop 发布与换电脑克隆
+## GitHub 仓库与换电脑克隆
 
-1. 在 GitHub Desktop 选择 **File → Add Local Repository…**，选择本项目文件夹。
-2. 核对当前分支与 Changes 列表；`.env`、`data/`、`.venv/` 必须保持忽略。先提交完整源码、测试与文档，再点 **Publish repository**，命名为 `opportunity-workbench`，选择个人账户并勾选 **Keep this code private**。
-3. 另一台电脑在 GitHub Desktop 选择 **File → Clone Repository…**，克隆该仓库；按[安装手册](docs/installation.md)运行安装脚本并单独配置需要的外部服务。
+本项目仓库：<https://github.com/xie132339/opportunity-workbench>（公开仓库）。完整源码发布在 `feature/bootstrap` 分支；`main` 保留仓库初始化内容，不承载本次代码发布。使用 GitHub Desktop 克隆后，在分支菜单切换到 `feature/bootstrap`，再按[安装与使用手册](docs/installation.md)配置 Python 环境与可选外部服务。克隆只包含源码和文档，不包含本机数据库、`.env`、账号或采集历史。
 
-GitHub Desktop 官方操作说明：[发布现有项目](https://docs.github.com/en/desktop/adding-and-cloning-repositories/adding-an-existing-project-to-github-using-github-desktop) · [克隆仓库](https://docs.github.com/en/desktop/adding-and-cloning-repositories/cloning-and-forking-repositories-from-github-desktop)。
+GitHub Desktop 官方操作说明：[克隆仓库](https://docs.github.com/en/desktop/adding-and-cloning-repositories/cloning-and-forking-repositories-from-github-desktop)。
 
 ## 二开位置
 
