@@ -73,12 +73,31 @@ class ComparisonTests(unittest.TestCase):
         r=comparison_index([self.row(1),self.row(2)])
         self.assertEqual(r[1]['saving_cents'],0);self.assertIn('相同',r[1]['message'])
 
+    def test_lowest_source_claim_is_not_misreported_as_equal(self):
+        r=comparison_index([self.row(1,'10'),self.row(2,'8')])
+        self.assertIn('价为候选中最低',r[2]['message'])
+        self.assertIn('价高2.00元',r[2]['message'])
+        self.assertNotIn('声称价相同',r[2]['message'])
+        self.assertIn('声称价相差2.00元',r[1]['message'])
+
     def test_checkout_step_does_not_become_account_qualification(self):
         sku='{"activity_links":["https://item.jd.com/123.html"]}'
         r=comparison_index([self.row(1,'10',tail='需要加购',metadata_json=sku),self.row(2,'8',metadata_json=sku)])
         self.assertEqual(r[1]['saving_cents'],0)
         self.assertIsNone(r[1]['best_id'])
         self.assertIn('同一商家商品ID',r[1]['message'])
+
+    def test_exact_title_and_explicit_variant_can_compare_across_marketplace_ids_as_candidate(self):
+        title='某品牌抽纸100抽3层6包 5元'
+        jd='{"activity_links":["https://item.jd.com/123.html"]}'
+        tm='{"activity_links":["https://detail.tmall.com/item.htm?id=456"]}'
+        rows=[self.row(1,'10',title=title,metadata_json=jd),
+              self.row(2,'8',title=title,metadata_json=tm)]
+        result=comparison_index(rows)
+        self.assertEqual(result[1]['best_id'],2)
+        self.assertEqual(result[1]['saving_cents'],200)
+        self.assertIn('商家SKU未核验',result[1]['message'])
+        self.assertIn('非商家SKU核验',result[1]['identity_label'])
 
     def test_truncated_rules_do_not_compete(self):
         r=comparison_index([self.row(1),self.row(2,'8',metadata_json='{"content_truncated":true}')])

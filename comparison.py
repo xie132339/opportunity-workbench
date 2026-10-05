@@ -28,6 +28,21 @@ def specification_key(value):
     return re.sub(r'[\s，,；;]+','',text).casefold()
 
 
+def comparison_group_key(row, identity, brief, title_keys_for_merchant=(), title_platforms=()):
+    """Group exact-title, explicitly selected variants as cross-source candidates.
+
+    Merchant IDs remain the strongest identity. When two marketplaces necessarily
+    have different IDs, an exact normalized title plus an explicit selected spec
+    can form a candidate group; it is never described as a verified shared SKU.
+    """
+    merchant_id = identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:'))
+    title_key = product_key(row.get('title',''))
+    if (merchant_id and title_key and specification_key(brief.get('selected_spec'))
+            and len(title_keys_for_merchant)==1 and len(title_platforms)>=2):
+        return 'title-candidate:'+title_key
+    return identity['key']
+
+
 def merchant_identity(row):
     """Read explicit merchant product IDs; never infer them from coupon/shop/tracking IDs."""
     metadata=json.loads(row.get('metadata_json') or '{}')
@@ -157,12 +172,23 @@ def load_comparisons(db):
 def comparison_index(rows, now=None):
     now=now or datetime.now(timezone.utc).replace(tzinfo=None)
     groups=defaultdict(list);by_id={};seen=set()
-    for row in sorted(rows,key=lambda r:r['id'],reverse=True):
-        identity=merchant_identity(row);key=identity['key'];by_id[row['id']]=key
+    rows=sorted(rows,key=lambda r:r['id'],reverse=True)
+    merchant_title_keys=defaultdict(set);title_platforms=defaultdict(set)
+    for row in rows:
+        identity=merchant_identity(row)
+        if identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+            merchant_title_keys[identity['key']].add(product_key(row.get('title','')))
+            title_platforms[product_key(row.get('title',''))].add(identity['key'].split(':',1)[0])
+    for row in rows:
+        identity=merchant_identity(row)
         if row['url'] in seen:continue
         seen.add(row['url'])
         body=json.loads(row.get('detail_json') or '{}').get('conditions') or row.get('snippet') or ''
         brief=offer_summary(row['title'],row['url'],body,metadata=row.get('metadata_json') or '{}')
+        title_key=product_key(row.get('title',''))
+        key=comparison_group_key(row,identity,brief,merchant_title_keys.get(identity['key'],()),
+                                 title_platforms.get(title_key,()))
+        by_id[row['id']]=key
         if brief['kind'] not in ('purchase','unknown'):continue
         total=brief.get('total_cents');quantity=brief.get('quantity')
         # Avoid substituting a title per-unit price for a cash order total.
@@ -197,11 +223,13 @@ def comparison_index(rows, now=None):
         conditions=tuple(sorted(brief['qualifications']+[risk for risk in brief['audit']['risks'] if risk!='需要指定入口或操作']))
         restrictive=re.findall(r'[^，,。；;\n]{0,30}(?:限地区|限城市|限\w{1,4}地区|仅限|部分用户|部分账号|限时)[^，,。；;\n]{0,30}',body)
         conditions+=tuple(sorted(restrictive))
-        item=dict(identity_label=identity['label'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
+        identity_label=('原文明示规格的同标题候选（非商家SKU核验）'
+                        if key.startswith('title-candidate:') else identity['label'])
+        item=dict(identity_label=identity_label,merchant_key=identity['key'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
                   total_cents=total,quantity=quantity,unit=Fraction(total,quantity) if total is not None and quantity else None,
                   unit_cents=round(Fraction(total,quantity)) if total is not None and quantity else None,
                   published_at=row.get('published_at'),conditions='；'.join(conditions) or '原文未注明资格限制（不代表人人适用）',
-                  partition=(identity['key'],selected_spec_key,conditions,quantity),problems=list(dict.fromkeys(problems)),
+                  partition=(key,selected_spec_key,conditions,quantity),problems=list(dict.fromkeys(problems)),
                   source_current=not current_problems,shipping_cents=brief['audit']['plan']['shipping_cents'])
         groups[key].append(item)
     result={}
@@ -212,26 +240,58 @@ def comparison_index(rows, now=None):
             continue
         peers=[i for i in items if i['partition']==target['partition'] and not i['problems']
                and not i['optimization_gaps']]
+        if key.startswith('title-candidate:'):
+            target_platform=target['merchant_key'].split(':',1)[0]
+            # Count this listing once per marketplace; copied source posts do not
+            # create extra independent offers for the same product ID.
+            by_listing={}
+            for item in peers:
+                if item['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+                    by_listing.setdefault(item['merchant_key'],item)
+            peers=[item for item in by_listing.values()
+                   if item['merchant_key']==target['merchant_key']
+                   or item['merchant_key'].split(':',1)[0]!=target_platform]
         # Several deal-feed posts that resolve to the same merchant SKU are
         # repeated claims about one listing, not independent buying options.
         # Keep them visible for audit, but do not use them as a savings baseline.
-        same_merchant_listing=key.startswith(('jd:','taobao:','pdd:','suning:','vip:'))
+        merchant_keys={i['merchant_key'] for i in items
+                       if i['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:'))}
+        merchant_platforms={key.split(':',1)[0] for key in merchant_keys}
+        has_unidentified=any(not i['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) for i in items)
+        same_merchant_listing=bool(merchant_keys) and (len(merchant_keys)==1 or len(merchant_platforms)==1 or has_unidentified)
         best=(min(peers,key=lambda i:(i['total_cents'],-i['id']))
               if len(peers)>=2 and not same_merchant_listing else None)
         saving=(target['total_cents']-best['total_cents']) if best and not target['problems'] else 0
         if best and not target['problems']:
-            if saving == 0:
-                message='采集原文声称价相同，尚未发现更低来源声称价；这不是商家核价或捡漏结论'
+            candidate_note=('按完全一致标题、原文明示报价规格、数量与资格形成候选，商家SKU未核验；'
+                            if key.startswith('title-candidate:') else '')
+            peer_prices=[item['total_cents'] for item in peers]
+            if min(peer_prices)==max(peer_prices):
+                message=candidate_note+'采集原文声称价相同，尚未发现更低来源声称价；这不是商家核价或捡漏结论'
+            elif saving == 0:
+                gap=max(peer_prices)-target['total_cents']
+                pct=round(gap*10000/target['total_cents'])/100 if target['total_cents'] else 0
+                message=candidate_note+f'本来源声称价为候选中最低；较高来源声称价高{gap/100:.2f}元（约{pct:.2f}%），未核实商家实际价，不代表省钱或捡漏'
             else:
                 pct=round(saving*10000/best['total_cents'])/100 if best['total_cents'] else 0
-                message=f'采集原文声称价相差{saving/100:.2f}元（约{pct:.2f}%）；未核实商家实际价，不代表省钱或捡漏'
+                message=candidate_note+f'采集原文声称价相差{saving/100:.2f}元（约{pct:.2f}%）；未核实商家实际价，不代表省钱或捡漏'
         elif same_merchant_listing:
-            message='多个采集线索指向同一商家商品ID，是同一商品页的价格声称，不是多个购买方案；缺独立基准，不能判断省钱或捡漏'
+            if len(merchant_keys)==1:
+                message='多个采集线索指向同一商家商品ID，是同一商品页的价格声称，不是多个购买方案；缺独立基准，不能判断省钱或捡漏'
+            else:
+                message='同一购买平台内的不同商品ID尚不能证明是同一商品；不合并为独立跨渠道基准'
         elif target['problems']:message='暂不能参与当前比较：'+ '；'.join(target['problems'])
         else:message='当前没有第二个同商品候选、同数量及已提及资格的可比报价'
         ordered=sorted(items,key=lambda i:(bool(i['problems']),i['quantity'] or 10**9,i['total_cents'] if i['total_cents'] is not None else 10**12))
         ordered=[dict(i,comparison_note='与本方案数量、规格或资格不同，仅供对照' if i['partition']!=target['partition'] else '') for i in ordered]
-        result[oid]=dict(identity_label=target['identity_label'],quantity_options=quantity_options(items,target),items=ordered,
+        quantity_items=items
+        if key.startswith('title-candidate:'):
+            unique_listings={}
+            for item in items:
+                if item['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+                    unique_listings.setdefault(item['merchant_key'],item)
+            quantity_items=list(unique_listings.values())
+        result[oid]=dict(identity_label=target['identity_label'],quantity_options=quantity_options(quantity_items,target),items=ordered,
                         peers=len(peers) if not same_merchant_listing else min(len(peers),1),
                         best_id=best['id'] if best else None, saving_cents=saving,
                         message=message)
