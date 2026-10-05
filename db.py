@@ -2,8 +2,11 @@
 from contextlib import contextmanager
 from pathlib import Path
 import os
+import json
 import sqlite3
-from offer import detected_offer_type
+from offer import detected_offer_type, TOPIC_LABELS
+from services.category_policy import default_policy, encode_policy
+from services.category_comparison_rules import default_rule, encode_rule
 
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("WORKBENCH_DB", ROOT / "data" / "workbench.sqlite3"))
@@ -67,6 +70,35 @@ CREATE TABLE IF NOT EXISTS quotes (
  same_spec INTEGER NOT NULL DEFAULT 0, final_quote INTEGER NOT NULL DEFAULT 0,
  evidence_url TEXT, price_at TEXT, valid_until TEXT,
  observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS benchmark_categories (
+ id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES benchmark_categories(id),
+ name TEXT NOT NULL UNIQUE, pricing_unit TEXT NOT NULL, identity_rule TEXT NOT NULL,
+ topic_key TEXT NOT NULL DEFAULT 'other', match_terms_json TEXT NOT NULL DEFAULT '[]',
+ policy_json TEXT NOT NULL DEFAULT '{}', comparison_rule_json TEXT NOT NULL DEFAULT '{}',
+ version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS benchmark_category_rule_audit (
+ id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL, version INTEGER NOT NULL,
+ previous_policy_json TEXT, policy_json TEXT NOT NULL,
+ changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS benchmark_topic_rules (
+ topic_key TEXT PRIMARY KEY, policy_json TEXT NOT NULL,
+ version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS benchmark_topic_rule_audit (
+ id INTEGER PRIMARY KEY, topic_key TEXT NOT NULL, version INTEGER NOT NULL,
+ previous_policy_json TEXT, policy_json TEXT NOT NULL,
+ changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS benchmark_providers (
+ id INTEGER PRIMARY KEY, provider_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+ kind TEXT NOT NULL, scope TEXT NOT NULL, access_state TEXT NOT NULL DEFAULT 'not_connected',
+ evidence_url TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', watched INTEGER NOT NULL DEFAULT 1 CHECK(watched IN (0,1)),
+ sample_count INTEGER NOT NULL DEFAULT 0 CHECK(sample_count >= 0), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS buy_checks (
  id INTEGER PRIMARY KEY, opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
@@ -208,10 +240,84 @@ SEEDS = [
 ]
 
 
+CATEGORY_SEEDS = [
+    ("日用百货", "叶子类另配", "品牌/型号、用途、地区及包装规格匹配", "home", []),
+    ("纸品", "元/100抽或元/卷；仅在抽数/卷数明确时换算", "品牌、层数、单包规格、包数一致；抽纸与卷纸分开", "home", ["抽纸", "卷纸", "纸巾", "面巾纸", "卫生纸", "厨房纸", "湿厕纸", "湿巾"]),
+    ("清洁洗护", "元/升或元/千克；浓缩倍率独立", "品牌、品名、净含量、浓度/型号一致", "home", ["洗衣液", "洗衣凝珠", "洗洁精", "垃圾袋", "清洁剂", "消毒液"]),
+    ("乳品饮料", "元/升或元/100克；箱规明确", "品牌、口味、净含量、件数、保质状态一致", "food", ["牛奶", "酸奶", "奶酪", "饮料", "咖啡", "茶饮", "矿泉水"]),
+    ("食品", "元/千克或元/100克；按可食净含量", "品牌、品类、净含量、等级及保质状态一致", "food", ["零食", "坚果", "粮油", "米面", "调味", "水果", "生鲜", "午餐肉"]),
+    ("手机数码", "元/件；不做跨型号单位折算", "精确型号、容量、版本、成色、保修、地区一致", "electronics", ["手机", "iPhone", "iPad", "REDMI", "电脑", "笔记本", "显示器", "耳机"]),
+    ("家电", "元/件；型号一致", "精确型号、地区、安装服务、保修与新旧状态一致", "electronics", ["冰箱", "洗衣机", "空调", "电饭煲", "吸尘器"]),
+    ("本地生活", "元/次或元/份；需拆资格和门店", "城市/门店、时段、规格、会员及新客资格一致", "travel", ["外卖", "餐券", "酒店", "机票", "打车", "电影", "加油"]),
+    ("二手与收藏", "元/件；不混合新品价格", "型号/版本、品相、附件、真伪证据及交易保障一致", "other", ["二手", "闲置", "收藏", "拍卖", "古董"]),
+]
+
+
+def initialize_benchmark_rules(db):
+    """Add/seed only benchmark configuration, for safe targeted migration and app init."""
+    db.execute("""CREATE TABLE IF NOT EXISTS benchmark_category_rule_audit (
+        id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL, version INTEGER NOT NULL,
+        previous_policy_json TEXT, policy_json TEXT NOT NULL,
+        changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS benchmark_topic_rules (
+        topic_key TEXT PRIMARY KEY, policy_json TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS benchmark_topic_rule_audit (
+        id INTEGER PRIMARY KEY, topic_key TEXT NOT NULL, version INTEGER NOT NULL,
+        previous_policy_json TEXT, policy_json TEXT NOT NULL,
+        changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    category_columns = {row[1] for row in db.execute("PRAGMA table_info(benchmark_categories)")}
+    for column, declaration in (
+        ("topic_key", "TEXT NOT NULL DEFAULT 'other'"),
+        ("match_terms_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("policy_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("comparison_rule_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        if column not in category_columns:
+            db.execute(f"ALTER TABLE benchmark_categories ADD COLUMN {column} {declaration}")
+    category_policy_json = encode_policy(default_policy())
+    category_comparison_rule_json = encode_rule(default_rule())
+    for name, unit, identity, topic_key, terms in CATEGORY_SEEDS:
+        db.execute("""INSERT OR IGNORE INTO benchmark_categories
+            (name,pricing_unit,identity_rule,topic_key,match_terms_json,policy_json,comparison_rule_json)
+            VALUES(?,?,?,?,?,?,?)""",
+            (name, unit, identity, topic_key, json.dumps(terms,ensure_ascii=False),category_policy_json,
+             encode_rule(default_rule())))
+        # Upgrade only untouched legacy seeds; preserve every user-edited rule.
+        db.execute("""UPDATE benchmark_categories SET topic_key=?,match_terms_json=?,policy_json=?,comparison_rule_json=?
+            WHERE name=? AND topic_key='other' AND match_terms_json='[]' AND policy_json='{}' AND version=1""",
+            (topic_key,json.dumps(terms,ensure_ascii=False),category_policy_json,encode_rule(default_rule()),name))
+    # Existing rows receive the new conservative default exactly once; preserve
+    # every non-empty user-configured comparison rule.
+    db.execute("""UPDATE benchmark_categories SET comparison_rule_json=?
+        WHERE comparison_rule_json='{}'""", (category_comparison_rule_json,))
+    policy_json = encode_policy(default_policy())
+    for topic_key in TOPIC_LABELS:
+        db.execute("INSERT OR IGNORE INTO benchmark_topic_rules(topic_key,policy_json) VALUES(?,?)",
+                   (topic_key, policy_json))
+
+
 def initialize():
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        initialize_benchmark_rules(db)
+        provider_seeds = [
+            ("smzdm_history", "什么值得买历史价格 API", "independent_index", "按商品URL的历史价格曲线；Price/FinalPrice字段", "需App Key与OAuth；历史索引不等于当前结算价", "https://openapi.zhidemai.com/pages/price/4.%E5%8E%86%E5%8F%B2%E4%BB%B7%E6%A0%BC%E6%9F%A5%E8%AF%A2API.html"),
+            ("manmanbuy", "慢慢买", "independent_index", "历史价格与跨商城比价；当前可用 API 覆盖待合作核实", "公开介绍未提供本项目可直接调用的接口契约，需合作询价", "https://help.manmanbuy.com/"),
+            ("taobao_union", "淘宝联盟商品推广 API", "affiliate", "联盟推广商品与促销字段", "需AppKey/推广位；仅推广集合，非淘宝全站中立总体", "https://developer.alibaba.com/docs/api.htm?apiId=69450"),
+            ("jd_iop", "京东 IOP 售卖价", "authorized_platform", "授权客户商品池 SKU 价格", "需 token 与授权；不是无条件全站查询", "https://opendoc.jd.com/iopv2/iopv2/%E4%BB%B7%E6%A0%BC/%E6%9F%A5%E8%AF%A2%E5%95%86%E5%93%81%E5%94%AE%E5%8D%96%E4%BB%B7.html"),
+            ("douyin_local", "抖音生活服务商品查询", "authorized_platform", "授权商户的本地生活商品与有限价格字段", "需权限申请和商户授权；不是抖音全站商品价", "https://developer.open-douyin.com/docs/resource/zh-CN/local-life/develop/OpenAPI/general-capabilities/product-query/online.get"),
+            ("cneptp", "全国企业采购交易寻源询价平台", "procurement_index", "采购品类/地区/周期参考价与历史", "需 accessToken；仅其企业采购覆盖，不能外推家用零售价", "https://apidoc.cneptp.com/price-track/bp/average-price-search.html"),
+            ("github_price_tracker", "GitHub price-tracker", "implementation_reference", "借鉴按商品保留多卖家历史序列", "开源实现参考，不提供中国商城数据", "https://github.com/andrewschultzw/price-tracker"),
+            ("github_price_scout", "GitHub price-scout", "implementation_reference", "借鉴商品分组、单位归一和购物篮比较", "开源实现参考，不提供中国商城数据", "https://github.com/bulletinmybeard/price-scout"),
+        ]
+        for key, name, kind, scope, note, url in provider_seeds:
+            db.execute("""INSERT OR IGNORE INTO benchmark_providers
+                (provider_key,name,kind,scope,note,evidence_url,access_state,sample_count)
+                VALUES(?,?,?,?,?,?,'not_connected',0)""", (key,name,kind,scope,note,url))
         trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
         if "deposit_lost_cents" not in trade_columns:
             db.execute("ALTER TABLE trades ADD COLUMN deposit_lost_cents INTEGER NOT NULL DEFAULT 0")

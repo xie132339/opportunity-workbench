@@ -1,7 +1,10 @@
 import unittest
+import json
 from datetime import datetime,timedelta,timezone
 from unittest.mock import patch,MagicMock
 from comparison import comparison_index,product_key
+from services.category_policy import default_policy, encode_policy, resolve_category_policy
+from services.category_comparison_rules import default_rule, encode_rule, normalized_spec
 from pricing import calculate_plan,promotion_mentions,discount_audit
 from autoreview import public_offer,structured_spec
 import scanner
@@ -22,6 +25,97 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(r[2]['best_id'],2)
         self.assertEqual(r[2]['saving_cents'],0)
 
+    def test_category_policy_controls_minimum_comparable_offers(self):
+        leaf_policy=default_policy();leaf_policy['minimum_comparable_offers']=3
+        categories=[dict(id=1,name='纸品',topic_key='home',enabled=1,
+                         match_terms_json='["抽纸","卷纸"]',policy_json=encode_policy(leaf_policy))]
+        policy,category_name,error,scope=resolve_category_policy('某品牌抽纸100抽3层6包','home',categories,
+                                                                  encode_policy(default_policy()))
+        self.assertEqual((category_name,error,scope),('纸品',None,'category'))
+        first=self.row(1,'10',title='某品牌抽纸100抽3层6包 5元',
+                       metadata_json='{"activity_links":["https://item.jd.com/123.html"]}',
+                       resolved_category_policy=policy,resolved_category_name=category_name,
+                       resolved_policy_scope=scope)
+        second=self.row(2,'8',title='某品牌抽纸100抽3层6包 5元',
+                        metadata_json='{"activity_links":["https://detail.tmall.com/item.htm?id=456"]}',
+                        resolved_category_policy=policy,resolved_category_name=category_name,
+                        resolved_policy_scope=scope)
+        result=comparison_index([first,second])
+        self.assertEqual(result[1]['required_comparable_offers'],3)
+        self.assertIsNone(result[1]['best_id'])
+        self.assertEqual(result[1]['comparison_basis'],'source_claim')
+        self.assertEqual((result[1]['resolved_category_name'],result[1]['policy_scope']),('纸品','category'))
+
+    def test_configured_measure_normalizes_packages_and_keeps_variant_identity(self):
+        rule=dict(default_rule(),unit_mode='count',count_unit='抽')
+        first=self.row(1,'10',title='某品牌抽纸100抽3层6包 10元',selected_spec='100抽 × 3层 × 6包',quantity=1,
+                        metadata_json='{"activity_links":["https://item.jd.com/123.html"]}')
+        second=self.row(2,'8',title='某品牌抽纸200抽3层3包 8元',selected_spec='200抽 × 3层 × 3包',quantity=1,
+                         metadata_json='{"activity_links":["https://detail.tmall.com/item.htm?id=456"]}')
+        for row in (first,second):
+            row['resolved_comparison_rule']=rule
+            row['resolved_category_name']='纸品'
+        result=comparison_index([first,second])
+        self.assertEqual(result[1]['best_id'],2)
+        self.assertEqual(result[1]['items'][0]['normalized_base_unit'],'抽')
+        self.assertIn('按每抽归一',result[1]['message'])
+        self.assertEqual(result[1]['quantity_options']['count'],0)
+
+    def test_ambiguous_or_incompatible_measure_is_blocked(self):
+        rule=dict(default_rule(),unit_mode='mass')
+        first=self.row(1,'10',title='某品牌米200克 10元',selected_spec='200克',
+                        metadata_json='{"activity_links":["https://item.jd.com/123.html"]}')
+        second=self.row(2,'8',title='某品牌米300克 8元',selected_spec='300克',
+                         metadata_json='{"activity_links":["https://detail.tmall.com/item.htm?id=456"]}')
+        for row in (first,second):
+            row['resolved_comparison_rule']=rule
+            row['resolved_category_name']='食品'
+        invalid=self.row(3,'1',title='某品牌米200克 1元',selected_spec='200克 / 300克')
+        invalid['resolved_comparison_rule']=rule
+        invalid['resolved_category_name']='食品'
+        result=comparison_index([first,second,invalid])
+        self.assertEqual(result[1]['best_id'],2)
+        bad=next(item for item in result[3]['items'] if item['id']==3)
+        self.assertTrue(any('无歧义换算' in issue for issue in bad['problems']))
+        self.assertIsNone(result[3]['best_id'])
+        from services.category_comparison_rules import normalized_spec
+        rule=dict(default_rule(),unit_mode='mass')
+        kg=normalized_spec('某牌奶粉0.4kg 2罐','0.4kg × 2罐',rule)
+        grams=normalized_spec('某牌奶粉800g','800克',rule)
+        self.assertEqual((kg[0],kg[1],kg[2]),(grams[0],grams[1],grams[2]))
+        self.assertEqual(kg[2],grams[2])
+        conflict=normalized_spec('某牌奶粉400g','800克',rule)
+        self.assertIn('标题计价规格与选中报价规格冲突',conflict[3])
+
+    def test_identity_policy_can_forbid_title_only_cross_platform_match(self):
+        rule=dict(default_rule(),identity_mode='merchant_id_only')
+        title='某品牌抽纸100抽3层6包 5元'
+        rows=[self.row(1,'10',title=title),self.row(2,'8',title=title)]
+        for row in rows:
+            row['resolved_comparison_rule']=rule
+        result=comparison_index(rows)
+        self.assertIsNone(result[1]['best_id'])
+        self.assertEqual(result[1]['peers'],1)  # includes the current offer; no second candidate
+
+    def test_unit_normalization_does_not_fuzz_unconfigured_attributes(self):
+        rule=dict(default_rule(),unit_mode='mass')
+        a=normalized_spec('某牌奶粉 400g 2罐','奶粉段数3段 400g 2罐',rule)
+        b=normalized_spec('某牌奶粉 800g','奶粉段数2段 800g 1罐',rule)
+        self.assertEqual(a[0],b[0])
+        self.assertNotEqual(a[1],b[1])
+        self.assertEqual((str(a[2]),a[3]),('800',None))
+
+    def test_ambiguous_category_keyword_uses_broad_policy(self):
+        categories=[
+            dict(id=1,name='抽纸',topic_key='home',enabled=1,match_terms_json='["抽纸"]',policy_json='{}'),
+            dict(id=2,name='纸巾套装',topic_key='home',enabled=1,match_terms_json='["抽纸"]',policy_json='{}'),
+        ]
+        policy,name,error,scope=resolve_category_policy('抽纸套装','home',categories,encode_policy(default_policy()))
+        self.assertIsNone(name)
+        self.assertEqual(scope,'topic')
+        self.assertIsNone(error)
+        self.assertEqual(policy,default_policy())
+
     def test_different_counts_and_qualifications_do_not_compete(self):
         for changed in [self.row(2,'8',quantity=3),self.row(2,'8',tail='限新客首单'),self.row(2,'8',tail='仅限北京地区')]:
             r=comparison_index([self.row(1),changed]);self.assertIsNone(r[1]['best_id'])
@@ -35,6 +129,18 @@ class ComparisonTests(unittest.TestCase):
         for extra in [dict(published_at='2020-01-01 00:00:00'),dict(source_status='failed'),dict(auto_state='conflict'),dict(published_at='2099-01-01 00:00:00')]:
             r=comparison_index([self.row(1),self.row(2,'1',**extra)])
             self.assertIsNone(r[1]['best_id']);self.assertTrue(next(i for i in r[1]['items'] if i['id']==2)['problems'])
+
+    def test_catalog_currentness_uses_recent_successful_observation(self):
+        now=datetime.now(timezone.utc).replace(tzinfo=None)
+        title='米家冰箱 对开636L 1899元'
+        row=self.row(1,title=title,url='https://www.mi.com/shop/buy?product_id=22504',
+                     source_parser='mi',published_at=None,
+                     last_seen_at=now.strftime('%Y-%m-%d %H:%M:%S'),
+                     last_success=now.strftime('%Y-%m-%d %H:%M:%S'),platform='小米商城')
+        result=comparison_index([row],now=now)
+        item=result[1]['items'][0]
+        self.assertTrue(item['source_current'])
+        self.assertIsNone(result[1]['best_id'])
 
     def test_same_url_snapshots_not_two_independent_offers(self):
         r=comparison_index([self.row(1),self.row(2,'8',url='https://guangdiu.com/detail.php?id=1')])

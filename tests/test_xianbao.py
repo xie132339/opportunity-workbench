@@ -79,6 +79,33 @@ class XianbaoTests(unittest.TestCase):
             self.assertNotIn('洗衣液',client.get('/?topic=food').get_data(as_text=True))
             self.assertEqual(client.get('/opportunities/1').status_code,200)
 
+    def test_personal_trade_ledger_is_removed_but_external_quotes_remain(self):
+        with patch('scanner.xianbao_rows',return_value=parse_items([sample()])):
+            scanner.scan_source(1)
+        with db.connect() as c:
+            c.execute("INSERT INTO quotes(opportunity_id,kind,amount_cents,evidence_url) VALUES(1,'listing',900,'https://example.com/market')")
+            c.execute("INSERT INTO quotes(opportunity_id,kind,amount_cents) VALUES(1,'historical_buy',500)")
+            c.execute("INSERT INTO trades(opportunity_id,state,quantity,buy_cents) VALUES(1,'holding',1,500)")
+
+        with app.test_client() as client:
+            detail=client.get('/opportunities/1')
+            self.assertEqual(detail.status_code,200)
+            page=detail.get_data(as_text=True)
+            self.assertIn('公开行情依据',page)
+            self.assertIn('外部挂牌价',page)
+            self.assertIn('¥9.00',page)
+            self.assertNotIn('历史个人实付',page)
+            self.assertNotIn('买入、库存和结算',page)
+            self.assertNotIn('保存交易',page)
+            self.assertNotIn('交易与复盘',page)
+            self.assertEqual(client.get('/market').status_code,200)
+            for path in ['/trades','/trades/1/settle','/opportunities/1/trades','/opportunities/1/details']:
+                self.assertEqual(client.get(path).status_code,404,path)
+
+        with db.connect() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM trades').fetchone()[0],1)
+            self.assertEqual(c.execute("SELECT count(*) FROM quotes WHERE kind='historical_buy'").fetchone()[0],1)
+
     def test_coupon_face_value_not_cash_price(self):
         item=sample();item.update(title='100元打车立减券包',content='领取优惠券')
         with patch('scanner.xianbao_rows',return_value=parse_items([item])):scanner.scan_source(1)

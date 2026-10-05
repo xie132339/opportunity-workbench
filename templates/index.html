@@ -69,7 +69,7 @@
 <div class="table-wrap offer-list-view">
 <table class="offer-list-table">
 <colgroup><col class="offer-col-product"><col class="offer-col-price"><col class="offer-col-store"><col class="offer-col-source"><col class="offer-col-benefits"><col class="offer-col-status"><col class="offer-col-actions"></colgroup>
-<thead><tr><th>商品 / 规格</th><th><a class="sortable-header" href="{{ url_for('index',sort=('price_high' if sort_mode=='price_low' else 'price_low'),page=1,q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,view=view_mode,layout=layout_mode) }}" aria-label="来源报价排序；点击切换升序和降序" title="按来源金额排序，不代表同款比价"><span>来源报价 / 单位参考</span><span class="sort-indicator" aria-hidden="true">{{ '↑' if sort_mode=='price_low' else ('↓' if sort_mode=='price_high' else '↕') }}</span></a></th><th>购买平台</th><th>线索来源</th><th>本商品优惠</th><th>发布时间 / 状态</th><th>操作</th></tr></thead>
+<thead><tr><th>商品 / 规格</th><th><a class="sortable-header" href="{{ url_for('index',sort=('price_high' if sort_mode=='price_low' else 'price_low'),page=1,q=query,platform=platform,budget=budget_text,category=category,status=status,candidate=('1' if candidate_only else ''),offer=offer_filter,topic=topic,resource=resource,view=view_mode,layout=layout_mode) }}" aria-label="来源报价排序；点击切换升序和降序" title="按来源金额排序，不代表同款比价"><span>来源报价 / 单位参考</span><span class="sort-indicator" aria-hidden="true">{{ '↑' if sort_mode=='price_low' else ('↓' if sort_mode=='price_high' else '↕') }}</span></a></th><th>购买平台</th><th>线索来源</th><th>本商品优惠</th><th>来源时间 / 状态</th><th>操作</th></tr></thead>
 <tbody>
 {% for row in rows %}
 {% set brief=offer_summary(row.title,row.url,row.snippet,row.auto_conditions,row.metadata_json,row.detail_json,dict(checked_at=row.review_checked_at,detail_checked_at=row.detail_checked_at,detail_error=row.detail_error)) %}
@@ -79,11 +79,11 @@
 {% set total_cents = brief.get('total_cents') %}
 <tr>
   <td data-label="商品 / 规格"><strong><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ display_title }}</a></strong><small>{% if brief.selected_spec %}原文明示报价规格：{{ brief.selected_spec }}{% elif brief.source_spec %}标题规格线索：{{ brief.source_spec }}（未确认报价对应变体）{% else %}规格未提取{% endif %}{% if brief.quantity %} · {{ brief.quantity }} 件{% endif %}</small></td>
-  <td data-label="来源报价 / 单位参考"><strong>{% if total_cents is not none %}{{ money(total_cents) }}{% elif row.advertised_cents is not none %}{{ money(row.advertised_cents) }}{% else %}{{ brief.price_status.label }}{% endif %}</strong><small>{% if total_cents is not none %}来源原文声称{% elif row.advertised_cents is not none %}自动核验提取的来源金额；计价单位待确认{% else %}{{ brief.price_status.note }}{% endif %}{% if paper_price %} · {{ money(paper_price.per_pack_cents) }}/{{ paper_price.pack_unit }}{% if paper_price.per_hundred_cents is defined %} · {{ money(paper_price.per_hundred_cents) }}/{{ paper_price.hundred_unit }}{% endif %}{% elif brief.quantity and brief.get('display_unit_cents') is not none and brief.quantity>1 %} · {{ money(brief.get('display_unit_cents')) }}/件{% endif %}</small></td>
+  <td data-label="来源报价 / 单位参考"><strong>{% if total_cents is not none %}{{ money(total_cents) }}{% elif row.advertised_cents is not none %}{{ money(row.advertised_cents) }}{% else %}{{ brief.price_status.label }}{% endif %}</strong><small>{% if row.catalog_listing and row.advertised_cents is not none %}商城目录公开标价；观察值，非最终结算价{% elif total_cents is not none %}来源原文声称{% elif row.advertised_cents is not none %}自动核验提取的来源金额；计价单位待确认{% else %}{{ brief.price_status.note }}{% endif %}{% if paper_price %} · {{ money(paper_price.per_pack_cents) }}/{{ paper_price.pack_unit }}{% if paper_price.per_hundred_cents is defined %} · {{ money(paper_price.per_hundred_cents) }}/{{ paper_price.hundred_unit }}{% endif %}{% elif brief.quantity and brief.get('display_unit_cents') is not none and brief.quantity>1 %} · {{ money(brief.get('display_unit_cents')) }}/件{% endif %}</small></td>
   <td data-label="购买平台">{{ brief.store or brief.platforms or '原文未注明' }}</td>
   <td data-label="线索来源">{% set channels=row.source_channels|default([]) %}{{ channels|join('、') if channels else row.platform or '人工录入' }}{% if row.source_count|default(1)>1 %}<small>{{ row.source_count }} 个采集入口；不代表独立报价</small>{% endif %}</td>
   <td data-label="本商品优惠">{% set relations=benefit_link_counts.get(row.id,{}) %}{% if relations.get('confirmed',0) %}<a href="{{ url_for('opportunity',opportunity_id=row.id) }}#product-benefits">已确认适用 {{ relations.confirmed }} 条</a>{% elif brief.promotions or brief.qualifications or relations.get('source_linked',0) %}<a href="{{ url_for('opportunity',opportunity_id=row.id) }}#product-benefits">优惠线索 {{ brief.promotions|length + relations.get('source_linked',0) }} 条</a><small>原文关联 {{ relations.get('source_linked',0) }} 个入口；适用/叠加未确认</small>{% else %}未识别到明确优惠{% endif %}</td>
-  <td data-label="发布时间 / 状态"><span>{{ row.published_at|cn_time }}</span><small>{{ row|freshness }} · {{ review_labels.get(row.auto_state,'自动核验状态待生成') }}{% if search_assessments.get(row.id) and search_assessments[row.id].search_ready %} · 资料可分析{% endif %}</small>{% set assessment=search_assessments.get(row.id) %}{% if assessment and not assessment.search_ready and assessment.search_failures %}<details class="row-gaps"><summary>缺 {{ assessment.search_failures|length }} 项</summary><ul>{% for reason in assessment.search_failures %}<li>{{ reason }}</li>{% endfor %}</ul></details>{% endif %}</td>
+  <td data-label="来源时间 / 状态"><span>{% if row.catalog_listing %}目录采集 {{ row.last_seen_at|cn_time }}{% else %}原文发布 {{ row.published_at|cn_time }}{% endif %}</span><small>{% if row.catalog_listing %}商城目录观察期内{% else %}{{ row|freshness }}{% endif %} · {{ review_labels.get(row.auto_state,'自动核验状态待生成') }}{% if search_assessments.get(row.id) and search_assessments[row.id].search_ready %} · 资料可分析{% endif %}</small>{% set assessment=search_assessments.get(row.id) %}{% if assessment and not assessment.search_ready and assessment.search_failures %}<details class="row-gaps"><summary>缺 {{ assessment.search_failures|length }} 项</summary><ul>{% for reason in assessment.search_failures %}<li>{{ reason }}</li>{% endfor %}</ul></details>{% endif %}</td>
   <td data-label="操作"><div class="offer-row-actions"><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">详情</a>{% if row.url and (row.url.startswith('https://') or row.url.startswith('http://')) %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">源页面 ↗</a>{% else %}<span class="muted">无源页面链接</span>{% endif %}</div></td>
 </tr>
 {% endfor %}
@@ -99,16 +99,16 @@
 {% set paper_price = paper_package_prices(display_title,brief.get('total_cents'),brief.get('quantity')) if is_paper else none %}
 <article class="card offer-card">
   <div class="offer-card-head">
-    <div class="offer-tags"><span class="pill">{{ ('家用日用品' if is_paper else topic_labels.get(row.topic,row.category)) }} / {{ product_subcategory(display_title,row.topic) }}</span><span class="pill">{{ resource_labels.get(row.resource_kind,'待分类') }}</span><span class="pill freshness-pill">{{ row|freshness }}</span></div>
+    <div class="offer-tags"><span class="pill">{{ ('家用日用品' if is_paper else topic_labels.get(row.topic,row.category)) }} / {{ product_subcategory(display_title,row.topic) }}</span><span class="pill">{{ resource_labels.get(row.resource_kind,'待分类') }}</span><span class="pill freshness-pill">{{ '商城目录观察期内' if row.catalog_listing else row|freshness }}</span></div>
     {% if row.auto_state=='conditional' %}<span class="offer-state incomplete">来源扣减算术相符 · 资格待核</span>{% elif assessment and assessment.search_ready %}<span class="offer-state ready">资料可分析</span>{% else %}<span class="offer-state incomplete">需补资料</span>{% endif %}
   </div>
   <h2 class="offer-title"><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ brief.title }}</a></h2>
   <div class="price-panel">
     {% if brief.get('total_cents') is not none %}
-      <div class="source-total"><span>{% if row.auto_state=='conditional' %}来源报价 · 扣减算术相符{% else %}可分析来源报价{% endif %}{% if brief.get('quantity') %} · 来源原文整单报价 · {{ brief.get('quantity') }}件{% else %} · 来源原文金额 · 购买件数未提取{% endif %}</span><strong>{{ money(brief.get('total_cents')) }}</strong><small>{% if brief.get('quantity') == 1 %}单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。{% elif brief.get('quantity') %}按原文购买方案计价，不是账号最终结算价{% else %}购买件数不明，不能折算单件价或比较整单方案。{% endif %}</small></div>
+      <div class="source-total"><span>{% if row.catalog_listing %}商城目录公开标价 · 观察值{% elif row.auto_state=='conditional' %}来源报价 · 扣减算术相符{% else %}可分析来源报价{% endif %}{% if brief.get('quantity') %} · 来源原文整单报价 · {{ brief.get('quantity') }}件{% else %} · 来源原文金额 · 购买件数未提取{% endif %}</span><strong>{{ money(brief.get('total_cents')) }}</strong><small>{% if row.catalog_listing %}尚未核对SKU、库存、运费、优惠和账号最终结算价{% elif brief.get('quantity') == 1 %}单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。{% elif brief.get('quantity') %}按原文购买方案计价，不是账号最终结算价{% else %}购买件数不明，不能折算单件价或比较整单方案。{% endif %}</small></div>
       {% if brief.get('quantity') and brief.get('quantity') > 1 %}<div class="price-side"><span>折合每件（由整单换算）</span><b>{{ money(brief.get('display_unit_cents')) }}</b></div>{% endif %}
     {% elif row.advertised_cents is not none %}
-      <div class="source-total"><span>来源声称报价（计价单位待核）</span><strong>{{ money(row.advertised_cents) }}</strong></div>
+      <div class="source-total"><span>{% if row.catalog_listing %}商城目录公开标价 · 观察值{% else %}来源声称报价（计价单位待核）{% endif %}</span><strong>{{ money(row.advertised_cents) }}</strong>{% if row.catalog_listing %}<small>尚未核对SKU、库存、运费、优惠和账号最终结算价</small>{% endif %}</div>
     {% else %}
       <div class="source-total no-price"><span>{{ brief.price_status.label }}</span><small>{{ brief.price_status.note }}</small></div>
     {% endif %}
@@ -124,7 +124,7 @@
     <div><span>{% if brief.selected_spec %}原文明示报价规格{% elif brief.source_spec %}标题规格线索{% else %}报价规格{% endif %}</span><b>{{ brief.selected_spec or brief.source_spec or '尚未提取，不能按同款比较' }}</b>{% if brief.source_spec and not brief.selected_spec %}<small>未确认来源报价对应此变体，不能据此完成同款比较</small>{% endif %}</div>
     <div><span>购买件数</span><b>{% if brief.quantity %}{{ brief.quantity }} 件{% else %}原文未提取{% endif %}</b></div>
     <div><span>优惠信息</span><b>{{ brief.promotion_sync.label }}</b><small class="clamp-2">{{ brief.promotion_sync.explanation }}</small></div>
-    <div><span>原文发布时间</span><b>{{ row.published_at|cn_time }}</b></div>
+    <div><span>{% if row.catalog_listing %}目录最近采集{% else %}原文发布时间{% endif %}</span><b>{{ (row.last_seen_at if row.catalog_listing else row.published_at)|cn_time }}</b></div>
   </div>
 
   {% if brief.promotions or brief.qualifications %}<div class="offer-tags promotion-tags">{% for item in brief.promotions + brief.qualifications %}<span>{{ item }}</span>{% endfor %}<small>原文提及，不代表已确认可用或可叠加</small></div>{% endif %}
@@ -137,7 +137,7 @@
   <details class="gap-details"><summary>可分析前还缺 {{ assessment.search_failures|length }} 项资料</summary><ul>{% for reason in assessment.search_failures %}<li>{{ reason }}</li>{% endfor %}</ul></details>
   {% endif %}
   {% set cmp=comparisons.get(row.id) %}{% if cmp %}<p class="comparison-note">{{ cmp.message }}</p>{% endif %}
-  <div class="offer-card-footer"><span>{{ row|freshness }} · {{ row.published_at|cn_time }}</span><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">看证据与详情 →</a></div>
+  <div class="offer-card-footer"><span>{{ ('商城目录观察期内' if row.catalog_listing else row|freshness) }} · {{ (row.last_seen_at if row.catalog_listing else row.published_at)|cn_time }}</span><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">看证据与详情 →</a></div>
   <details class="offer-evidence"><summary>查看来源原文与链接</summary><p>{{ row.title }}</p><p>{{ row.auto_conditions or row.snippet or '未取得正文' }}</p>{% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noreferrer">打开来源原文</a>{% endif %}</details>
 </article>
 {% endfor %}

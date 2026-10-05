@@ -12,6 +12,7 @@ from db import connect
 from pricing import discount_audit, purchase_terms, promotion_mentions
 from xianbao import extract_links
 from offer import resource_kind, resource_topic, RESOURCE_LABELS
+from services.source_freshness import is_catalog_listing, source_snapshot_is_current
 
 LABELS = {
     'excluded': '自动排除', 'stale': '时效不满足',
@@ -305,6 +306,13 @@ def parse_detail(html):
 def classify(row, now, duplicate=False):
     price, spec, terms = extract(row['title'])
     snippet = (row.get('snippet') or '')[:12000]
+    catalog_listing = is_catalog_listing(row)
+    starting_price = bool(re.search(r'\d+(?:\.\d+)?\s*元\s*起', row['title']))
+    estimated_price = bool(re.search(r'预估到手价|预计到手价', row['title'] + ' ' + snippet))
+    if catalog_listing and (starting_price or estimated_price):
+        # A starting price or an account-dependent estimate is not a single
+        # comparable public item price.
+        price = None
     kind = resource_kind(row['title'],snippet)
     offer = public_offer(row['url'], snippet, row['title'])
     detail = json.loads(row['detail_json']) if row.get('detail_json') else {}
@@ -325,6 +333,11 @@ def classify(row, now, duplicate=False):
         elif offer.get('total_cents') is not None:
             price = offer['total_cents']
     kind = resource_kind(detail.get('title') or row['title'], detail.get('conditions') or snippet)
+    # Detail parsing can populate ``price`` after the initial title check above.
+    # Keep a starting/estimated catalogue label from being accidentally
+    # upgraded to an exact quote by an unrelated or generic detail amount.
+    if catalog_listing and (starting_price or estimated_price):
+        price = None
     evidence = '\n'.join(filter(None, [row['title'], snippet, detail.get('evidence')]))[:6000]
     result = dict(advertised_cents=price, specification=spec, conditions=terms, evidence=evidence)
     if kind not in ('purchase','unknown'):
@@ -352,7 +365,10 @@ def classify(row, now, duplicate=False):
         if next(iter(title_amounts)) != offer['unit_cents']:
             return state('conflict', '标题报价与正文明确单件价不一致，不能用于价格比较')
     published = moment(row['published_at'] or detail.get('published_at'))
-    if published and not timedelta(0) <= now - published <= timedelta(hours=2):
+    catalog_current = catalog_listing and source_snapshot_is_current(row, now)
+    if catalog_listing and not catalog_current:
+        return state('source_unavailable', '商城目录快照超时或来源未成功采集；不能把旧目录标价当作当前')
+    if not catalog_listing and published and not timedelta(0) <= now - published <= timedelta(hours=2):
         return state('stale', '原文超过 2 小时或时间在未来；自动留档，不列作当前机会')
     ttl = timedelta(minutes=min(2 * row['interval_minutes'] + 15, 120))
     seen, success = moment(row['last_seen_at']), moment(row['last_success'])
@@ -364,7 +380,7 @@ def classify(row, now, duplicate=False):
         checked = moment(row.get('detail_checked_at'))
         if not checked or now - checked > timedelta(minutes=30):
             return state('queued', '自动读取原文发布时间、公开报价和适用条件')
-    if not published:
+    if not published and not catalog_listing:
         return state('missing_time', '上游未提供可靠原文时间；隔离留档，采集更新后自动重算')
     audit = discount_audit(row['title'], detail.get('conditions') or snippet)
     if audit['formula']['state'] == 'conflict':
@@ -374,18 +390,34 @@ def classify(row, now, duplicate=False):
     if kind not in ('purchase','unknown'):
         return state('activity', RESOURCE_LABELS[kind] + '；需核对支出、资格、名额与截止时间，未认定免费或确定收益')
     if price is None:
+        if catalog_listing and starting_price:
+            return state('missing_price', '商城目录仅提供“起”价，未确定具体规格对应价格，不能用于商品比价')
+        if catalog_listing and estimated_price:
+            return state('conditional', '商城标注预估到手价，依赖商品选项或账号条件；未作为可执行报价')
         return state('missing_price', '没有唯一明确的人民币报价；需接入该来源的结构化价格能力')
     if audit['plan']['state'] == 'conditional_mismatch':
         return state('conditional', audit['plan']['reason'])
     if audit['uncertain']:
         return state('conditional', '；'.join(audit['risks'] or ['来源优惠扣减条件需拆解']) + '；仅按公开原文记录条件，不把未知扣减当成已生效价格')
+    if catalog_listing:
+        return state('observed', '商城商品目录单一公开标价；本次采集可见时间作为观察时间，不代表详情页库存、运费、优惠或账号最终结算价')
     return state('observed', '已提取来源公开报价；还需核对完整规格、数量口径、可比行情与费用依据，再判断低价及预计利润')
+
+
+def classify_catalog_observation(row, now, duplicate=False):
+    """Re-evaluate a direct catalog row with shared fields for read-only views."""
+    source_row = dict(row)
+    source_row.setdefault('enabled', source_row.get('source_enabled'))
+    source_row.setdefault('interval_minutes', source_row.get('source_interval'))
+    source_row.setdefault('last_success', source_row.get('source_last_success'))
+    return classify(source_row, now, duplicate)
 
 
 def review_all():
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as db:
         rows = db.execute('''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
+            s.parser AS source_parser,s.method AS source_method,
             s.status AS source_status,s.interval_minutes,s.last_success,
             a.detail_json,a.detail_checked_at,a.detail_error,
             EXISTS(SELECT 1 FROM opportunities newer JOIN sources ns ON ns.id=newer.source_id

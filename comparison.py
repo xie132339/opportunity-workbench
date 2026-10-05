@@ -8,6 +8,9 @@ from fractions import Fraction
 from urllib.parse import urlparse, parse_qs
 from autoreview import offer_summary, moment, structured_spec
 from link_resolution import enrich
+from services.source_freshness import publication_is_current
+from services.category_policy import decode_policy, default_policy, resolve_category_policy
+from services.category_comparison_rules import default_rule, normalized_spec, resolve_category_rule
 
 
 def product_key(title):
@@ -28,7 +31,8 @@ def specification_key(value):
     return re.sub(r'[\s，,；;]+','',text).casefold()
 
 
-def comparison_group_key(row, identity, brief, title_keys_for_merchant=(), title_platforms=()):
+def comparison_group_key(row, identity, brief, title_keys_for_merchant=(), title_platforms=(),
+                         comparable_title_key=None, identity_mode="merchant_or_exact_title"):
     """Group exact-title, explicitly selected variants as cross-source candidates.
 
     Merchant IDs remain the strongest identity. When two marketplaces necessarily
@@ -36,7 +40,9 @@ def comparison_group_key(row, identity, brief, title_keys_for_merchant=(), title
     can form a candidate group; it is never described as a verified shared SKU.
     """
     merchant_id = identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:'))
-    title_key = product_key(row.get('title',''))
+    title_key = comparable_title_key or product_key(row.get('title',''))
+    if identity_mode == 'merchant_id_only' and not merchant_id:
+        return 'unmatched:'+str(row.get('id'))
     if (merchant_id and title_key and specification_key(brief.get('selected_spec'))
             and len(title_keys_for_merchant)==1 and len(title_platforms)>=2):
         return 'title-candidate:'+title_key
@@ -119,7 +125,9 @@ def assess_readiness(row, comparison=None, brief=None):
     search_keys=('product','identity','selected_spec','order_amount','current',
                  'conditional_arithmetic','conditional_product_binding')
     checks['search_ready'] = all(checks[key] for key in search_keys)
-    checks['two_comparable_offers'] = checks['search_ready'] and (comparison or {}).get('peers',0) >= 2
+    required_offers=(comparison or {}).get('required_comparable_offers',
+                     default_policy()['minimum_comparable_offers'])
+    checks['two_comparable_offers'] = checks['search_ready'] and (comparison or {}).get('peers',0) >= required_offers
     checks['decision'] = (checks['two_comparable_offers'] and (comparison or {}).get('best_id') == row.get('id'))
     messages = {
         'product':'不是带明确商品报价的购买方案',
@@ -129,7 +137,7 @@ def assess_readiness(row, comparison=None, brief=None):
         'current':'时效、来源状态或原文核验未通过',
         'conditional_arithmetic':'优惠条件无法复算到来源声称的整单价',
         'conditional_product_binding':'条件优惠缺商家商品ID，无法证明优惠与该商品绑定',
-        'two_comparable_offers':'缺两个证据完整的同口径购买方案',
+        'two_comparable_offers':f'缺少 {required_offers} 个证据完整的同口径购买方案',
         'decision':'当前来源报价不是同口径样本中的最低价或并列最低价',
     }
     return dict(checks=checks, search_ready=checks['search_ready'], comparable=checks['two_comparable_offers'],
@@ -143,6 +151,9 @@ def assess_readiness(row, comparison=None, brief=None):
 
 def quantity_options(items, target):
     """Pareto frontier of observed offers; does not invent repeatable orders or coupon stacks."""
+    if target.get('unit_mode','exact_spec') != 'exact_spec':
+        return dict(count=0,lowest_total=None,lowest_unit=None,frontier=[],
+                    reason='启用了跨包装计价归一，不能把不同包装误作同款数量方案')
     eligible=[i for i in items if not i['problems'] and not i['optimization_gaps']
               and i['partition'][:2]==target['partition'][:2]]
     if not eligible:return dict(count=0,lowest_total=None,lowest_unit=None,frontier=[],reason='没有字段足够且当前可比的数量方案')
@@ -161,33 +172,63 @@ def quantity_options(items, target):
 
 def load_comparisons(db):
     rows=db.execute("""SELECT o.*,e.snippet,e.metadata_json,e.published_at,e.last_seen_at,
-        s.platform,s.enabled,s.status AS source_status,s.interval_minutes,s.last_success,
-        a.state AS auto_state,a.advertised_cents,a.detail_json
+        s.platform,s.parser AS source_parser,s.enabled,s.status AS source_status,s.interval_minutes,s.last_success,
+        a.state AS auto_state,a.advertised_cents,a.detail_json,br.policy_json AS category_policy_json
         FROM opportunities o JOIN events e ON e.id=o.event_id JOIN sources s ON s.id=o.source_id
-        LEFT JOIN auto_reviews a ON a.opportunity_id=o.id ORDER BY o.id DESC""").fetchall()
+        LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+        LEFT JOIN benchmark_topic_rules br ON br.topic_key=o.topic ORDER BY o.id DESC""").fetchall()
     cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
-    return comparison_index([enrich(r,cache) for r in rows])
+    rows=[enrich(r,cache) for r in rows]
+    categories=[dict(r) for r in db.execute("SELECT * FROM benchmark_categories WHERE enabled=1")]
+    for row in rows:
+        policy, category_name, error, policy_scope=resolve_category_policy(
+            row.get('title'), row.get('topic'), categories, row.get('category_policy_json'))
+        row['resolved_category_policy']=policy
+        row['resolved_category_name']=category_name
+        row['resolved_category_policy_error']=error
+        row['resolved_policy_scope']=policy_scope
+        rule, rule_category_name, rule_error=resolve_category_rule(
+            row.get('title'), row.get('topic'), categories)
+        row['resolved_comparison_rule']=rule
+        row['resolved_comparison_rule_category']=rule_category_name
+        row['resolved_comparison_rule_error']=rule_error
+    return comparison_index(rows)
 
 
 def comparison_index(rows, now=None):
     now=now or datetime.now(timezone.utc).replace(tzinfo=None)
     groups=defaultdict(list);by_id={};seen=set()
     rows=sorted(rows,key=lambda r:r['id'],reverse=True)
-    merchant_title_keys=defaultdict(set);title_platforms=defaultdict(set)
+    merchant_title_keys=defaultdict(set);title_platforms=defaultdict(set);prepared={}
     for row in rows:
         identity=merchant_identity(row)
+        policy=row.get('resolved_category_policy')
+        if not isinstance(policy,dict):
+            policy, _=decode_policy(row.get('category_policy_json'))
+        rule=row.get('resolved_comparison_rule') or default_rule()
+        body=json.loads(row.get('detail_json') or '{}').get('conditions') or row.get('snippet') or ''
+        brief=offer_summary(row.get('title',''),row.get('url',''),body,metadata=row.get('metadata_json') or '{}')
+        title_identity, variant, measure, measure_error=normalized_spec(
+            row.get('title',''),brief.get('selected_spec'),rule)
+        comparable_title_key=title_identity if rule['unit_mode']!='exact_spec' and not measure_error else product_key(row.get('title',''))
+        prepared[row['id']]=(brief,rule,title_identity,variant,measure,measure_error,comparable_title_key)
         if identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
-            merchant_title_keys[identity['key']].add(product_key(row.get('title','')))
-            title_platforms[product_key(row.get('title',''))].add(identity['key'].split(':',1)[0])
+            merchant_title_keys[identity['key']].add(comparable_title_key)
+            title_platforms[comparable_title_key].add(identity['key'].split(':',1)[0])
     for row in rows:
         identity=merchant_identity(row)
+        policy=row.get('resolved_category_policy')
+        policy_error=row.get('resolved_category_policy_error')
+        policy_scope=row.get('resolved_policy_scope','topic')
+        if not isinstance(policy,dict):
+            policy, policy_error=decode_policy(row.get('category_policy_json'))
         if row['url'] in seen:continue
         seen.add(row['url'])
+        brief,rule,title_identity,variant,measure,measure_error,comparable_title_key=prepared[row['id']]
         body=json.loads(row.get('detail_json') or '{}').get('conditions') or row.get('snippet') or ''
-        brief=offer_summary(row['title'],row['url'],body,metadata=row.get('metadata_json') or '{}')
-        title_key=product_key(row.get('title',''))
+        title_key=comparable_title_key
         key=comparison_group_key(row,identity,brief,merchant_title_keys.get(identity['key'],()),
-                                 title_platforms.get(title_key,()))
+                                 title_platforms.get(title_key,()),title_key,rule['identity_mode'])
         by_id[row['id']]=key
         if brief['kind'] not in ('purchase','unknown'):continue
         total=brief.get('total_cents');quantity=brief.get('quantity')
@@ -207,6 +248,10 @@ def comparison_index(rows, now=None):
         if brief.get('error'):problems.append(brief['error'])
         selected_spec_key=specification_key(brief.get('selected_spec'))
         if not selected_spec_key:problems.append('缺明确选中规格，不能比较商品或数量方案')
+        if row.get('resolved_comparison_rule_error'):
+            problems.append('品类身份/计价规则配置无效')
+        if rule['unit_mode']!='exact_spec' and measure_error:
+            problems.append(measure_error)
         if total is None or not quantity:problems.append('缺整单金额或购买件数')
         if row.get('auto_state') not in ('observed','conditional'):
             problems.append('当前原文核验或时效未通过');current_problems.append('当前原文核验或时效未通过')
@@ -214,8 +259,10 @@ def comparison_index(rows, now=None):
             problems.append('已忽略或失效');current_problems.append('已忽略或失效')
         if brief['audit']['plan']['state']=='conditional_mismatch':problems.append('优惠试算与报价不符')
         published=moment(row.get('published_at'));seen_at=moment(row.get('last_seen_at'));success=moment(row.get('last_success'))
-        ttl=timedelta(minutes=min(2*(row.get('interval_minutes') or 60)+15,120))
-        if not published or not timedelta(0)<=now-published<=timedelta(hours=2):
+        # Category rules can tighten, but cannot extend the source adapter's ceiling.
+        ttl=timedelta(minutes=min(2*(row.get('interval_minutes') or 60)+15,120,
+                                  policy['max_source_age_minutes']))
+        if not publication_is_current(row,now):
             problems.append('原文过期或缺可靠时间');current_problems.append('原文过期或缺可靠时间')
         if not row.get('enabled') or row.get('source_status')!='healthy' or any(not t or not timedelta(0)<=now-t<=ttl for t in (seen_at,success)):
             problems.append('来源或采集快照已失效');current_problems.append('来源或采集快照已失效')
@@ -225,12 +272,23 @@ def comparison_index(rows, now=None):
         conditions+=tuple(sorted(restrictive))
         identity_label=('原文明示规格的同标题候选（非商家SKU核验）'
                         if key.startswith('title-candidate:') else identity['label'])
+        comparison_measure=measure*quantity if measure is not None and quantity else None
+        normalized_unit=(Fraction(total,1)/Fraction(comparison_measure)
+                         if rule['unit_mode']!='exact_spec' and total is not None and comparison_measure else None)
+        normalized_variant=variant if rule['unit_mode']!='exact_spec' else selected_spec_key
+        compare_quantity=quantity if rule['unit_mode']=='exact_spec' else None
         item=dict(identity_label=identity_label,merchant_key=identity['key'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
                   total_cents=total,quantity=quantity,unit=Fraction(total,quantity) if total is not None and quantity else None,
+                  normalized_unit_price=normalized_unit, normalized_base_unit=('g' if rule['unit_mode']=='mass' else 'ml' if rule['unit_mode']=='volume' else rule['count_unit'] if rule['unit_mode']=='count' else None),
                   unit_cents=round(Fraction(total,quantity)) if total is not None and quantity else None,
                   published_at=row.get('published_at'),conditions='；'.join(conditions) or '原文未注明资格限制（不代表人人适用）',
-                  partition=(key,selected_spec_key,conditions,quantity),problems=list(dict.fromkeys(problems)),
-                  source_current=not current_problems,shipping_cents=brief['audit']['plan']['shipping_cents'])
+                  partition=(key,normalized_variant,conditions,compare_quantity,
+                             row.get('resolved_category_name') or row.get('topic') or 'other',rule['unit_mode']),
+                  problems=list(dict.fromkeys(problems)), source_current=not current_problems,
+                  shipping_cents=brief['audit']['plan']['shipping_cents'], policy=policy,
+                  policy_scope=policy_scope, resolved_category_name=row.get('resolved_category_name'),
+                  unit_mode=rule['unit_mode'],
+                  policy_error=policy_error)
         groups[key].append(item)
     result={}
     for oid,key in by_id.items():
@@ -259,22 +317,34 @@ def comparison_index(rows, now=None):
         merchant_platforms={key.split(':',1)[0] for key in merchant_keys}
         has_unidentified=any(not i['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) for i in items)
         same_merchant_listing=bool(merchant_keys) and (len(merchant_keys)==1 or len(merchant_platforms)==1 or has_unidentified)
-        best=(min(peers,key=lambda i:(i['total_cents'],-i['id']))
-              if len(peers)>=2 and not same_merchant_listing else None)
-        saving=(target['total_cents']-best['total_cents']) if best and not target['problems'] else 0
+        required_offers=target['policy']['minimum_comparable_offers']
+        metric=lambda i:i['normalized_unit_price'] if i['normalized_unit_price'] is not None else i['total_cents']
+        best=(min(peers,key=lambda i:(metric(i),-i['id']))
+              if len(peers)>=required_offers and not same_merchant_listing else None)
+        difference=metric(target)-metric(best) if best and not target['problems'] else Fraction(0)
+        saving=round(difference)
         if best and not target['problems']:
             candidate_note=('按完全一致标题、原文明示报价规格、数量与资格形成候选，商家SKU未核验；'
                             if key.startswith('title-candidate:') else '')
-            peer_prices=[item['total_cents'] for item in peers]
+            peer_prices=[metric(item) for item in peers]
+            basis=(f"每{target['normalized_base_unit']}" if target['normalized_base_unit'] else '整单')
             if min(peer_prices)==max(peer_prices):
-                message=candidate_note+'采集原文声称价相同，尚未发现更低来源声称价；这不是商家核价或捡漏结论'
-            elif saving == 0:
-                gap=max(peer_prices)-target['total_cents']
-                pct=round(gap*10000/target['total_cents'])/100 if target['total_cents'] else 0
-                message=candidate_note+f'本来源声称价为候选中最低；较高来源声称价高{gap/100:.2f}元（约{pct:.2f}%），未核实商家实际价，不代表省钱或捡漏'
+                message=(candidate_note+'采集原文声称价相同，尚未发现更低来源声称价；这不是商家核价或捡漏结论'
+                         if target['normalized_unit_price'] is None else
+                         candidate_note+f'按{basis}归一后采集原文声称价相同，尚未发现更低价；这不是商家核价或捡漏结论')
+            elif difference <= 0:
+                gap=max(peer_prices)-metric(target)
+                pct=round(gap*10000/metric(target))/100 if metric(target) else 0
+                gap_yuan=f'{float(gap)/100:.4f}' if target['normalized_unit_price'] is not None else f'{float(gap)/100:.2f}'
+                message=(candidate_note+f'本来源声称价为候选中最低；较高来源声称价高{gap_yuan}元（约{pct:.2f}%），未核实商家实际价，不代表省钱或捡漏'
+                         if target['normalized_unit_price'] is None else
+                         candidate_note+f'本来源按{basis}归一后最低；高{gap_yuan}元（约{pct:.2f}%），是原文声称价，不代表实际省钱或捡漏')
             else:
-                pct=round(saving*10000/best['total_cents'])/100 if best['total_cents'] else 0
-                message=candidate_note+f'采集原文声称价相差{saving/100:.2f}元（约{pct:.2f}%）；未核实商家实际价，不代表省钱或捡漏'
+                pct=round(difference*10000/metric(best))/100 if metric(best) else 0
+                gap_yuan=f'{float(difference)/100:.4f}' if target['normalized_unit_price'] is not None else f'{float(difference)/100:.2f}'
+                message=(candidate_note+f'采集原文声称价相差{gap_yuan}元（约{pct:.2f}%）；未核实商家实际价，不代表省钱或捡漏'
+                         if target['normalized_unit_price'] is None else
+                         candidate_note+f'按{basis}归一后来源声称价相差{gap_yuan}元（约{pct:.2f}%）；未核实商家价，不代表省钱或捡漏')
         elif same_merchant_listing:
             if len(merchant_keys)==1:
                 message='多个采集线索指向同一商家商品ID，是同一商品页的价格声称，不是多个购买方案；缺独立基准，不能判断省钱或捡漏'
@@ -293,6 +363,11 @@ def comparison_index(rows, now=None):
             quantity_items=list(unique_listings.values())
         result[oid]=dict(identity_label=target['identity_label'],quantity_options=quantity_options(quantity_items,target),items=ordered,
                         peers=len(peers) if not same_merchant_listing else min(len(peers),1),
+                        required_comparable_offers=required_offers, policy=target['policy'],
+                        unit_mode=target['unit_mode'], normalized_base_unit=target['normalized_base_unit'],
+                        policy_scope=target['policy_scope'], resolved_category_name=target['resolved_category_name'],
+                        policy_error=target['policy_error'], comparison_basis='source_claim',
+                        saving_unit=target['normalized_base_unit'] or 'order_total',
                         best_id=best['id'] if best else None, saving_cents=saving,
                         message=message)
     return result

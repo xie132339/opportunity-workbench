@@ -50,6 +50,42 @@ class ReviewRulesTests(unittest.TestCase):
             self.assertEqual(ar.classify(row,self.now)['state'],'stale')
         self.assertEqual(ar.classify(dict(self.row,published_at=None),self.now)['state'],'missing_time')
 
+    def test_fresh_merchant_catalog_price_uses_observation_time_not_post_time(self):
+        row=dict(self.row,title='米家冰箱 对开636L 1899元',
+                 url='https://www.mi.com/shop/buy?product_id=22504',
+                 source_parser='mi',published_at=None,
+                 last_seen_at=ar.stamp(self.now),last_success=ar.stamp(self.now),
+                 enabled=1,source_status='healthy',interval_minutes=60)
+        result=ar.classify(row,self.now)
+        self.assertEqual((result['state'],result['advertised_cents']),('observed',189900))
+        self.assertIn('目录单一公开标价',result['reason'])
+        self.assertIn('不代表详情页',result['reason'])
+
+    def test_catalog_starting_and_estimated_prices_are_not_exact_quotes(self):
+        common=dict(self.row,source_parser='mi',published_at=None,
+                    last_seen_at=ar.stamp(self.now),last_success=ar.stamp(self.now),
+                    enabled=1,source_status='healthy',interval_minutes=60)
+        starting=ar.classify(dict(common,title='笔记本 3799元起'),self.now)
+        self.assertEqual(starting['state'],'missing_price')
+        self.assertIsNone(starting['advertised_cents'])
+        estimate=ar.classify(dict(common,title='手环 预估到手价 ¥229'),self.now)
+        self.assertEqual(estimate['state'],'conditional')
+        self.assertIsNone(estimate['advertised_cents'])
+        estimate_with_detail=ar.classify(dict(common,title='手环 预估到手价 ¥229',
+            detail_json=json.dumps({'title':'荣耀手环','advertised_cents':22900,'conditions':'当前展示'})),self.now)
+        self.assertEqual(estimate_with_detail['state'],'conditional')
+        self.assertIsNone(estimate_with_detail['advertised_cents'])
+
+    def test_stale_catalog_observation_is_not_current_even_without_post_time(self):
+        row=dict(self.row,title='米家冰箱 对开636L 1899元',
+                 url='https://www.mi.com/shop/buy?product_id=22504',
+                 source_parser='mi',published_at=None,
+                 last_seen_at=ar.stamp(self.now-timedelta(hours=3)),
+                 last_success=ar.stamp(self.now-timedelta(hours=3)),
+                 enabled=1,source_status='healthy',interval_minutes=60)
+        result=ar.classify(row,self.now)
+        self.assertEqual(result['state'],'source_unavailable')
+
     def test_failed_source_degrades(self):
         self.assertEqual(ar.classify(dict(self.row,source_status='failed'),self.now)['state'],'source_unavailable')
 

@@ -1,0 +1,177 @@
+{% extends 'base.html' %}
+{% block title %}价格基准管理 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>价格基准管理</h1>
+<p>先用已经启用的公开采集渠道沉淀可追溯的来源报价，不需要申请商业 API。来源自述价格只构成历史线索，不等于商家当前可买价、账号到手价或已核实捡漏。</p>
+
+<section class="card">
+  <h2>现有公开报价证据</h2>
+  <div class="metric-grid">
+    <div><strong>{{ evidence.enabled_sources }}</strong><span>启用渠道</span><small>{{ evidence.healthy_enabled_sources }} 个当前健康</small></div>
+    <div><strong>{{ evidence.claim_rows }}</strong><span>带明确金额与原文时间的历史线索</span><small>可能跨渠道重复，不代表独立卖家数</small></div>
+    <div><strong>{{ evidence.observed_rows }}</strong><span>当前无条件歧义的公开报价解析</span><small>仍是来源报价，不是商家核价</small></div>
+    <div><strong>{{ evidence.conditional_rows }}</strong><span>带优惠或资格条件的报价</span><small>条件尚不能直接视为人人可用</small></div>
+    <div><strong>{{ evidence.future_excluded_rows }}</strong><span>未来原文时间已排除</span><small>不计入历史价格线索</small></div>
+    <div><strong>{{ evidence.latest_enabled_success|cn_time }}</strong><span>最近启用渠道采集成功</span><small>显示最后一次成功时间</small></div>
+  </div>
+  <p class="muted">这些记录来自现有采集入口与自动原文解析。页面按原文发布时间统计覆盖；同一商品跨来源转载尚不能证明来源相互独立，也不把抓取时间伪装成原文时间。</p>
+</section>
+
+<section class="card">
+  <h2>历史线索覆盖</h2>
+  <p class="muted">当前覆盖 {{ evidence.platform_count }} 个采集平台、{{ evidence.published_day_count }} 个有报价线索的原文日期。主题由商品标题自动归类，只用于盘点采集覆盖，不代表同款商品类别。</p>
+  {% if evidence.topics %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>线索主题</th><th>历史金额线索</th><th>当前明确报价</th><th>带条件报价</th><th>已过期线索</th><th>采集平台</th><th>原文日期</th></tr></thead>
+    <tbody>{% for row in evidence.topics %}<tr>
+      <td>{{ row.label }}</td><td>{{ row.claim_rows }}</td><td>{{ row.observed }}</td>
+      <td>{{ row.conditional }}</td><td>{{ row.stale }}</td>
+      <td>{{ row.platform_count }}</td><td>{{ row.published_day_count }}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}
+  <p><strong>暂时没有带明确金额和原文发布时间的历史线索。</strong></p>
+  {% endif %}
+  <details open>
+    <summary>全部来源平台覆盖（包括目前没有有效报价的平台）</summary>
+    <p class="muted">按已配置来源平台列出渠道数与报价产出；零报价表示当前窗口未获得符合条件的金额与原文时间，不代表该平台没有优惠。</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>来源平台</th><th>已配置渠道</th><th>启用/健康</th><th>金额历史线索</th><th>明确价</th><th>带条件</th><th>过期</th><th>原文日期</th></tr></thead>
+      <tbody>{% for row in evidence.platforms %}<tr>
+        <td>{{ row.platform }}</td><td>{{ row.configured_sources }}</td>
+        <td>{{ row.enabled_sources }}/{{ row.healthy_sources }}</td><td>{{ row.claim_rows }}</td>
+        <td>{{ row.observed }}</td><td>{{ row.conditional }}</td><td>{{ row.stale }}</td><td>{{ row.published_day_count }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  <p><strong>本次不生成高、中、低价格带。</strong> 当前外部行情记录 {{ evidence.external_quote_rows }} 条。要计算同款历史价，还必须有稳定商品身份、规格、同一计价单位和不同日期的原文报价；数据不够时应保持“参考不足”。</p>
+  <p><a href="{{ url_for('sources') }}">查看与管理全部采集渠道 →</a></p>
+</section>
+
+<section class="card">
+  <h2>采集入口、原文页面与重复线索</h2>
+  <p class="muted">同一只读快照：{{ provenance.as_of }} UTC。渠道名表示工作台从哪里采集；记录链接是入口提供的原文/条目页；正文中的跳转链接只是候选商品地址。它们是不同层级，不能互相替代。</p>
+  <div class="metric-grid">
+    <div><strong>{{ provenance.published_event_rows }}</strong><span>有发布时间的原始事件</span><small>历史事件原样保留</small></div>
+    <div><strong>{{ provenance.cross_collector_text_groups }} / {{ provenance.cross_collector_text_rows }}</strong><span>跨采集入口的同文候选组 / 记录</span><small>按规范化标题与正文完全相同统计</small></div>
+    <div><strong>{{ provenance.cross_platform_label_groups }} / {{ provenance.cross_platform_label_rows }}</strong><span>平台标签不同的同文候选组 / 记录</span><small>平台名称不同不等于发布方独立</small></div>
+    <div><strong>{{ provenance.eligible_claim_rows }}</strong><span>有金额、原文时间的报价线索</span><small>{{ provenance.eligible_overlap_groups }} 组 / {{ provenance.eligible_overlap_rows }} 条跨入口同文候选；其中 {{ provenance.eligible_overlap_same_host_groups }} 组的原文条目域名相同</small></div>
+  </div>
+  <p class="muted">“疑似同文”只按标题和正文完全一致生成候选，不证明转载，也不证明同一商品、同一商家或独立报价。采集时间只说明工作台何时首次/最近见到该记录，不会被当作价格观察历史。</p>
+
+  <details>
+    <summary>查看有报价的同文候选及逐条来源证据（{{ provenance.overlap_groups|length }} 组）</summary>
+    {% if provenance.content_host_coverage %}
+    <p>报价记录所带原文条目域名覆盖（不是独立商家数）：
+      {% for row in provenance.content_host_coverage %}<strong>{{ row.host }}</strong> {{ row.claim_rows }} 条{% if not loop.last %}；{% endif %}{% endfor %}
+    </p>
+    {% endif %}
+    {% if provenance.overlap_groups %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>标题与正文候选</th><th>重复记录</th><th>采集入口</th><th>原文条目域名</th><th>审计</th></tr></thead>
+      <tbody>{% for group in provenance.overlap_groups %}<tr>
+        <td><strong>{{ group.title }}</strong><details><summary>查看逐条链路</summary>
+          <div class="table-wrap"><table>
+            <thead><tr><th>事件 / 采集入口</th><th>入口路由</th><th>原文条目页</th><th>正文跳转候选</th><th>原文时间 / 首次与最近采集</th><th>解析结果与依据</th></tr></thead>
+            <tbody>{% for item in group.records %}<tr>
+              <td>#{{ item.event_id }}<br>{{ item.collector }}<br><small>{{ item.method }} · source_id={{ item.source_id }}</small></td>
+              <td><small>{{ item.collector_url }}</small></td>
+              <td>{% if item.content_url %}<a href="{{ item.content_url }}" target="_blank" rel="noopener noreferrer">{{ item.content_host }} 原文 ↗</a>{% else %}未提取安全 HTTPS 原文链接{% endif %}</td>
+              <td>{% if item.outbound_links %}{% for link in item.outbound_links %}<a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.host }} ↗</a>{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}未提取跳转链接{% endif %}<br><small>未验证是否为商品页</small></td>
+              <td>原文：{{ item.published_at|cn_time }}<br><small>首次采集：{{ item.first_seen_at|cn_time }}<br>最近见到：{{ item.last_seen_at|cn_time }}</small></td>
+              <td>{{ item.state }} · {{ item.price }}<br><small>规格：{{ item.specification }}<br>条件：{{ item.conditions }}<br>自动核验引用文本：{{ item.parse_evidence }}<br>现有记录未保留规则 ID、版本或命中位置</small></td>
+            </tr>{% endfor %}</tbody>
+          </table></div>
+        </details></td>
+        <td>{{ group.record_count }}</td>
+        <td>{{ group.collectors|join('；') }}</td>
+        <td>{{ group.content_hosts|join('；') }}</td>
+        <td><small>{{ group.label }}</small></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p>当前快照没有跨采集入口的同文报价候选。</p>{% endif %}
+  </details>
+</section>
+
+<section class="card">
+  <h2>价格参考怎样逐步形成</h2>
+  <ol>
+    <li>保留每条渠道原文、原文发布时间、链接、规格、来源声称金额与优惠条件；已采集的事件快照继续作为历史线索，不覆盖成当前价。</li>
+    <li>先按明确商城商品 ID 匹配同款；缺 ID 时只把完全相同商品名和已核规格作为候选，不能把整个“家居日用”混为同一商品。</li>
+    <li>同款、计价单位和优惠资格一致后，才展示来源自述的历史分布；独立商家页面价格、来源线索价、条件报价分开统计。</li>
+    <li>只有当前来源仍新鲜且优惠条件可复算的报价，才可进入当前低价候选；历史分布只能提供参照，不能代替库存、账号资格、运费或最终结算核实。</li>
+  </ol>
+  <p>这里不记录个人买卖或交易；价格数据来自平台能读取的公开来源。公开来源不足时，页面会明确显示缺口，而不会用 AI 补造价格。</p>
+</section>
+
+<section class="card">
+  <h2>按大类管理比较与行情规则</h2>
+  <p class="muted">所有大类共用同一套比较引擎，时效上限与最低候选数由配置驱动。最低候选数只影响来源声称价排序，绝不证明同款市场价或捡漏。独立行情基准计算器尚未接入，因此这里不提供会被保存但不生效的降幅参数。</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>商品大类</th><th>来源时效上限</th><th>最低可比候选数</th><th>基准判断</th><th>配置版本</th><th>操作</th></tr></thead>
+    <tbody>{% for row in topic_rules %}<tr>
+      <td><strong>{{ row.label }}</strong>{% if row.policy_error %}<br><small class="error">配置异常：{{ row.policy_error }}（执行时按保守默认规则处理）</small>{% endif %}</td>
+      <td>{{ row.policy.max_source_age_minutes }} 分钟</td>
+      <td>{{ row.policy.minimum_comparable_offers }} 条</td>
+      <td>计算器未接入；不可判捡漏</td>
+      <td>v{{ row.version }} · {{ row.updated_at|cn_time }}</td>
+      <td><details><summary>编辑规则</summary><form method="post" action="{{ url_for('save_topic_rule',topic_key=row.topic_key) }}" class="form-grid">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label>来源时效上限（分钟）<input type="number" name="max_source_age_minutes" min="1" max="120" value="{{ row.policy.max_source_age_minutes }}" required></label>
+        <label>最低同口径候选数（含当前方案）<input type="number" name="minimum_comparable_offers" min="2" max="20" value="{{ row.policy.minimum_comparable_offers }}" required></label>
+        <div><button>保存本大类规则</button></div>
+      </form></details></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="muted">公开行情样本当前为 0，因此暂不提供表面可配、实际不参与计算的阈值。后续只有在可信行情记录和基准计算真实接通后，才开放可调的窗口、独立来源数与低于基准比例。</p>
+</section>
+
+<section class="card">
+  <h2>品类识别与口径说明</h2>
+  <p class="muted">关键词归类、所属大类、身份模式和单位归一已接入通用比较引擎。自由填写的说明仅供人阅读；机器只执行下方受控配置。单位不能从“该价格商品规格”中无歧义提取时，该条报价会被拦截，不猜规格。来源价依旧只是原文声称价。</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>品类/所属大类</th><th>自动归类关键词</th><th>说明口径</th><th>机器身份/计价规则</th><th>标题命中机会数</th><th>操作</th></tr></thead>
+    <tbody>{% for row in categories %}<tr>
+      <td><strong>{{ row.name }}</strong><br><small>{{ topic_labels.get(row.topic_key,row.topic_key) }}</small>{% if row.parent_name %}<br><small>上级：{{ row.parent_name }}</small>{% endif %}</td>
+      <td>{{ row.match_terms|join('、') if row.match_terms else '未配置；使用大类规则' }}</td>
+      <td>{{ row.pricing_unit }}<br><small>{{ row.identity_rule }}</small></td>
+      <td>{{ '仅商家商品ID' if row.comparison_rule.identity_mode=='merchant_id_only' else '商家ID或严格标题候选' }}<br>
+        <small>{{ {'exact_spec':'规格须完全一致','mass':'统一换算为克','volume':'统一换算为毫升','count':'按'+row.comparison_rule.count_unit+'计数'}[row.comparison_rule.unit_mode] }}</small>
+        {% if row.comparison_rule_error %}<br><small class="error">规则异常：{{ row.comparison_rule_error }}</small>{% endif %}</td>
+      <td>{{ row.matched_opportunity_count }}</td>
+      <td><details><summary>编辑</summary><form method="post" action="{{ url_for('save_benchmark_category') }}" class="stack">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="category_id" value="{{ row.id }}">
+        <label>上级<select name="parent_id"><option value="">无</option>{% for parent in categories if parent.id != row.id %}<option value="{{ parent.id }}" {% if row.parent_id == parent.id %}selected{% endif %}>{{ parent.name }}</option>{% endfor %}</select></label>
+        <label>所属大类<select name="topic_key">{% for key,label in topic_labels.items() %}<option value="{{ key }}" {% if row.topic_key==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>名称<input name="name" maxlength="80" value="{{ row.name }}" required></label>
+        <label>自动归类关键词（逗号分隔；最长匹配优先）<textarea name="match_terms" maxlength="2000">{{ row.match_terms|join('，') }}</textarea></label>
+        <label>计价口径说明<input name="pricing_unit" maxlength="240" value="{{ row.pricing_unit }}" required></label>
+        <label>同款规则说明（供人阅读）<textarea name="identity_rule" maxlength="500" required>{{ row.identity_rule }}</textarea></label>
+        <label>商品身份模式<select name="identity_mode"><option value="merchant_or_exact_title" {% if row.comparison_rule.identity_mode=='merchant_or_exact_title' %}selected{% endif %}>商家商品ID或严格标题候选</option><option value="merchant_id_only" {% if row.comparison_rule.identity_mode=='merchant_id_only' %}selected{% endif %}>只允许商家商品ID</option></select></label>
+        <label>可执行计价模式<select name="unit_mode"><option value="exact_spec" {% if row.comparison_rule.unit_mode=='exact_spec' %}selected{% endif %}>规格完全一致，按件比较</option><option value="mass" {% if row.comparison_rule.unit_mode=='mass' %}selected{% endif %}>按质量归一（克/千克/斤）</option><option value="volume" {% if row.comparison_rule.unit_mode=='volume' %}selected{% endif %}>按容量归一（毫升/升）</option><option value="count" {% if row.comparison_rule.unit_mode=='count' %}selected{% endif %}>按同一种明确计数单位归一</option></select></label>
+        <label>计数单位（仅选择计数模式时使用）<select name="count_unit"><option value="">不使用</option>{% for unit in ['抽','卷','片','个','件','包','瓶','盒','袋','张','支','罐','提','箱'] %}<option value="{{ unit }}" {% if row.comparison_rule.count_unit==unit %}selected{% endif %}>{{ unit }}</option>{% endfor %}</select></label>
+        <label>本品类来源时效上限（分钟）<input type="number" name="max_source_age_minutes" min="1" max="120" value="{{ row.policy.max_source_age_minutes }}" required></label>
+        <label>最低同口径候选数<input type="number" name="minimum_comparable_offers" min="2" max="20" value="{{ row.policy.minimum_comparable_offers }}" required></label>
+        <button>保存品类与判断规则</button>
+      </form></details></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <details><summary>新增或调整品类口径</summary>
+    <form method="post" action="{{ url_for('save_benchmark_category') }}" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>上级品类（留空表示大类）<select name="parent_id"><option value="">无</option>{% for row in categories %}<option value="{{ row.id }}">{{ row.name }}</option>{% endfor %}</select></label>
+      <label>所属大类<select name="topic_key">{% for key,label in topic_labels.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+      <label>品类名称<input name="name" maxlength="80" required></label>
+      <label>自动归类关键词（逗号分隔；最长匹配优先）<textarea name="match_terms" maxlength="2000" placeholder="例如：厨房纸，擦手纸，纸巾"></textarea></label>
+      <label>计价口径说明<input name="pricing_unit" maxlength="240" placeholder="例如：元/100抽；明确抽数才换算" required></label>
+      <label>同款规则说明（供人阅读）<textarea name="identity_rule" maxlength="500" required placeholder="填写商品身份判断说明"></textarea></label>
+      <label>商品身份模式<select name="identity_mode"><option value="merchant_or_exact_title">商家商品ID或严格标题候选</option><option value="merchant_id_only">只允许商家商品ID</option></select></label>
+      <label>可执行计价模式<select name="unit_mode"><option value="exact_spec">规格完全一致，按件比较</option><option value="mass">按质量归一（克/千克/斤）</option><option value="volume">按容量归一（毫升/升）</option><option value="count">按同一种明确计数单位归一</option></select></label>
+      <label>计数单位（仅选择计数模式时使用）<select name="count_unit"><option value="">不使用</option>{% for unit in ['抽','卷','片','个','件','包','瓶','盒','袋','张','支','罐','提','箱'] %}<option value="{{ unit }}">{{ unit }}</option>{% endfor %}</select></label>
+      <label>来源时效上限（分钟）<input type="number" name="max_source_age_minutes" min="1" max="120" value="120" required></label>
+      <label>最低同口径候选数<input type="number" name="minimum_comparable_offers" min="2" max="20" value="2" required></label>
+      <div><button>保存品类口径</button></div>
+    </form>
+  </details>
+</section>
+{% endblock %}

@@ -1,5 +1,9 @@
 # 环境操作记录
 
+## 2026-10-05 当前范围补充：D38 移除个人交易台账
+
+工作台现在以公开来源、优惠条件、价格比较和利润估算为核心，不记录用户本人买入、持有库存、出售、退款或实际收益。D38移除交易导航、个人详情记录表单、个人买入核验写入路由、交易新增/结算路由和交易页。`quotes` 中的外部挂牌、外部成交和回收报价仍用于价格证据；旧 `historical_buy` 行及 `trades`、`buy_checks` 表保留，不删除，页面不读取/展示，新增代码不再写入。实际利润由用户在平台外核算；平台内只报告来源支撑的估算和缺项。验证结果：隔离SQLite回归确认个人交易 URL 404、外部行情页/detail仍可用、历史个人行未删除且隐藏；全量201项测试通过；5002源码服务重启，Chrome价格基准页刷新后交易导航消失。真实获利能力仍未验收。
+
 ## 2026-10-03 渠道管理双视图与批量操作
 
 - 在非保护分支 feature/bootstrap 将 21 个渠道统一为一份可切换的列表／卡片视图。浏览器 localStorage 保存上次模式，首次访问默认列表；新增来源表单折叠展示。两种模式共享勾选、单条检查与频率操作。
@@ -607,3 +611,71 @@ git diff --check
 改动将 `scan_all()` 整批的复核合并为一次，直接调用 `scan_source()` 时仍复核；移除 `app.py` 在命令分发前的无条件 `review_all()`。全量179项回归覆盖单源不变、批扫一次、serve启动不复核；代码编译与diff检查通过。正式库未触发 `review_all()`。
 
 服务以 `.venv/bin/python app.py serve` 在提升后的本地进程权限下启动，使用既有 `initialize()` 的幂等 schema/seed 检查；本轮没有运行worker、扫描商城、派发消息或重新核验旧快照。`lsof` 证实监听 `127.0.0.1:5002`；真实浏览器请求 `/?q=得宝&layout=list` 成功并显示#10198完整的“5片 × 54小包”、不同来源结果及来源链接，证明前台加载本轮代码。
+## 2026-10-05 D36：商城目录时间口径与页面标签
+
+- 开发环境：仓库 `.venv`，分支 `feature/bootstrap`；测试命令 `.venv/bin/python -m unittest discover -s tests`，模块编译 `PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -m py_compile ...`，差异检查 `git diff --check`。
+- 正式库只读检查：SQLite `mode=ro`/query-only；把当时的新鲜直接商城目录线索交给新分类器做反事实，不调用 `review_all()` 写正式库。243条记录分为唯一公开金额35、条件价8、没有唯一金额200。
+- 集成页面验收：用 SQLite backup 复制正式库到 `/private/tmp/workbench-snapshot-2.sqlite3`，只在副本执行 `autoreview.review_all()`；Flask test client 按品牌来源筛选荣耀和小米及读取渠道页，HTTP 200，商品行显示“目录采集”和“商城目录公开标价”。真实浏览器再筛选荣耀商城 HTTP 200、显示11条新鲜行；3条被只读重算为公开目录观察价、8条为条件预估价，仍有0条进入 `ready`。正式 `data/workbench.sqlite3` 未重核、未写入或删行；`quotes=0`。
+- 旧 `missing_time` 状态在 current 搜索请求中只读复算展示，GET 后不写自动核验表。网页服务从 feature/bootstrap 当前源码重启；worker未动。全量196项 unittest、相关模块编译、`git diff --check`均通过；正式库状态快照仍待新版自动核验周期更新。该价格仍不是最终结算价或已证实低价。
+
+### D36 渠道页共享分类器复验
+
+真实浏览器访问 `/sources?verify=d36`，来源页已按与搜索页共享的目录分类器展示新鲜目录数、唯一公开金额、条件价/缺价与待持久化核验数。正式库只读计数：Apple 3/0/3、小米80/4/76、孔夫子54/0/54、苏宁42/0/42、联想53/28/25、荣耀11/3/8（新鲜/唯一金额/条件或缺价）。Apple、小米、联想、荣耀显示待自动核验行数分别3、80、53、11。该统计按请求只读复算，不改 `auto_reviews`；因此旧记录需后续常规自动复核周期写入，当前界面结果不代表持久化状态。
+
+## 2026-10-05 D37：价格基准管理页
+
+新增 `/price-benchmarks`，从全局导航进入。新增表只存品类价格归一/商品身份规则和外部行情提供方目录，不改商品、线索或核验记录。品类支持新增、编辑及层级；候选提供方支持关注清单管理。所有来源初始化为未接入、可信样本数0，价格带提示尚无可信样本。来源管理把官方API范围、所需授权和 GitHub 项目实现参考区分呈现；现有 `/market` 仍是行情记录，不是外部行情同步器。买卖成交录入不属于本页和本轮价格基准验收范围。
+
+来源调研：见 `docs/price-benchmark-research.md`。GitHub CLI 访问 api.github.com 失败，因此核验 GitHub 官方项目页及官方提供方文档。重要候选为什么值得买历史价 API（AppKey/OAuth）、慢慢买（需联系合作确认接口）、淘宝联盟（推广商品范围）、京东 IOP（授权客户池）、抖音生活服务（授权商户）、CNEPTP（企业采购参考）。开源项目只借鉴存储/比较流程，不提供中国商品行情。
+
+验证：新隔离库管理页用例4项通过；全量200项 unittest 通过；`py_compile`（缓存输出至 `/private/tmp/opportunity-pycache`）及 `git diff --check` 通过。只对正式库新增 `benchmark_categories` 与 `benchmark_providers` 并插入9个品类/8个候选目录，没有调用通用 `initialize()`，也没有启动 worker；页面 GET 实际返回 HTTP 200。正式库读取计数显示来源43、报价0、交易0；events/opportunities 在操作时从12,104增加到12,131，增量归属未证，本次没有启动采集worker且迁移脚本只对两张基准配置表执行写入。真实 Chrome 页面已显示“价格基准”、9个品类、8个提供方、0条行情和“尚无可信样本，暂不计算”。价格带与是否捡漏仍为 PARTIAL，尚无外部 API 凭据、授权响应或可信样本；不会把目录/线报称为市场价格。
+
+
+## 2026-10-05 D39：无 API 价格线索覆盖
+
+- 价格基准页改用已有公开渠道与事件快照作为“来源自述价线索”盘点，不再将商业 API 申请作为页面主路径；保留品类单位/同款规则管理。
+- 新增 `services/price_benchmark_evidence.py` 只读汇总：金额明确、原文发布时间存在、当前解析状态为 observed/conditional/stale；冲突、排除及无原文时间记录不入历史覆盖统计。按 topic、状态、source platform 与 `published_at` 自然日计数。
+- 正式库只读 SQL `mode=ro`/`PRAGMA query_only=ON`：43个来源、34个启用且健康；当时历史金额线索 6,875 条（stale 6,740、conditional 90、observed 45），外部行情表 `quotes=0`。实际 Chrome 页面刷新时后台仍在变动，页面显示 6,883 条（明确42、条件89）、覆盖6个平台/14个原文日期。此差异说明计数随后台核验变化；数值是自述线索，不是独立卖家或核实交易。
+- 验证命令：`.venv/bin/python -m unittest tests.test_price_benchmarks -v`（5/5）；`.venv/bin/python -m unittest discover -s tests`（202/202）；`PYTHONPYCACHEPREFIX=/private/tmp/workbench-pycache .venv/bin/python -m py_compile routes/price_benchmarks.py services/price_benchmark_evidence.py tests/test_price_benchmarks.py`；`git diff --check`。Chrome 实际刷新 `/price-benchmarks`，看到无 API 说明、计数卡、按主题覆盖表及“本次不生成高、中、低价格带”。
+- 本轮未调用 `initialize()`、未运行 worker、未新增或修改正式库数据；为让页面加载新模板，仅重启 127.0.0.1:5002 源码服务。没有生成基准分位、当前市场最低或捡漏结论。
+
+
+## 2026-10-05 D40：手动全渠道刷新与价格覆盖快照
+
+- 分支：`feature/bootstrap`。在现有源码调用 `scanner.scan_all()`；34个启用来源逐一刷新，回执 34/34 healthy、新事件63、失败0。扫描后自动规则审查由 `scan_all()` 触发。并发后台 worker 继续更新事件，正式库总行数变化不单独归因。
+- `autoreview.run_cycle()` 手动触发时遇现有10分钟租约，返回 `busy`；未与后台详情审查抢锁。随后只读检查确认worker的一轮审查从13:43:51运行到13:44:18，处理统计 reviewed=12,885、probed=6；probe是队列数，不等于6次详情读取都成功。
+- 发现并处理统计错误边界：6条带金额且原文时间晚于当前时钟的样本（小米众筹，3 stale/3 excluded）不得进入历史价格统计。只改汇总筛选，不改/删原始事件。页面额外给出未来时间排除数；按 `sources.platform` 列出全部24个已配置平台（包含0报价者），同时增加最近启用渠道成功时间。路由对品类/来源/价格指标使用同一显式只读事务快照。
+- 最新 HTTP 页面快照（21:45北京时间）：启用来源34、健康34；金额+原文日期线索7,037、无条件歧义解析54、条件解析141、未来排除0、有效报价来源平台6、原文日期14、`quotes=0`。数据持续变动，页面响应与之后另一次 query-only 快照曾有13条/1条的滚动差，不将不同请求混成同一快照。线索高度集中在线报酷、逛丢、GUANGDIU；其余配置平台明确显示零合格金额样本。
+- 验证：`unittest tests.test_price_benchmarks` 5/5，全量202/202；模块编译、`git diff --check`；源码网页服务重启，`GET /price-benchmarks` HTTP 200，检查页面含全平台表、来源时间和未来记录排除说明。
+- 结论：当前足够检查入口运行和线索覆盖，不足以证明全渠道行情覆盖或可靠捡漏；独立商家行情为0，历史线索多数过期，项目核心仍 PARTIAL。未下单、未购券、未发站外消息、未启动新常驻 worker。
+
+
+## 2026-10-05 D41：配置驱动的大类/品类规则
+
+- 开发分支：`feature/bootstrap`。大类规则按 `topic_key` 配置；叶子品类由页面维护关键词、所属大类、单位口径说明、身份规则说明和比较参数。产品标题经 Unicode 归一化后按同大类最长唯一词匹配。若同等具体度命中多个品类，回退大类规则，不按数据库主键随意选择。配置保存后版本递增并写审计。
+- 目前真正影响 `comparison` 的只有来源时效上限（可收紧来源 TTL）和最低同口径“来源声称价”候选数。比较结果保留 `comparison_basis=source_claim`，并带上采用大类或叶子品类规则的信息。纸/食品/数码用同一比较函数；类别词和参数取数据库配置，不在比较逻辑里写 `if category == ...`。
+- 明确未实现：`pricing_unit` 和 `identity_rule` 仍为说明文字，不参与同款机器准入；跨平台商品ID仍按现有域名适配；来源转载独立性、结构化跨类别计量/身份属性、商家公开行情快照与参考价计算都尚未接通。为避免误导，页面移除独立来源数/降幅的空转编辑项，服务端也拒绝启用尚无消费者的参考价配置。
+- 正式库只针对 `benchmark_categories` 增加 `topic_key/match_terms_json/policy_json/version`，并新增 category/topic rules 与审计配置表；用 `initialize_benchmark_rules()` 独立执行，未调用会回填 `last_seen_at`、重分类事件或同步优惠的完整 `initialize()`。操作前后事件、机会、自动核验、行情记录行数 `13,328/13,328/13,328/0` 不变；9 个大类规则、9 个品类仍在。
+- 验证：`PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -m unittest discover -s tests`（205/205）；相关模块 `py_compile` 通过；`git diff --check` 通过。源码服务已重启，`GET /price-benchmarks` HTTP 200；Chrome 已打开新版价格基准页，页面显示9个大类及9个品类。
+- 本次页面快照滚动数：启用且健康来源34、金额+原文时间的线索7,280、6个平台有线索、独立 `quotes=0`；页面数字不是同款SKU样本数。配置接线成功不等于已证明任何商品低价。
+- 源码服务启动示例（绕过 `app.py main()` 的完整初始化；配置迁移完成后运行）：
+  ```sh
+  PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -c 'import app; app.app.run(host="127.0.0.1", port=5002, debug=False, use_reloader=False)'
+  ```
+- 定向迁移仅在 `benchmark_categories`/新增规则配置表运行 `db.initialize_benchmark_rules(conn)`，使用 SQLite 事务；不要以 `db.initialize()` 代替这一步，它会执行其他历史兼容回填。
+
+## 2026-10-05 D42：可配置商品身份与单位归一
+
+- 当前分支 `feature/bootstrap`。新增 `services/category_comparison_rules.py`，把类别配置作为确定性规则消费：身份模式可限制为商家商品ID，或保留跨平台严格标题候选；计价模式支持原规格精确、质量归一（g/克、kg/千克、斤）、容量归一（ml/毫升、L/升）和指定计数单位。计数单位从白名单选择，不把“件/包/卷/抽”等语义擅自互换。
+- `comparison_index()` 对归一模式读取来源原文“该价格商品规格”，只接受一个确定的目标计量值和明确包装乘数；需要保留的属性规格（如层数、段数）仍进入严格变体键。标题计量与选中规格不一致、规格含多值/范围或配置损坏都不进入可比集合。跨包装归一后不再把不同包装误列为同款数量方案。未配置品类继续沿用旧的严格原规格比较。
+- `benchmark_categories.comparison_rule_json` 为新增 JSON 配置列。页面可在每个叶子品类配置身份和单位；变更写既有品类配置审计，配置修改可版本化。所有现存品类保持保守默认：商家ID/严格标题候选 + 原规格精确。
+- 正式DB迁移及空规则保守补齐的最终事务前后业务表计数为 events/opportunities/auto_reviews/quotes/categories=`13,646/13,646/13,632/0/9`；新增列并仅补齐空规则默认值，9条均可解码，`PRAGMA quick_check=ok`，事件、机会、核验与报价行未删除。worker运行时各次页面/数据库计数会滚动，不能拿不同时间的快照互相比较。
+- 搜索链路复查发现机会行没有品类规则字段，旧加载器因此静默落回默认值；已接入按标题+大类唯一匹配叶子品类规则。新增端到端隔离数据库回归：数据库配置为质量模式后，搜索结果使用g计价并算出19.90元/400克=每克4.975分。定向31/31、全量212/212，`py_compile`、`git diff --check`通过。源码服务通过 `.venv/bin/python app.py serve` 在5002重启；该入口先运行 `initialize()`，按源码会执行幂等表结构/默认项初始化和若干空字段、来源关联的兼容回填，代码路径无 DELETE，未运行采集 worker。初始化具体命中的存量回填行数未单独计量，所以不能把稍后观察到的业务表计数变化归因到单一事务；迁移自身前后计数只使用同一事务的快照。真实浏览器重新加载价格基准管理页并确认9个大类、品类规则表及模式控件可见。生产库未改变任何类别的计价模式；外部行情`quotes=0`，本阶段不产出市场基准和捡漏结论。
+## 2026-10-06 D43：来源链路与同文候选只读审计
+
+- 页面入口：`/price-benchmarks` 新增“采集入口、原文页面与重复线索”区域。新增 `services/source_provenance.py`，从现有来源/事件/核验字段只读组装采集路由、事件原文URL/域名、正文跳转链接、原文时间、首次/最近见到时间、核验状态/金额/规格/条件和引用文本。
+- 同文口径：标题和正文经 NFKC/空白归一后完全相同，且涉及不同 `source_id`，标记“疑似同文”。不同 `sources.platform` 标签和不同采集路由都不被计为独立卖家。记录详情逐条保留，原始行未归并、改写、删除。
+- 数据保护：本轮无数据库DDL/DML，无 `initialize()`、无 worker。D22商家公开价历史表已撤下，不把相同线报反复采集的 `last_seen_at` 升格成价格样本。`observed_at`是事件首次见到时间；`last_seen_at`仅表明最近一次见到该事件。
+- 正式库只读快照（UTC 2026-10-05 16:14）：events/opportunities/auto_reviews/quotes `13,896/13,896/13,895/0`；带原文时间事件12,006；金额及原文时间线索7,759。跨采集路由相同标题/正文1,074组/2,178条；不同平台标签112组/248条；有价候选103组/229条，103组事件条目域名同为`guangdiu.com`。数据随本机worker滚动，此数字仅代表该只读事务。
+- 验证：`.venv/bin/python -m unittest discover -s tests -p 'test_price_benchmarks.py' -v` 定向10项通过；`.venv/bin/python -m unittest discover -s tests` 全量213项通过；`PYTHONPYCACHEPREFIX=/private/tmp/opportunity-provenance-pycache .venv/bin/python -m py_compile services/source_provenance.py routes/price_benchmarks.py` 通过；`git diff --check -- services/source_provenance.py routes/price_benchmarks.py templates/price_benchmarks.html tests/test_price_benchmarks.py` 通过。用正式库连接执行 `PRAGMA query_only=ON`，Flask test client 渲染页面HTTP 200；Obsidian CLI提示Obsidian未运行，后续笔记按既有路径维护。
+- 未完成：实际Chrome未视觉验收；现有自动核验未保存解析规则ID/版本及字段精确命中范围；外部 `quotes=0`，同文候选不等于转载证明，原文页面及跳转链接也不自动证明商家/SKU/公开价。总目标仍`PARTIAL`。

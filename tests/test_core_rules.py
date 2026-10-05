@@ -108,11 +108,11 @@ class CoreFlowTests(unittest.TestCase):
 
     def test_existing_form_update_changes_candidate_list_and_detail(self):
         self.assertIn('测试纸',self.client.get('/?candidate=1').get_data(as_text=True))
-        self.assertIn('转售测算达标',self.client.get('/opportunities/1').get_data(as_text=True))
+        self.assertIn('预计利润算法',self.client.get('/opportunities/1').get_data(as_text=True))
         response=self.client.post('/strategies/1',data=dict(csrf='test-csrf',name='更新',max_buy='30',min_profit='10.01',enabled='1'))
         self.assertEqual(response.status_code,302)
         self.assertNotIn('测试纸',self.client.get('/?candidate=1').get_data(as_text=True))
-        self.assertIn('未进入转售候选',self.client.get('/opportunities/1').get_data(as_text=True))
+        self.assertIn('预计利润算法',self.client.get('/opportunities/1').get_data(as_text=True))
         with db.connect() as c:
             self.assertEqual(c.execute('SELECT min_profit_cents FROM strategies WHERE id=1').fetchone()[0],1001)
 
@@ -150,6 +150,30 @@ class CoreFlowTests(unittest.TestCase):
         self.assertNotIn('/opportunities/1',ready)
         self.assertIn('商品搜索（仅资料达到准入）',ready)
 
+    def test_current_search_includes_fresh_catalog_price_without_faking_post_time(self):
+        with db.connect() as c:
+            now=c.execute('SELECT CURRENT_TIMESTAMP').fetchone()[0]
+            c.execute("""INSERT INTO sources(id,platform,name,category,url,method,parser,status,enabled,
+                       interval_minutes,last_success) VALUES(2,'小米商城','目录商品','新品与补货',
+                       'https://www.mi.com/shop','html','mi','healthy',1,60,?)""",(now,))
+            event=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,
+                       published_at,last_seen_at) VALUES(2,'mi-1','米家冰箱 对开636L 1899元',
+                       'https://www.mi.com/shop/buy?product_id=22504','','mi-1',NULL,?)""",(now,)).lastrowid
+            opportunity=c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                       VALUES(?,2,'米家冰箱 对开636L 1899元','新品与补货',
+                       'https://www.mi.com/shop/buy?product_id=22504')""",(event,)).lastrowid
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'missing_time','旧规则缺发布时间',189900)",(opportunity,))
+        current=self.client.get('/?view=current').get_data(as_text=True)
+        self.assertIn(f'/opportunities/{opportunity}',current)
+        self.assertIn('目录采集',current)
+        self.assertIn('商城目录公开标价',current)
+        self.assertIn('商城目录观察期内',current)
+        self.assertIn('公开报价已提取',current)
+        self.assertIn('¥1,899.00',current)
+        self.assertNotIn(f'/opportunities/{opportunity}',self.client.get('/?view=ready').get_data(as_text=True))
+        with db.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM auto_reviews WHERE opportunity_id=?',(opportunity,)).fetchone()[0],'missing_time')
+
     def test_default_search_keeps_same_offer_captured_by_separate_sources(self):
         with db.connect() as c:
             c.execute("UPDATE sources SET last_success=CURRENT_TIMESTAMP WHERE id=1")
@@ -166,8 +190,8 @@ class CoreFlowTests(unittest.TestCase):
         with db.connect() as c:
             c.execute("INSERT INTO quotes(opportunity_id,kind,amount_cents,offer_type,specification,conditions,same_spec) VALUES(1,'historical_buy',900,'standard','TEST-SKU 1整单','旧记录',1)")
         detail=self.client.get('/opportunities/1').get_data(as_text=True)
-        self.assertIn('历史实付（旧记录，仅留档）',detail)
-        self.assertIn('不参与当前买前低价或利润判断',detail)
+        self.assertNotIn('历史实付（旧记录，仅留档）',detail)
+        self.assertNotIn('旧记录',detail)
         self.assertNotIn('同规格历史实付价</h2>',detail)
         response=self.client.post('/opportunities/1/quotes',data={'csrf':'test-csrf','kind':'historical_buy','amount':'9'})
         self.assertEqual(response.status_code,400)

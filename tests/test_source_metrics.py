@@ -41,7 +41,21 @@ class SourceMetricsTests(unittest.TestCase):
                     if state == "observed":
                         conn.execute("UPDATE auto_reviews SET checked_at=? WHERE opportunity_id=?",
                                      (checked_at, opportunity_id))
+            catalog_id = conn.execute("""INSERT INTO sources
+                (platform,name,category,url,method,parser,status,enabled,interval_minutes,last_success)
+                VALUES('Mi test catalog','目录采集','新品与补货','https://catalog.example.test/shop','html','mi','healthy',1,60,?)""",
+                (now,)).lastrowid
+            catalog_event = conn.execute("""INSERT INTO events
+                (source_id,external_key,title,url,fingerprint,published_at,last_seen_at)
+                VALUES(?,?,?,?,?,NULL,?)""", (catalog_id,'catalog','冰箱 1899元',
+                  'https://www.mi.com/shop/buy?product_id=1','catalog',now)).lastrowid
+            catalog_opp = conn.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                VALUES(?,?,?,'新品与补货',?)""",(catalog_event,catalog_id,'冰箱 1899元',
+                  'https://www.mi.com/shop/buy?product_id=1')).lastrowid
+            conn.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'missing_time','旧目录时间规则',189900)",
+                         (catalog_opp,))
         self.source_id = source_id
+        self.catalog_id = catalog_id
 
     def tearDown(self):
         self.db_patch.stop()
@@ -51,7 +65,8 @@ class SourceMetricsTests(unittest.TestCase):
         with db.connect() as conn:
             before = (conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
                       conn.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0])
-            metrics = current_source_yield(conn)[self.source_id]
+            all_metrics = current_source_yield(conn)
+            metrics = all_metrics[self.source_id]
             after = (conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
                      conn.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0])
         self.assertEqual(before, after)
@@ -69,6 +84,11 @@ class SourceMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["source_unavailable_count"], 1)
         self.assertEqual(metrics["review_behind_count"], 1)
         self.assertEqual(metrics["not_reviewed_count"], 1)
+        self.assertEqual(all_metrics[self.catalog_id]["catalog_current_count"], 1)
+        self.assertEqual(all_metrics[self.catalog_id]["catalog_price_count"], 1)
+        self.assertEqual(all_metrics[self.catalog_id]["quote_extracted_count"], 1)
+        self.assertEqual(all_metrics[self.catalog_id]["missing_time_count"], 0)
+        self.assertEqual(all_metrics[self.catalog_id]["catalog_recomputed_count"], 1)
 
     def test_sources_page_explains_collection_status_and_shows_evidence_yield(self):
         response = workbench.app.test_client().get("/sources")
@@ -76,6 +96,8 @@ class SourceMetricsTests(unittest.TestCase):
         page = response.get_data(as_text=True)
         self.assertIn("采集有返回", page)
         self.assertIn("公开金额已提取 2", page)
+        self.assertIn("商城目录当前条目 1", page)
+        self.assertIn("目录核验快照待刷新 1", page)
         self.assertIn("缺明确金额 1", page)
         self.assertIn("这些阶段数不能直接相加", page)
         self.assertIn("此状态不代表报价有效", page)

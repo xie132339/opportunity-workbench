@@ -147,3 +147,8 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 .source-coverage ul{max-height:260px;overflow:auto;list-style:none;padding:0;margin:8px 0}
 .source-coverage li{padding:6px 0;border-bottom:1px solid var(--line)}
 .source-coverage li small{display:block}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:14px 0}
+.metric-grid>div{display:grid;align-content:start;gap:4px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:#f9fbfc}
+.metric-grid strong{font-size:27px;line-height:1.2}
+.metric-grid span{font-weight:600}
+.metric-grid small{color:var(--muted)}

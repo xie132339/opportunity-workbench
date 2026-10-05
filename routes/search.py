@@ -1,13 +1,15 @@
 """Search fresh source leads and optionally filter for comparison readiness."""
+from datetime import datetime, timezone
 from flask import render_template, request
 from db import connect
 from comparison import load_comparisons, assess_readiness
-from autoreview import offer_summary
+from autoreview import classify_catalog_observation, offer_summary
 from benefits import linked_counts as linked_benefit_counts
 from offer import RESOURCE_LABELS, TOPIC_LABELS, paper_package_prices
 from link_resolution import enrich as enrich_links
 from services.money import cents
 from services.opportunity_analysis import is_current_notice, is_evidence_candidate, notice_rows
+from services.source_freshness import CATALOG_LISTING_PARSERS
 
 def index():
     query = request.args.get("q", "").strip()
@@ -37,7 +39,7 @@ def index():
         budget = cents(budget_text) if budget_text else None
     except ValueError:
         budget = None
-    sql = """SELECT o.*,s.platform,s.status AS source_status,s.method AS source_method,
+    sql = """SELECT o.*,s.platform,s.status AS source_status,s.method AS source_method,s.parser AS source_parser,
              s.enabled AS source_enabled,s.interval_minutes AS source_interval,s.name AS source_name,
              s.last_success AS source_last_success,
              e.is_baseline,e.published_at,e.last_seen_at,e.snippet,e.metadata_json,
@@ -99,7 +101,9 @@ def index():
                      OR (s.method!='manual' AND s.enabled=1 AND s.status='healthy'
                          AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
                          AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                         AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP))"""
+                         AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
+                              OR (s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
+                                  AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))) )"""
     try:
         page = max(1, int(request.args.get("page", "1")))
     except ValueError:
@@ -130,6 +134,22 @@ def index():
             source_offer_count=total
         else:
             all_rows = [enrich_links(dict(row),link_cache) for row in db.execute(sql + order_by,args)]
+            if not show_archive:
+                # A live catalogue row may have an old saved ``missing_time``
+                # result from the former post-only rule. Re-evaluate that row
+                # for display against its current successful snapshot; do not
+                # write the refreshed result into the evidence ledger here.
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                for row in all_rows:
+                    row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
+                    last_seen = row.get('last_seen_at') or ''
+                    checked = row.get('review_checked_at') or ''
+                    review_behind = bool(last_seen and checked and checked < last_seen)
+                    if row['catalog_listing'] and (not row.get('auto_state') or row.get('auto_state') == 'missing_time' or review_behind):
+                        result = classify_catalog_observation(row, now)
+                        row['auto_state'] = result['state']
+                        row['auto_reason'] = result['reason']
+                        row['advertised_cents'] = result['advertised_cents']
             source_match_counts = {}
             for matched_row in all_rows:
                 source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
@@ -137,6 +157,7 @@ def index():
             # enough evidence to merge channels or merchants into one offer.
             source_offer_count = candidate_pool_count = len(all_rows)
             for row in all_rows:
+                row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
                 platform_name = (row.get('platform') or '').strip()
                 feed_name = (row.get('source_name') or '').strip()
                 source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name or '人工录入')
@@ -157,7 +178,7 @@ def index():
             if sort_mode == 'comparison':
                 all_rows.sort(key=lambda r: comparisons.get(r['id'],{}).get('rank',0),reverse=True)
             elif sort_mode == 'latest':
-                all_rows.sort(key=lambda r: (r.get('published_at') or '', r['id']), reverse=True)
+                all_rows.sort(key=lambda r: (r.get('published_at') or r.get('last_seen_at') or '', r['id']), reverse=True)
             elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
                 priced, unpriced = [], []
                 for row in all_rows:
@@ -178,7 +199,7 @@ def index():
                     else:
                         row['_sort_price_cents'] = value
                         priced.append(row)
-                priced.sort(key=lambda r: (r['_sort_price_cents'], r.get('published_at') or '', r['id']),
+                priced.sort(key=lambda r: (r['_sort_price_cents'], r.get('published_at') or r.get('last_seen_at') or '', r['id']),
                             reverse=sort_mode == 'price_high')
                 for row in priced:
                     row.pop('_sort_price_cents', None)
