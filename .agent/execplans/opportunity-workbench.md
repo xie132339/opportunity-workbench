@@ -31,7 +31,7 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 ## Progress
 
 - [x] (2026-10-05 10:13 Asia/Shanghai) 为独立仓库迁移补充跨平台源码安装说明、macOS/Linux 与 Windows 安装脚本、GitHub Desktop 发布/克隆步骤；修正 `.env` 必须在数据库模块导入前加载。隔离副本读取自定义 `WORKBENCH_DB` 并创建数据库，`/health` 200；177项现有回归通过，Python 编译、Bash 语法及 diff 检查通过。PowerShell 未安装，Windows 脚本未运行。尚未创建 GitHub remote 或推送；敏感文件忽略和历史扫描通过。
-- [ ] 发布阶段：在 GitHub Desktop 当前个人账户创建私有独立仓库；先确认远端默认分支与本地 `feature/bootstrap` 不冲突，再仅推送该功能分支；GitHub 上复核文件与私有状态。若远端默认分支无法安全确认，不推送并保留本地完整源码。
+- [x] (2026-10-05) 发布阶段：用户选择保留公开仓库 `https://github.com/xie132339/opportunity-workbench`。只推送非保护分支 `feature/bootstrap`；远端 `main` 保持仓库初始化提交。README 已合并远端初始化说明并写明公开仓库、完整源码所在分支和换电脑克隆步骤。GitHub 页面实见18个提交及 `.agent/`、`docs/`、`static/`、`templates/`、`tests/` 和业务源码；详情见 `docs/environment.md`。
 
 - [x] (2026-10-04 13:11 Asia/Shanghai) 修复核心搜索验收的京东硬编码与过期固定样本；接入五类电商商品 ID、短链归属、标题/正文整单价、件数和规格结构化。实时 50 条浏览器验收：搜索资料完整 35，商家商品 ID 6，运费 1，商家规则/第二独立报价/更优结论均 0；服务与 worker 已从源码重启。下一里程碑仅处理商家一手报价与规则、同 SKU 第二报价、净利润。
 

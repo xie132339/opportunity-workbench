@@ -501,3 +501,10 @@ quantity_options对已采集方案比较最低整单与最低折合单件，金�
 - 修复 `app.py` 先导入 `db.py`、后读取 `.env` 的顺序，使 `.env` 中自定义 `WORKBENCH_DB` 在数据库模块初始化时生效。
 - 验证：现有回归177项通过；Python 源码编译、`bash -n setup.sh`、`git diff --check` 通过。隔离临时副本读取 `.env` 自定义数据库路径，初始化后 `/health` HTTP 200。Git 历史扫描未发现 `.env`、SQLite、虚拟环境或运行态文件。PowerShell 本机不可用，`setup.ps1` 仅人工核对，未做 Windows 实跑。
 - 尚未创建 GitHub 仓库或推送。发布目标为个人私有仓库；先复核所有暂存文件与远端默认分支，再由 GitHub Desktop 发布当前功能分支。新电脑会得到空数据库，外部 changedetection.io、RSSHub、闲鱼与通知服务需按手册分别配置；它们不随本工作台源码自动运行。
+
+
+## 2026-10-05 GitHub 公开仓库发布
+
+用户确认把完整源码上传到已创建的公开仓库 `https://github.com/xie132339/opportunity-workbench`。本机仓库为 `/Applications/work/gitRepo/opportunity-workbench`，操作前确认工作区干净、当前分支为非保护分支 `feature/bootstrap`。GitHub 远端已有一个 README 初始化提交 `e6975b0`，与本地历史无共同祖先；在 `feature/bootstrap` 上用 `git merge --allow-unrelated-histories --no-edit origin/main` 合并，README 出现 add/add 冲突后保留完整本地安装与项目说明，并改为准确指向公开仓库和功能分支。随后提交合并并执行 `git push -u origin feature/bootstrap:feature/bootstrap`。
+
+远端回执：新建 `feature/bootstrap` 分支；浏览器打开 `https://github.com/xie132339/opportunity-workbench/tree/feature/bootstrap`，实见分支名、Public 标记、18 Commits，以及 `.agent/execplans`、`docs`、`static`、`templates`、`tests` 与业务源码文件。README 显示本项目仓库链接、公开状态、功能分支和克隆安装步骤。`main` 未推送、未合并、未修改。发布可见范围为公开互联网；仓库不含本机 SQLite 数据库、`.env`、账号或采集历史。
