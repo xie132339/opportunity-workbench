@@ -78,7 +78,7 @@
 {% set paper_price = paper_package_prices(display_title,brief.get('total_cents'),brief.get('quantity')) if is_paper else none %}
 {% set total_cents = brief.get('total_cents') %}
 <tr>
-  <td data-label="商品 / 规格"><strong><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ display_title }}</a></strong><small>{{ brief.selected_spec or '规格未提取' }}{% if brief.quantity %} · {{ brief.quantity }} 件{% endif %}</small></td>
+  <td data-label="商品 / 规格"><strong><a href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ display_title }}</a></strong><small>{% if brief.selected_spec %}原文明示报价规格：{{ brief.selected_spec }}{% elif brief.source_spec %}标题规格线索：{{ brief.source_spec }}（未确认报价对应变体）{% else %}规格未提取{% endif %}{% if brief.quantity %} · {{ brief.quantity }} 件{% endif %}</small></td>
   <td data-label="来源报价 / 单位参考"><strong>{% if total_cents is not none %}{{ money(total_cents) }}{% elif row.advertised_cents is not none %}{{ money(row.advertised_cents) }}{% else %}{{ brief.price_status.label }}{% endif %}</strong><small>{% if total_cents is not none %}来源原文声称{% elif row.advertised_cents is not none %}自动核验提取的来源金额；计价单位待确认{% else %}{{ brief.price_status.note }}{% endif %}{% if paper_price %} · {{ money(paper_price.per_pack_cents) }}/{{ paper_price.pack_unit }}{% if paper_price.per_hundred_cents is defined %} · {{ money(paper_price.per_hundred_cents) }}/{{ paper_price.hundred_unit }}{% endif %}{% elif brief.quantity and brief.get('display_unit_cents') is not none and brief.quantity>1 %} · {{ money(brief.get('display_unit_cents')) }}/件{% endif %}</small></td>
   <td data-label="购买平台">{{ brief.store or brief.platforms or '原文未注明' }}</td>
   <td data-label="线索来源">{% set channels=row.source_channels|default([]) %}{{ channels|join('、') if channels else row.platform or '人工录入' }}{% if row.source_count|default(1)>1 %}<small>{{ row.source_count }} 个采集入口；不代表独立报价</small>{% endif %}</td>
@@ -121,7 +121,7 @@
 
   <div class="offer-meta-grid">
     <div><span>购买平台</span><b>{{ brief.store or brief.platforms or '来源未注明' }}</b><small>{% set source_channels=row.source_channels|default([]) %}{% set source_count=row.source_count|default(1) %}线索来源：{{ source_channels|join('、') if source_channels else row.platform or '人工录入' }}{% if source_count>1 %}（{{ source_count }} 个采集入口；不代表独立报价）{% endif %}</small></div>
-    <div><span>规格</span><b>{{ brief.selected_spec or '尚未提取，不能按同款比较' }}</b></div>
+    <div><span>{% if brief.selected_spec %}原文明示报价规格{% elif brief.source_spec %}标题规格线索{% else %}报价规格{% endif %}</span><b>{{ brief.selected_spec or brief.source_spec or '尚未提取，不能按同款比较' }}</b>{% if brief.source_spec and not brief.selected_spec %}<small>未确认来源报价对应此变体，不能据此完成同款比较</small>{% endif %}</div>
     <div><span>购买数量</span><b>{% if brief.quantity %}{{ brief.quantity }} 件{% else %}尚未确认{% endif %}</b></div>
     <div><span>优惠信息</span><b>{{ brief.promotion_sync.label }}</b><small class="clamp-2">{{ brief.promotion_sync.explanation }}</small></div>
     <div><span>原文发布时间</span><b>{{ row.published_at|cn_time }}</b></div>

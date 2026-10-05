@@ -14,7 +14,7 @@
 {% if brief.audit.plan.state=='conditional_mismatch' %}<p class="offer-alert">{{ brief.audit.plan.reason }}</p>{% endif %}
 <dl class="offer-facts">
 <div><dt>{{ '活动平台' if brief.kind not in ('purchase','unknown') else '哪里买' }}</dt><dd>{{ brief.store or brief.platforms or '平台未注明' }}<small>信息来自 {{ source_label }}{% if brief.source_category %} · {{ brief.source_category }}{% endif %}</small></dd></div>
-{% if brief.selected_spec %}<div><dt>选中规格</dt><dd>{{ brief.selected_spec }}</dd></div>{% endif %}
+{% if brief.selected_spec %}<div><dt>原文明确的报价规格</dt><dd>{{ brief.selected_spec }}</dd></div>{% elif brief.source_spec %}<div><dt>标题规格线索</dt><dd>{{ brief.source_spec }}<small>原文未明确该报价对应此变体，不能据此完成同款比较</small></dd></div>{% endif %}
 {% if brief.quantity %}<div><dt>购买数量</dt><dd>{{ brief.quantity }}件<span class="muted"> · 件数不等于包数</span></dd></div>{% endif %}
 <div><dt>优惠条件同步</dt><dd><strong>{{ brief.promotion_sync.label }}</strong><small>{{ brief.promotion_sync.explanation }}</small>{% if brief.promotion_sync.source_checked_at %}<small>规则解析时间：{{ brief.promotion_sync.source_checked_at|cn_time }}</small>{% endif %}{% if brief.promotion_sync.detail_checked_at %}<small>详情同步时间：{{ brief.promotion_sync.detail_checked_at|cn_time }}</small>{% endif %}{% if brief.promotions or brief.qualifications %}<div class="offer-tags">{% for item in brief.promotions + brief.qualifications %}<span>{{ item }}</span>{% endfor %}</div><small>原文提及不代表优惠已生效；资格、适用商品和叠加关系仍按可取得的公开证据判断。</small>{% endif %}</dd></div>
 {% if brief.previous_cents is not none %}<div><dt>此前报价</dt><dd>{{ money(brief.previous_cents) }}<small>来源自述的降价前价格，尚未独立比价</small></dd></div>{% endif %}

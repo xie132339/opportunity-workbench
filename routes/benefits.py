@@ -33,7 +33,11 @@ def verification():
         item=dict(row)
         current_summary=offer_summary(item['title'],item['url'],item.get('snippet') or '',
             metadata=item.get('metadata_json') or '{}',detail_json=item.get('detail_json'))
-        item['display_specification']=current_summary.get('selected_spec') or '未能从来源原文确定'
+        selected=current_summary.get('selected_spec')
+        source_spec=current_summary.get('source_spec')
+        item['display_specification']=(f'原文明示报价规格：{selected}' if selected else
+            f'标题规格线索：{source_spec}（未确认报价对应变体）' if source_spec else
+            '未能从来源原文确定')
         display_rows.append(item)
     from acceptance import QUERY,evaluate,freeze
     with connect() as db:

@@ -85,7 +85,7 @@ def price_conflicts(price, conditions):
 
 def selected_spec_conflict(title, body):
     """Compare only an explicitly selected-price specification, not marketing quantities."""
-    selected = re.search(r'该价格商品规格\s*[:：]\s*(.+?)(?=天猫|京东|拼多多|淘宝|苏宁|$)', body)
+    selected = re.search(r'该价格商品规格\s*[:：]\s*(.+?)(?=[\r\n，,。；;]|天猫|京东|拼多多|淘宝|苏宁|$)', body)
     if not selected:
         return None
     def quantities(text):
@@ -122,12 +122,12 @@ def public_offer(url, body, title=''):
         if not counts:
             title_counts={int(v) for v in re.findall(r'(?:购买|需买|下单|拍|买)\s*(\d+)\s*件(?!\s*(?:返|送|赠|享|折))',title)}
             counts=title_counts or {1}
-    selected = re.search(r'该价格商品规格\s*[:：]\s*(.+?)(?=天猫|京东|拼多多|淘宝|苏宁|$)', body)
+    selected = re.search(r'该价格商品规格\s*[:：]\s*(.+?)(?=[\r\n，,。；;]|天猫|京东|拼多多|淘宝|苏宁|$)', body)
     store = re.search(r'店铺\s*[:：]?\s*(.+?)\s*,商品面价', body)
     result = dict(unit_cents=next(iter(unit)) if len(unit)==1 else None,
                   total_cents=next(iter(total)) if len(total)==1 else None,
                   quantity=next(iter(counts)) if len(counts)==1 and next(iter(counts))>0 else None,
-                  selected_spec=selected[1].strip() if selected else (structured_spec(title) or structured_spec(body)),
+                  selected_spec=selected[1].strip() if selected else '',
                   store=store[1].strip() if store else '', error='')
     if any(len(values)>1 for values in (unit,total,counts)):
         result['error'] = '原文购买方案包含多个单价、总价或件数，无法确定同一报价口径'
@@ -175,6 +175,8 @@ def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=No
     body = detail.get('conditions') or body or ''
     text = title + '\n' + body + '\n' + (conditions or '')
     offer = public_offer(url, body, title)
+    offer.setdefault('selected_spec', '')
+    offer['source_spec'] = offer.get('selected_spec') or structured_spec(title) or structured_spec(body)
     display_unit_cents = offer.get('unit_cents')
     if display_unit_cents is None and offer.get('total_cents') is not None and offer.get('quantity'):
         display_unit_cents = round(offer['total_cents'] / offer['quantity'])

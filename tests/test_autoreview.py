@@ -187,7 +187,8 @@ class ReviewRulesTests(unittest.TestCase):
         url='https://new.ixbk.net/haodan/1.html'
         offer=ar.public_offer(url,'','氏蜂社土蜂蜜1500g*1盒礼盒装 59元')
         self.assertEqual((offer['total_cents'],offer['quantity']),(5900,1))
-        self.assertEqual(offer['selected_spec'],'1500g × 1盒')
+        self.assertEqual(offer['selected_spec'],'')
+        self.assertEqual(ar.offer_summary('氏蜂社土蜂蜜1500g*1盒礼盒装 59元',url,'')['source_spec'],'1500g × 1盒')
         multi=ar.public_offer(url,'','纸尿裤NB/S/M/L 多规格 20.49元')
         self.assertEqual(multi['selected_spec'],'')
         two=ar.public_offer(url,'','拖鞋拍2件 10.8元')
@@ -203,6 +204,15 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertNotIn('1104.15',brief['title'])
         self.assertNotIn('满件折1-0.85',str(brief))
         self.assertEqual(ar.offer_summary('荣耀600 元气版','', '')['title'],'荣耀600 元气版')
+
+    def test_title_spec_is_only_a_hint_until_source_selects_the_priced_variant(self):
+        title='某品牌抽纸100抽3层6包 5元'
+        implied=ar.offer_summary(title,'https://new.ixbk.net/haodan/1.html','购买1件 实付5元')
+        self.assertEqual(implied['selected_spec'],'')
+        self.assertEqual(implied['source_spec'],'100抽 × 3层 × 6包')
+        explicit=ar.offer_summary(title,'https://new.ixbk.net/haodan/1.html',
+                                  '该价格商品规格：100抽3层6包 京东商城 购买1件 实付5元')
+        self.assertEqual(explicit['selected_spec'],'100抽3层6包')
 
     def test_readable_summary_keeps_restrictions_and_does_not_invent_missing_price(self):
         brief=ar.offer_summary('限移动端：抽纸 48.9元（淘金币可抵4.89元起）',

@@ -36,7 +36,7 @@ class AdmissionTests(unittest.TestCase):
     tearDown=xb.XianbaoTests.tearDown
 
     def seed(self,title,body,state,price):
-        item=xb.sample();item.update(title=title,content=body)
+        item=xb.sample();item.update(title=title,content=body,content_html='')
         with patch('scanner.xianbao_rows',return_value=parse_items([item])):scanner.scan_source(1)
         with db.connect() as c:c.execute('UPDATE auto_reviews SET state=?,advertised_cents=?',(state,price))
 
@@ -135,6 +135,18 @@ class AdmissionTests(unittest.TestCase):
             detail=c.get('/opportunities/1').get_data(as_text=True)
             self.assertIn('本商品当前结论',detail)
             self.assertIn('优惠条件无法复算',detail)
+
+    def test_title_spec_is_displayed_as_hint_and_not_as_selected_variant(self):
+        self.seed('某品牌抽纸100抽3层6包 5元','活动售价5元，下单1件，实付5元，包邮','observed',500)
+        with app.test_client() as c:
+            current=c.get('/?view=current').get_data(as_text=True)
+            self.assertIn('标题规格线索：100抽 × 3层 × 6包（未确认报价对应变体）',current)
+            self.assertNotIn('原文明示报价规格：100抽 × 3层 × 6包',current)
+            self.assertIn('/opportunities/1',current)
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
+            detail=c.get('/opportunities/1').get_data(as_text=True)
+            self.assertIn('标题规格线索',detail)
+            self.assertIn('不能据此完成同款比较',detail)
 
     def test_keyword_search_also_checks_captured_source_copy(self):
         self.seed('限时优惠活动','纸巾30抽十包，商品价格9.9元','observed',990)

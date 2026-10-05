@@ -3,13 +3,15 @@ from datetime import datetime,timedelta,timezone
 from unittest.mock import patch,MagicMock
 from comparison import comparison_index,product_key
 from pricing import calculate_plan,promotion_mentions,discount_audit
-from autoreview import public_offer
+from autoreview import public_offer,structured_spec
 import scanner
 
 class ComparisonTests(unittest.TestCase):
     def row(self,i,total='10',quantity=2,title='某品牌 抽纸 100抽3层6包 5元',tail='',**extra):
         now=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        r=dict(id=i,title=title,url=f'https://guangdiu.com/detail.php?id={i}',snippet=f'活动售价10元，下单{quantity}件，实付{total}元。'+tail,
+        spec=extra.pop('selected_spec',structured_spec(title))
+        selected=f'该价格商品规格：{spec} 京东商城。' if spec else ''
+        r=dict(id=i,title=title,url=f'https://guangdiu.com/detail.php?id={i}',snippet=selected+f'活动售价10元，下单{quantity}件，实付{total}元。'+tail,
             detail_json='{}',metadata_json='{}',auto_state='observed',status='pending',platform='逛丢',
             enabled=1,source_status='healthy',interval_minutes=10,published_at=now,last_seen_at=now,last_success=now)
         r.update(extra);return r

@@ -126,6 +126,17 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['quantity_options']['count'],0)
         self.assertTrue(any('缺明确选中规格' in reason for reason in result[1]['items'][0]['problems']))
 
+    def test_title_specification_alone_does_not_prove_the_priced_variant(self):
+        row=self.row(1,'12345',title='某品牌抽纸100抽3层6包 5元',
+                     selected_spec='',total='5',quantity=1,auto_state='observed')
+        comparisons=comparison_index([row])
+        item=comparisons[1]['items'][0]
+        assessment=assess_readiness(row,comparisons[1])
+        self.assertTrue(any('缺明确选中规格' in reason for reason in item['problems']))
+        self.assertFalse(assessment['checks']['selected_spec'])
+        self.assertFalse(assessment['search_ready'])
+        self.assertEqual(assess_readiness(row,comparisons[1])['checks']['identity'],True)
+
     def test_selected_variant_labels_are_preserved_in_comparison_partition(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
