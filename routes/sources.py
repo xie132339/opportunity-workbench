@@ -8,6 +8,7 @@ from channel_discovery import refresh as refresh_channel_candidates, validate_ma
 from scanner import _local_adapter_url, _public_url, scan_all, scan_source
 from xianbao import validate_url as validate_xianbao_url
 from routes.common import go
+from services.source_metrics import current_source_yield
 
 def sources():
     with connect() as db:
@@ -21,11 +22,12 @@ def sources():
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at IS NULL) unknown_count,
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at>CURRENT_TIMESTAMP) future_count
                              FROM sources s ORDER BY s.enabled DESC,s.id""").fetchall()
+        metrics = current_source_yield(db)
         candidates = db.execute("""SELECT * FROM source_candidates
             ORDER BY CASE state WHEN 'validated' THEN 0 WHEN 'discovered' THEN 1
                        WHEN 'failed' THEN 2 WHEN 'rejected' THEN 3 ELSE 4 END,
                      updated_at DESC,id DESC""").fetchall()
-    return render_template("sources.html", rows=rows, candidates=candidates)
+    return render_template("sources.html", rows=rows, candidates=candidates, metrics=metrics)
 
 def source_candidates_refresh():
     try:
