@@ -4,18 +4,20 @@ An HTTP 200 alone is never reported as a working adapter. An adapter is healthy
 only after it extracts at least one candidate with a usable title and URL.
 """
 import hashlib
+import json
 import os
 import re
 import calendar
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 
 from bs4 import BeautifulSoup
 import feedparser
 import requests
 
 from db import connect
-from offer import detected_offer_type
+from offer import detected_offer_type, resource_kind, resource_topic
+from xianbao import fetch_rows as xianbao_rows
 
 USER_AGENT = "OpportunityWorkbench/0.1 (personal low-frequency public-source research)"
 
@@ -147,8 +149,12 @@ def _rss_rows(url, local_base=None):
         _local_adapter_url(url, local_base, "/")
     else:
         _public_url(url)
-    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=(5, 18),
-                            allow_redirects=False)
+    # A loopback RSSHub request must not be routed through a system HTTP proxy.
+    with requests.Session() as session:
+        if local_base:
+            session.trust_env = False
+        response = session.get(url, headers={"User-Agent": USER_AGENT}, timeout=(5, 18),
+                               allow_redirects=False)
     if response.status_code in (301, 302, 303, 307, 308):
         raise RuntimeError("订阅地址发生跳转，需核对新地址")
     if response.status_code in (401, 403, 429):
@@ -161,6 +167,10 @@ def _rss_rows(url, local_base=None):
         raise RuntimeError("订阅格式无效或没有可解析条目")
     rows = []
     for entry in feed.entries[:80]:
+        if urlparse(url).hostname == "rss.nodeseek.com" and not any(
+            tag.get("term") == "trade" for tag in entry.get("tags", [])
+        ):
+            continue
         link = entry.get("link", "")
         title = " ".join(entry.get("title", "").split())
         try:
@@ -169,10 +179,24 @@ def _rss_rows(url, local_base=None):
             continue
         if not title:
             continue
-        snippet = BeautifulSoup(entry.get("summary", ""), "html.parser").get_text(" ", strip=True)[:1500]
+        content = BeautifulSoup(entry.get("summary", ""), "html.parser")
+        full_text = content.get_text(" ", strip=True)
+        snippet = full_text[:12000]
+        activity_links = []
+        for anchor in content.select('a[href]'):
+            target = urljoin(link, anchor['href'])
+            parsed = urlparse(target)
+            if parsed.hostname in ('guangdiu.com','www.guangdiu.com') and parsed.path == '/to.php':
+                target = parse_qs(parsed.query).get('u',[target])[0]
+            parsed = urlparse(target)
+            if parsed.scheme == 'https' and parsed.hostname and not parsed.username and not parsed.password:
+                if target not in activity_links:
+                    activity_links.append(target)
+        metadata = dict(activity_links=activity_links[:40], content_truncated=len(full_text)>12000,
+                        content_format='rss_html', links_truncated=len(activity_links)>40)
         published = entry.get("published_parsed") or entry.get("updated_parsed")
         published_at = datetime.fromtimestamp(calendar.timegm(published), timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if published else None
-        rows.append((entry.get("id") or link, title[:300], link, snippet, published_at))
+        rows.append((entry.get("id") or link, title[:300], link, snippet, published_at, metadata))
     return rows
 
 
@@ -211,27 +235,37 @@ def _goofish_rows(url):
             continue
         ask = str(item.get("当前售价") or "未知")
         hint = "AI 推荐" if (record.get("ai_analysis") or {}).get("is_recommended") else "未标记 AI 推荐"
+        published_at = None
+        raw_published = str(item.get("发布时间") or "").strip()
+        for pattern in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                local_published = datetime.strptime(raw_published, pattern)
+                published_at = local_published.replace(
+                    tzinfo=timezone(timedelta(hours=8))
+                ).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                break
+            except ValueError:
+                continue
         rows.append((str(item.get("商品ID") or link), title, link,
-                     f"闲鱼挂牌价 {ask}；{hint}。挂牌价并非成交价或可转卖利润。"))
+                     f"闲鱼挂牌价 {ask}；{hint}。挂牌价并非成交价或可转卖利润。",
+                     published_at))
     return rows
+
+
+def strategy_matches(rule, title, category):
+    if not rule["enabled"] or (rule["category"] and rule["category"] != category):
+        return False
+    include = [x.strip().lower() for x in rule["include_words"].split(",") if x.strip()]
+    exclude = [x.strip().lower() for x in rule["exclude_words"].split(",") if x.strip()]
+    low = title.lower()
+    return (not include or any(x in low for x in include)) and not any(x in low for x in exclude)
 
 
 def _passes_strategy(db, title, category):
     rules = db.execute("SELECT * FROM strategies WHERE enabled=1").fetchall()
     if not rules:
         return True
-    for rule in rules:
-        if rule["category"] and rule["category"] != category:
-            continue
-        include = [x.strip().lower() for x in rule["include_words"].split(",") if x.strip()]
-        exclude = [x.strip().lower() for x in rule["exclude_words"].split(",") if x.strip()]
-        low = title.lower()
-        if include and not any(x in low for x in include):
-            continue
-        if any(x in low for x in exclude):
-            continue
-        return True
-    return False
+    return any(strategy_matches(rule, title, category) for rule in rules)
 
 
 def scan_source(source_id):
@@ -253,6 +287,8 @@ def scan_source(source_id):
             records = _rss_rows(source["url"], os.environ.get("RSSHUB_BASE", "http://127.0.0.1:1200").rstrip("/"))
         elif source["method"] == "goofish":
             records = _goofish_rows(source["url"])
+        elif source["method"] == "xianbao":
+            records = xianbao_rows(source['url'])
         elif source["method"] == "html":
             html = _fetch(source["url"])
             records = [(url, title, url, snippet, published_at)
@@ -272,6 +308,8 @@ def scan_source(source_id):
         with connect() as db:
             db.execute("UPDATE sources SET status=?,last_error=? WHERE id=?",
                        (status, str(exc)[:400], source_id))
+        from autoreview import review_all
+        review_all()
         return {"source_id": source_id, "status": status, "new": 0, "error": str(exc)[:400]}
 
     added = 0
@@ -279,11 +317,13 @@ def scan_source(source_id):
         for record in records:
             key, title, url, snippet = record[:4]
             published_at = record[4] if len(record) > 4 else None
-            digest = hashlib.sha256((title + "\n" + snippet).encode()).hexdigest()
+            metadata = record[5] if len(record)>5 else {}
+            encoded = json.dumps(metadata,ensure_ascii=False,sort_keys=True)
+            digest = hashlib.sha256((title + "\n" + snippet + (encoded if metadata else '')).encode()).hexdigest()
             result = db.execute("""INSERT OR IGNORE INTO events
-                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at)
-                VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
-                (source_id,key,title,url,snippet,digest,published_at,int(prior == 0)))
+                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at,metadata_json)
+                VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)""",
+                (source_id,key,title,url,snippet,digest,published_at,int(prior == 0),encoded))
             if not result.rowcount:
                 db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
                     published_at=COALESCE(?,published_at)
@@ -292,8 +332,9 @@ def scan_source(source_id):
                 continue
             added += 1
             opp = db.execute("""INSERT INTO opportunities
-                (event_id,source_id,title,category,url,offer_type) VALUES(?,?,?,?,?,?)""",
-                (result.lastrowid, source_id, title, source["category"], url, detected_offer_type(title)))
+                (event_id,source_id,title,category,url,offer_type,resource_kind,topic) VALUES(?,?,?,?,?,?,?,?)""",
+                (result.lastrowid, source_id, title, source["category"], url, detected_offer_type(title),
+                 resource_kind(title,snippet),resource_topic(title,metadata.get('source_category',''))))
             recent_publication = False
             if published_at:
                 published = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
@@ -305,6 +346,8 @@ def scan_source(source_id):
                     (result.lastrowid, opp.lastrowid))
         db.execute("""UPDATE sources SET status='healthy',last_success=CURRENT_TIMESTAMP,
             last_error=NULL WHERE id=?""", (source_id,))
+    from autoreview import review_all
+    review_all()
     return {"source_id": source_id, "status": "healthy", "new": added,
             "baseline": prior == 0, "seen": len(records)}
 
@@ -314,5 +357,6 @@ def scan_all(due_only=False):
         sql = "SELECT id FROM sources WHERE enabled=1 AND method!='manual'"
         if due_only:
             sql += " AND (last_checked IS NULL OR datetime(last_checked, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP)"
+        sql += " ORDER BY CASE WHEN method='xianbao' THEN 0 ELSE 1 END, last_checked, id"
         ids = [r[0] for r in db.execute(sql)]
     return [scan_source(source_id) for source_id in ids]

@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block title %}闲鱼任务 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>闲鱼账号与搜索任务</h1>
+<section class="card">
+  <p>在这里管理闲鱼登录态、搜索任务和结果接入。采集程序作为本机后台组件运行，不需要打开它的独立管理页面。</p>
+  {% if error %}<p class="error-text">{{ error }}。请确认本机闲鱼采集服务已从源码启动。</p>{% else %}<p class="row"><span class="pill ok">后台服务正常</span><span>账号 {{ accounts|length }} 个 · 任务 {{ tasks|length }} 个 · 有结果的搜索 {{ files|length }} 个</span></p>{% endif %}
+  <p class="muted">“后台服务正常”仅表示接口可用，不代表闲鱼账号已登录、商品仍在售或价格有利润。</p>
+</section>
+<section class="card">
+  <h2>1. 导入本人闲鱼登录态</h2>
+  <p>先在本人闲鱼账号完成登录，导出登录态 JSON，再粘贴到这里。状态只传给本机采集组件；本页不回显 Cookie。不要上传他人账号数据。</p>
+  <p>已保存账号：{% if accounts %}{% for account in accounts %}<span class="pill">{{ account.name }}</span> {% endfor %}{% else %}无{% endif %}</p>
+  <form method="post" action="{{ url_for('xianyu_account') }}" class="stack" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>账号别名（再次使用同名会更新登录态）<input name="name" pattern="[A-Za-z0-9_-]{1,50}" maxlength="50" placeholder="例如 my_xianyu" required></label>
+    <label>登录态 JSON<textarea name="content" rows="5" maxlength="500000" spellcheck="false" required></textarea></label>
+    <div><button {% if error %}disabled{% endif %}>保存登录态</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>2. 建立精确搜索任务</h2>
+  <p class="muted">从小范围商品开始，设置价格、地区和发布时间。默认用关键词规则，无需 AI 密钥；创建后需要手动启动。</p>
+  <form method="post" action="{{ url_for('xianyu_task_add') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>任务名称<input name="task_name" maxlength="80" required></label>
+    <label>闲鱼搜索词<input name="keyword" maxlength="80" required></label>
+    <label>使用账号<select name="account" required><option value="">选择本人账号</option>{% for account in accounts %}<option value="{{ account.name }}">{{ account.name }}</option>{% endfor %}</select></label>
+    <label>最低价（元）<input name="min_price" type="number" min="0" step="0.01"></label>
+    <label>最高价（元）<input name="max_price" type="number" min="0" step="0.01"></label>
+    <label>地区（可选）<input name="region" maxlength="80" placeholder="例如 江苏/南京/全南京"></label>
+    <label>发布时间<select name="new_publish_option"><option value="">不限</option><option>最新</option><option>1天内</option><option>3天内</option><option>7天内</option><option>14天内</option></select></label>
+    <label>抓取页数（1–10）<input name="max_pages" type="number" min="1" max="10" value="3" required></label>
+    <label>筛选词（每行一个；留空使用搜索词）<textarea name="keyword_rules" rows="3"></textarea></label>
+    <label><input type="checkbox" name="personal_only" value="1" checked> 只看个人卖家</label>
+    <label><input type="checkbox" name="free_shipping" value="1"> 只看包邮</label>
+    <div><button {% if error or not accounts %}disabled{% endif %}>创建搜索任务</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>3. 启动、停止与查看任务</h2>
+  {% if tasks %}<div class="table-wrap"><table><thead><tr><th>任务</th><th>搜索条件</th><th>账号</th><th>状态</th><th>操作</th></tr></thead><tbody>
+  {% for task in tasks %}<tr><td><strong>{{ task.task_name }}</strong><br><small>{{ task.keyword }}</small></td><td>¥{{ task.min_price or '不限' }} – ¥{{ task.max_price or '不限' }}<br><small>{{ task.region or '不限地区' }} · {{ task.new_publish_option or '不限发布时间' }}</small></td><td>{{ task.account_state_file.rsplit('/',1)[-1] if task.account_state_file else '未指定' }}</td><td>{{ '运行中' if task.is_running else ('已停止' if task.enabled else '已暂停') }}</td><td><form method="post" action="{{ url_for('xianyu_task_action',task_id=task.id,action=('stop' if task.is_running else 'start')) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button {% if error or (not task.enabled and not task.is_running) %}disabled{% endif %}>{{ '停止' if task.is_running else '启动' }}</button></form>{% if task.decision_mode=='keyword' %}<details><summary>编辑条件</summary><form method="post" action="{{ url_for('xianyu_task_action',task_id=task.id,action='update') }}" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>最低价（元）<input name="min_price" type="number" min="0" step="0.01" value="{{ task.min_price or '' }}"></label><label>最高价（元）<input name="max_price" type="number" min="0" step="0.01" value="{{ task.max_price or '' }}"></label><label>地区<input name="region" maxlength="80" value="{{ task.region or '' }}"></label><label>发布时间<select name="new_publish_option">{% for choice in ['', '最新', '1天内', '3天内', '7天内', '14天内'] %}<option value="{{ choice }}" {% if (task.new_publish_option or '')==choice %}selected{% endif %}>{{ choice or '不限' }}</option>{% endfor %}</select></label><label>抓取页数<input name="max_pages" type="number" min="1" max="10" value="{{ task.max_pages }}" required></label><label>筛选词<textarea name="keyword_rules" rows="3">{{ (task.keyword_rules or [])|join('\n') }}</textarea></label><label><input type="checkbox" name="personal_only" value="1" {% if task.personal_only %}checked{% endif %}> 只看个人卖家</label><label><input type="checkbox" name="free_shipping" value="1" {% if task.free_shipping %}checked{% endif %}> 只看包邮</label><label><input type="checkbox" name="enabled" value="1" {% if task.enabled %}checked{% endif %}> 启用任务</label><button {% if error %}disabled{% endif %}>保存条件</button></form></details>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<p class="muted">暂无任务；没有账号时不会启动采集。</p>{% endif %}
+</section>
+<section class="card">
+  <h2>4. 将采集结果接入机会中心</h2>
+  {% if files %}{% for filename in files %}<div class="row"><strong>{{ filename }}</strong>{% set url = result_url(filename) %}{% if url in linked %}<span class="pill">已接入工作台</span>{% else %}<form method="post" action="{{ url_for('xianyu_result_add') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="filename" value="{{ filename }}"><button>接入并检查</button></form>{% endif %}</div>{% endfor %}{% else %}<p class="muted">尚无结果。任务运行并产出商品后，才能接入机会中心；挂牌价仍需人工核实。</p>{% endif %}
+  <p><a href="{{ url_for('index',platform='闲鱼',view='all') }}">查看机会中心里的闲鱼留档 →</a></p>
+</section>
+{% endblock %}

@@ -1,6 +1,14 @@
 .venv/
 .env
+.env.*
+!.env.example
 data/
+datastore/
+state/
+*.sqlite
+*.sqlite3
+*.db
+*.log
 __pycache__/
-*.pyc
+*.py[cod]
 .DS_Store

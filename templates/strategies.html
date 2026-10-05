@@ -3,7 +3,8 @@
 {% block content %}
 <h1>筛选策略与提醒</h1>
 <section class="card">
-  <p>策略对后续新线索的标题和类别生效。首次采集作为基线。站内提醒只展示原文近 2 小时且来源仍有效的新线索；外部消息只发送已核实买价、低于已录入历史最低样本且保守价差为正的候选。</p>
+  <p>普通线索按关键词与类别筛选。转售测算须同时满足同一条启用策略的最低净利和含买入运费预算，且买价、退出价及成本证据齐全、时间有效。未配置金额门槛时不放行转售候选。历史低价独立判断，不作为转售必要条件。</p>
+  <p class="muted">当前金额门槛不覆盖回报率、周转、全部资金占用和承接数量；测算达标不能称为已确认可盈利。</p>
   <p>当前已启用外部通道：{{ channels|join('、') if channels else '无' }}。到<a href="{{ url_for('messages') }}">消息接入</a>配置个人微信、企业微信和 QQ；凭据只保存在本机。</p>
   <h2>新增策略</h2>
   <form method="post" action="{{ url_for('add_strategy') }}" class="form-grid">
@@ -12,13 +13,23 @@
     <label>包含词（逗号分隔）<input name="include_words"></label>
     <label>排除词（逗号分隔）<input name="exclude_words"></label>
     <label>类别<select name="category"><option value="">全部</option>{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
+    <label>买入含运费预算上限（元）<input name="max_buy" type="number" min="0.01" step="0.01" placeholder="不代填预算"></label>
+    <label>最低净利（扣全部已录入成本，元）<input name="min_profit" type="number" min="0.01" step="0.01" placeholder="与预算同时填写"></label>
     <div><button>保存策略</button></div>
   </form>
 </section>
 <section class="card">
   <h2>已保存策略</h2>
-  {% for row in rows %}<p><strong>{{ row.name }}</strong> · 类别 {{ row.category or '全部' }} · 包含 {{ row.include_words or '不限' }} · 排除 {{ row.exclude_words or '无' }}</p>{% endfor %}
-  {% if not rows %}<p>暂无自定义策略。没有策略时，后续通过时效核验的新线索才会生成站内提醒。</p>{% endif %}
+  {% for row in rows %}<details><summary>{{ row.name }} · {{ '启用' if row.enabled else '暂停' }} · {{ '转售金额门槛已配置' if row.max_buy_cents and row.min_profit_cents else '仅普通线索' }}</summary>
+  <form method="post" action="{{ url_for('add_strategy',strategy_id=row.id) }}" class="form-grid">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>名称<input name="name" value="{{ row.name }}" required></label>
+  <label>包含词<input name="include_words" value="{{ row.include_words }}"></label><label>排除词<input name="exclude_words" value="{{ row.exclude_words }}"></label>
+  <label>类别<select name="category"><option value="">全部</option>{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option {% if row.category==x %}selected{% endif %}>{{ x }}</option>{% endfor %}</select></label>
+  <label>买入含运费预算上限（元）<input name="max_buy" type="number" min="0.01" step="0.01" value="{{ '%.2f'|format(row.max_buy_cents/100) if row.max_buy_cents is not none else '' }}"></label>
+  <label>最低净利（元）<input name="min_profit" type="number" min="0.01" step="0.01" value="{{ '%.2f'|format(row.min_profit_cents/100) if row.min_profit_cents is not none else '' }}"></label>
+  <label>状态<select name="enabled"><option value="1" {% if row.enabled %}selected{% endif %}>启用</option><option value="0" {% if not row.enabled %}selected{% endif %}>暂停</option></select></label><div><button>更新策略</button></div></form></details>{% endfor %}
+  {% if not rows %}<p>尚无策略；普通站内线索仍可生成，转售测算候选和外部盈利类提醒保持关闭。</p>{% endif %}
 </section>
 <section class="card">
   <h2>站内提醒</h2><p><a href="{{ url_for('strategies',view=('' if show_archive else 'all')) }}">{{ '只看当前提醒' if show_archive else '查看历史提醒（含过期）' }}</a></p>

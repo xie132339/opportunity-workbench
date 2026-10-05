@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block title %}优惠归属 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>优惠归属</h1>
+<p>机会中心以商品为主；这里处理尚未证明能用于具体商品的优惠资源。原文关联可以回到商品详情核实，未关联资源继续留在台账，不冒充商品优惠。</p>
+<section class="card"><form method="get" class="form-grid"><label>搜索优惠资源<input name="q" value="{{ query }}" placeholder="券名称、品类或原文"></label><label>优惠方式<select name="kind"><option value="">全部</option>{% for key in ['coupon','points','trial','campaign','free_claim','lottery'] %}<option value="{{ key }}" {% if benefit_kind==key %}selected{% endif %}>{{ resource_labels.get(key,key) }}</option>{% endfor %}</select></label><div><button>检索</button></div></form></section>
+{% include '_benefits.html' %}
+{% endblock %}

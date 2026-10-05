@@ -1,0 +1,18 @@
+<section class="card"><h2>这笔优惠怎么算</h2>
+<p><strong>来源优惠条件试算</strong> · 同步状态：{{ brief.promotion_sync.label }}。{{ brief.promotion_sync.explanation }}原文解析结果不代表优惠在具体商品和账号上实际生效。</p>
+<dl class="offer-facts">
+<div><dt>起始单价</dt><dd>{{ money(brief.audit.base_cents) if brief.audit.base_cents is not none else '原文未明确' }}</dd></div>
+<div><dt>需要买多少</dt><dd>{{ (brief.audit.quantity|string)+'件' if brief.audit.quantity else '原文未明确购买件数' }}</dd></div>
+<div><dt>提到的优惠</dt><dd>{{ brief.audit.coupons|join('、') or brief.promotion_sync.label }}<small>{{ brief.promotion_sync.explanation }}{% if brief.audit.coupons %}保留原文简称，例如“3券”尚不能证明实际减3元。{% endif %}</small></dd></div>
+<div><dt>运费</dt><dd>{{ brief.audit.shipping|join('；') or '原文未说明，不能按0元计算' }}</dd></div>
+<div><dt>计算校验</dt><dd>{% if brief.audit.formula.state=='missing' %}{{ '已按原文字段试算，见下方明细' if brief.audit.plan.cases else '无法复算：'+brief.audit.plan.reason }}{% else %}{{ brief.audit.formula.expression }}<br>算术结果 {{ money(brief.audit.formula.calculated_cents) }} · {{ '与原文等式一致，但只证明数字算得通' if brief.audit.formula.state=='consistent' else '与原文结果冲突' }}{% endif %}</dd></div>
+</dl>
+{% if brief.audit.plan.cases %}<h3>按原文字段试算</h3><p>{{ brief.audit.plan.reason }}</p>
+{% for case in brief.audit.plan.cases %}<p><strong>{{ case.order }}：{{ case.expression }}</strong><br>商品金额 {{ money(case.goods_cents) }}{% if case.matches_claim is sameas true %} · 与原文整单报价一致{% elif case.matches_claim is sameas false %} · 与原文整单报价不一致{% endif %}<br>{% if case.cash_cents is not none %}按原文运费试算合计 {{ money(case.cash_cents) }}{% else %}含运费总额未知；没有将运费当0元{% endif %}</p>{% for note in case.notes %}<small>{{ note }}</small>{% endfor %}{% endfor %}
+<p class="muted">上述是条件试算；有多种扣减顺序时不擅自选定。公开规则缺失、门槛口径或舍入不明时，不会把计算值冒充最终应付。算术吻合不代表优惠可领取。</p>{% endif %}
+{% if brief.audit.steps %}<h3>原文提到的操作与条件</h3><ol>{% for step in brief.audit.steps %}<li>{{ step }}</li>{% endfor %}</ol><p class="muted">按原文顺序摘取，不代表已经验证可操作。{% if brief.audit.steps_truncated %}内容较多，完整内容见原文。{% endif %}</p>{% endif %}
+{% if brief.external_checks %}<h3>实际补查证据</h3>{% for check in brief.external_checks %}<p><strong>{{ check.label }}</strong>：{{ check.description }}{% if check.price_cents is not none %} · {{ money(check.price_cents) }}{% endif %}<br><small>检查时间 {{ check.checked_at|cn_time }} · 仅代表当时页面展示，未确认优惠后实付。</small><br><a href="{{ check.url }}" target="_blank" rel="noopener noreferrer">查看对应入口 ↗</a></p>{% endfor %}{% endif %}
+<h3>还缺什么依据</h3><ul>{% for gap in brief.audit.gaps %}<li>{{ gap }}</li>{% endfor %}</ul>
+{% if brief.activity_links %}<h3>已找到的商品／活动入口</h3><ul>{% for link in brief.activity_links %}<li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">原文入口 {{ loop.index }} ↗</a><small> {{ link }}</small></li>{% endfor %}</ul><p class="muted">已提取链接，不代表已核实商品、优惠或库存。</p>{% endif %}
+{% if brief.origin_url %}<p><a href="{{ brief.origin_url }}" target="_blank" rel="noopener noreferrer">查看上游原帖 ↗</a> · 转载和原帖不算两份独立价格证据。</p>{% endif %}
+</section>

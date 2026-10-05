@@ -1,5 +1,6 @@
 """Local, source-first Chinese opportunity workbench."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -10,28 +11,50 @@ from decimal import Decimal, InvalidOperation
 from statistics import median
 from urllib.parse import urlparse
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
-import requests
-
-from db import connect, initialize
-from offer import detected_offer_type
-from scanner import _local_adapter_url, _public_url, scan_all, scan_source
-from notifier import (CHANNEL_LABELS, active_channels, channel_ready, deliver,
-                      notification_settings, save_notification_settings)
-
 ROOT = Path(__file__).resolve().parent
 
 
 def load_env():
     path = ROOT / ".env"
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key.strip(), value.strip())
 
 
+# Load local settings before importing modules such as db.py that read settings
+# during import. Environment variables already supplied by the shell take priority.
 load_env()
+
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
+import requests
+
+from db import connect, initialize
+from link_resolution import run_cycle as resolve_links, enrich as enrich_links
+from merchant_verification import run_cycle as verify_merchant_pages, summarize as summarize_merchant_page
+from price_history import for_product as assess_public_price_history
+from comparison import load_comparisons, assess_readiness, merchant_identity
+from benefits import (listing as list_benefits, run_cycle as refresh_benefits,
+                      add as add_benefit, stats as benefit_stats,
+                      KINDS as BENEFIT_KINDS, related as related_benefits,
+                      linked_counts as linked_benefit_counts,
+                      product_match_candidates as match_product_benefits,
+                      import_authorized_record)
+from autoreview import LABELS as REVIEW_LABELS, review_all, run_cycle, public_offer, offer_summary
+from offer import detected_offer_type, RESOURCE_LABELS, TOPIC_LABELS, product_subcategory, paper_package_prices
+from pricing import public_market_profit
+from xianbao import validate_url as validate_xianbao_url
+from scanner import _local_adapter_url, _public_url, scan_all, scan_source, strategy_matches
+from notifier import (CHANNEL_LABELS, active_channels, channel_ready, deliver,
+                      notification_settings, save_notification_settings)
+from xianyu import XianyuError, api as xianyu_api, create_task as create_xianyu_task
+from xianyu import import_account as import_xianyu_account, result_url, snapshot as xianyu_snapshot
+from xianyu import update_task as update_xianyu_task
+from channel_discovery import refresh as refresh_channel_candidates
+from channel_discovery import validate_many as validate_channel_candidates
+from channel_discovery import promote as promote_channel_candidate
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("WORKBENCH_SECRET") or secrets.token_hex(32)
 
@@ -58,7 +81,9 @@ def csrf_protection():
 @app.context_processor
 def common():
     token = session.setdefault("csrf", secrets.token_urlsafe(24))
-    return {"csrf": token, "money": money, "profit": estimated_profit}
+    return {"csrf": token, "money": money, "profit": estimated_profit, "review_labels": REVIEW_LABELS,
+            "offer_summary": offer_summary, "resource_labels":RESOURCE_LABELS,"topic_labels":TOPIC_LABELS,
+            "product_subcategory": product_subcategory, "paper_package_prices": paper_package_prices}
 
 
 def money(cents):
@@ -98,8 +123,8 @@ def estimated_profit(opp, quotes):
             checked = checked.replace(tzinfo=timezone.utc)
     except ValueError:
         return None, "缺少实际到手价的核实时间"
-    if datetime.now(timezone.utc) - checked > CHECKOUT_WINDOW:
-        return None, "买入价格已超过 15 分钟，请重新核对库存、资格与结算价"
+    if not timedelta(0) <= datetime.now(timezone.utc) - checked <= CHECKOUT_WINDOW:
+        return None, "买入价格核实时间在未来或超过 15 分钟，有效性不足"
     missing = [field for field in COST_FIELDS if opp[field] is None]
     if missing:
         return None, "缺少成本：" + "、".join(missing)
@@ -137,6 +162,37 @@ def estimated_profit(opp, quotes):
     return result, basis + "；仅为保守价差，实际出售、验机及到账仍需验证"
 
 
+def public_profit_estimate(opp, quotes, brief, review, mode='sold'):
+    """Public-data estimate, separate from account-verified resale authorization."""
+    if freshness_state(opp) != 'current':
+        mode = mode if mode in ('sold','listing') else 'sold'
+        return dict(mode=mode, mode_label={'sold':'保守成交模式','listing':'挂牌参考模式'}[mode],
+                    amount_cents=None, reason='来源报价或原文时效未通过；等待来源刷新后自动重算，不能用滞后买入价计算利润。',
+                    market_cents=None, buy_cents=None, costs_cents=0, missing_costs=[],
+                    category_large=TOPIC_LABELS.get(opp['topic'],opp['category']),
+                    category_small=product_subcategory(brief.get('title') or opp['title'],opp['topic']),
+                    category_note='大类/小类用于整理与找同款；利润公式统一，不用类目均值替代商品行情。')
+    import json
+    detail = {}
+    if review and review['detail_json']:
+        try:
+            detail = json.loads(review['detail_json'])
+        except (TypeError, ValueError):
+            detail = {}
+    total = brief.get('total_cents')
+    quantity = brief.get('quantity')
+    if total is None and review and review['advertised_cents'] is not None:
+        total = review['advertised_cents'] * (quantity or 1)
+    spec = (brief.get('selected_spec') or detail.get('specification')
+            or (review['specification'] if review else '') or opp['specification'])
+    shipping = brief.get('audit', {}).get('plan', {}).get('shipping_cents')
+    estimate = public_market_profit(opp, quotes, total, spec, mode, shipping)
+    estimate['category_large'] = TOPIC_LABELS.get(opp['topic'], opp['category'])
+    estimate['category_small'] = product_subcategory(brief.get('title') or opp['title'], opp['topic'])
+    estimate['category_note'] = '大类/小类用于整理与找同款；利润公式统一，不用类目均值替代商品行情。'
+    return estimate
+
+
 def historical_buy_assessment(opp, quotes):
     """Compare cash paid including shipping, never advertised or post-rebate prices."""
     if opp["status"] != "verified" or not opp["specification"] or opp["buy_cents"] is None or opp["buy_shipping_cents"] is None:
@@ -147,8 +203,8 @@ def historical_buy_assessment(opp, quotes):
         checked = datetime.fromisoformat(opp["buy_checked_at"] or "")
         if checked.tzinfo is None:
             checked = checked.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) - checked > CHECKOUT_WINDOW:
-            return None, "当前实付价已超过 15 分钟，请重新核对", False
+        if not timedelta(0) <= datetime.now(timezone.utc) - checked <= CHECKOUT_WINDOW:
+            return None, "当前实付价核实时间在未来或超过 15 分钟", False
     except ValueError:
         return None, "缺少当前实付价核实时间", False
     spec = " ".join(opp["specification"].split()).lower()
@@ -198,7 +254,7 @@ def freshness_state(opp):
     max_lag = min(timedelta(minutes=2 * int(opp["source_interval"]) + 15), RECENT_WINDOW)
     checked = utc(opp["source_last_success"])
     seen = utc(opp["last_seen_at"])
-    if not checked or not seen or now - checked > max_lag or now - seen > max_lag:
+    if not checked or not seen or not (timedelta(0) <= now - checked <= max_lag and timedelta(0) <= now - seen <= max_lag):
         return "source_stale"
     published = utc(opp["published_at"])
     if not published:
@@ -217,21 +273,52 @@ def freshness_label(opp):
             "source_stale": "来源或条目检查已超时"}.get(freshness_state(opp), "时效未知")
 
 
-def is_evidence_candidate(opp, quotes):
+def resale_assessment(opp, quotes, rules=None):
+    """One gate shared by listing, detail and send-time revalidation (D01/D02/D08)."""
+    if "auto_state" in opp.keys() and opp["auto_state"] in ('excluded','stale','source_unavailable','retry','conflict'):
+        return False, "自动检查已隔离此线索，不进入转售候选"
     if freshness_state(opp) != "current":
-        return False
-    profit, _ = estimated_profit(opp, quotes)
-    _, _, historical_low = historical_buy_assessment(opp, quotes)
-    return profit is not None and profit > 0 and historical_low
+        return False, "线索时效或来源状态不满足要求"
+    profit, basis = estimated_profit(opp, quotes)
+    if profit is None:
+        return False, basis
+    if profit <= 0:
+        return False, "扣除已录入成本后的保守价差不为正"
+    if rules is None:
+        with connect() as db:
+            rules = db.execute("SELECT * FROM strategies WHERE enabled=1").fetchall()
+    matched = [r for r in rules if strategy_matches(r, opp["title"], opp["category"])]
+    configured = [r for r in matched if r["min_profit_cents"] is not None and r["min_profit_cents"] > 0
+                  and r["max_buy_cents"] is not None and r["max_buy_cents"] > 0]
+    if not configured:
+        return False, "没有匹配且启用的完整转售策略：需设置正数最低净利及含买入运费预算上限"
+    buy_total = opp["buy_cents"] + opp["buy_shipping_cents"]
+    for rule in configured:
+        if profit >= rule["min_profit_cents"] and buy_total <= rule["max_buy_cents"]:
+            return True, (f"满足策略「{rule['name']}」：价差 {money(profit)} ≥ 最低净利 {money(rule['min_profit_cents'])}；"
+                          f"买入含运费 {money(buy_total)} ≤ 预算 {money(rule['max_buy_cents'])}。"
+                          "历史低价独立展示；回报率、周转、资金占用与退出承接量尚未完整验证，不代表可执行盈利。")
+    return False, "未同时满足同一条策略的最低净利和含运费买入预算；不会拼接不同策略的门槛"
+
+
+def is_evidence_candidate(opp, quotes, rules=None):
+    return resale_assessment(opp, quotes, rules)[0]
+
+
+def is_current_notice(row):
+    return (row['opp_status'] not in ('ignored','expired')
+            and row['auto_state'] in ('observed','conditional','activity')
+            and freshness_state(row) == 'current')
 
 
 def notice_rows(db, status=None, limit=None):
     sql = """SELECT n.*,o.title,o.status AS opp_status,o.buy_checked_at,
              e.published_at,e.last_seen_at,s.method AS source_method,
              s.status AS source_status,s.enabled AS source_enabled,
-             s.interval_minutes AS source_interval,s.last_success AS source_last_success
+             s.interval_minutes AS source_interval,s.last_success AS source_last_success,a.state AS auto_state
              FROM notifications n JOIN opportunities o ON o.id=n.opportunity_id
-             JOIN events e ON e.id=n.event_id JOIN sources s ON s.id=o.source_id"""
+             JOIN events e ON e.id=n.event_id JOIN sources s ON s.id=o.source_id
+             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id"""
     args = []
     if status:
         sql += " WHERE n.status=?"
@@ -250,15 +337,17 @@ def dispatch_verified_alerts():
         return {"eligible": 0, "sent": 0, "failed": 0}
     eligible = 0
     with connect() as db:
+        rules = db.execute("SELECT * FROM strategies WHERE enabled=1").fetchall()
         rows = db.execute("""SELECT o.*,e.id AS source_event_id,e.published_at,e.last_seen_at,
                              s.method AS source_method,s.status AS source_status,
                              s.enabled AS source_enabled,s.interval_minutes AS source_interval,
-                             s.last_success AS source_last_success
+                             s.last_success AS source_last_success,a.state AS auto_state
                              FROM opportunities o JOIN events e ON e.id=o.event_id
-                             JOIN sources s ON s.id=o.source_id WHERE o.status='verified'""").fetchall()
+                             JOIN sources s ON s.id=o.source_id
+                             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id WHERE o.status='verified'""").fetchall()
         for opp in rows:
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (opp["id"],)).fetchall()
-            if not is_evidence_candidate(opp, quotes):
+            if not is_evidence_candidate(opp, quotes, rules):
                 continue
             eligible += 1
             db.execute("""INSERT OR IGNORE INTO notifications (event_id,opportunity_id)
@@ -278,19 +367,20 @@ def dispatch_verified_alerts():
         with connect() as db:
             opp = db.execute("""SELECT o.*,e.published_at,e.last_seen_at,
                 s.method AS source_method,s.status AS source_status,s.enabled AS source_enabled,
-                s.interval_minutes AS source_interval,s.last_success AS source_last_success
+                s.interval_minutes AS source_interval,s.last_success AS source_last_success,a.state AS auto_state
                 FROM opportunities o JOIN events e ON e.id=o.event_id
-                JOIN sources s ON s.id=o.source_id WHERE o.id=?""", (task["opportunity_id"],)).fetchone()
+                JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+                WHERE o.id=?""", (task["opportunity_id"],)).fetchone()
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (task["opportunity_id"],)).fetchall()
         profit, _ = estimated_profit(opp, quotes)
-        _, buy_basis, historical_low = historical_buy_assessment(opp, quotes)
-        if freshness_state(opp) != "current" or profit is None or profit <= 0 or not historical_low or task["channel"] not in channels:
+        allowed, gate_basis = resale_assessment(opp, quotes)
+        if not allowed or task["channel"] not in active_channels():
             with connect() as db:
                 db.execute("UPDATE notification_deliveries SET status='skipped',last_error='条件已变化或通道已关闭' WHERE id=?",
                            (task["id"],))
             continue
-        title = "待人工复核的价差线索：" + task["title"][:80]
-        body = f"{buy_basis}\n保守价差 {money(profit)}。仍须核实资格、库存、成交与到账。\n原始链接：{task['url'] or '无'}"
+        title = "转售测算达标线索：" + task["title"][:80]
+        body = f"{gate_basis}\n保守价差 {money(profit)}；不代表已成交或已到账。\n原始链接：{task['url'] or '无'}"
         try:
             deliver(task["channel"], title, body)
             with connect() as db:
@@ -323,23 +413,61 @@ def index():
     status = request.args.get("status", "").strip()
     platform = request.args.get("platform", "").strip()
     offer_filter = request.args.get("offer", "").strip()
+    topic = request.args.get('topic','')
+    resource = request.args.get('resource','')
     budget_text = request.args.get("budget", "").strip()
+    sort_mode = request.args.get("sort", "comparison")
+    if sort_mode not in ("comparison", "latest", "price_low", "price_high", "paper_unit_low"):
+        sort_mode = "comparison"
+    layout_mode = request.args.get("layout", "list")
+    if layout_mode not in ("list", "cards"):
+        layout_mode = "list"
+    page_size = 100 if layout_mode == "list" else 36
     candidate_only = request.args.get("candidate") == "1"
-    show_archive = request.args.get("view") == "all"
+    # The main product search is the evidence-qualified view. Keep the broad
+    # fresh-lead inbox explicitly available so incomplete posts are not destroyed
+    # or silently promoted to products.
+    view_mode = request.args.get("view") or "ready"
+    if view_mode not in ("ready", "current", "all"):
+        view_mode = "ready"
+    show_archive = view_mode == "all"
+    ready_only = view_mode == "ready"
     try:
         budget = cents(budget_text) if budget_text else None
     except ValueError:
         budget = None
     sql = """SELECT o.*,s.platform,s.status AS source_status,s.method AS source_method,
-             s.enabled AS source_enabled,s.interval_minutes AS source_interval,
+             s.enabled AS source_enabled,s.interval_minutes AS source_interval,s.name AS source_name,
              s.last_success AS source_last_success,
-             e.is_baseline,e.published_at,e.last_seen_at
+             e.is_baseline,e.published_at,e.last_seen_at,e.snippet,e.metadata_json,
+             a.state AS auto_state,a.reason AS auto_reason,a.advertised_cents,
+             a.specification AS auto_specification,a.conditions AS auto_conditions,a.detail_json,
+             a.checked_at AS review_checked_at,a.detail_checked_at,a.detail_error
              FROM opportunities o LEFT JOIN sources s ON s.id=o.source_id
-             LEFT JOIN events e ON e.id=o.event_id WHERE 1=1"""
+             LEFT JOIN events e ON e.id=o.event_id
+             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id WHERE 1=1"""
     args = []
+    if topic in TOPIC_LABELS:
+        sql += ' AND o.topic=?'
+        args.append(topic)
+    if resource in RESOURCE_LABELS:
+        sql += ' AND o.resource_kind=?'
+        args.append(resource)
     if query:
-        sql += " AND o.title LIKE ?"
-        args.append("%" + query + "%")
+        # A single character is noisy in RSS copy. Allow source-copy-only hits
+        # only when the same captured text contains a price marker; the title
+        # remains searchable without that extra requirement.
+        if len(query) == 1:
+            sql += " AND (o.title LIKE ? OR (COALESCE(e.snippet,'') LIKE ? AND (COALESCE(e.snippet,'') LIKE '%元%' OR COALESCE(e.snippet,'') LIKE '%¥%' OR COALESCE(e.snippet,'') LIKE '%￥%')))"
+            args.extend(("%" + query + "%", "%" + query + "%"))
+            if query == '纸':
+                # Common non-paper compound terms in deal feeds.
+                for unrelated_title_term in ('纸皮', '响纸'):
+                    sql += " AND o.title NOT LIKE ?"
+                    args.append('%' + unrelated_title_term + '%')
+        else:
+            sql += " AND (o.title LIKE ? OR COALESCE(e.snippet,'') LIKE ?)"
+            args.extend(("%" + query + "%", "%" + query + "%"))
     if category:
         sql += " AND o.category=?"
         args.append(category)
@@ -352,7 +480,7 @@ def index():
         sql += " AND o.offer_type=?"
         args.append(offer_filter)
     if budget is not None:
-        sql += " AND o.buy_cents IS NOT NULL AND o.buy_cents<=?"
+        sql += " AND a.advertised_cents IS NOT NULL AND a.advertised_cents<=? AND a.state NOT IN ('conflict','excluded')"
         args.append(budget)
     if status:
         sql += " AND o.status=?"
@@ -360,6 +488,12 @@ def index():
     else:
         sql += " AND o.status!='ignored'"
     if not show_archive:
+        if not candidate_only:
+            # Product search and the lead inbox start from fresh purchase-like source
+            # records. Product search applies the shared evidence gate after enrichment;
+            # the current view intentionally keeps incomplete leads.
+            sql += " AND o.resource_kind IN ('purchase','unknown')"
+        sql += " AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')"
         sql += """ AND ((s.method='manual' AND o.status='verified'
                          AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP)
                      OR (s.method!='manual' AND s.enabled=1 AND s.status='healthy'
@@ -371,31 +505,187 @@ def index():
     except ValueError:
         page = 1
     with connect() as db:
+        comparisons = load_comparisons(db)
+        link_cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
         order_by = """ ORDER BY CASE o.category
             WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
             WHEN '供货与清仓' THEN 3 WHEN '新品与补货' THEN 4
             WHEN '拍卖与资产' THEN 5 WHEN '服务与合作' THEN 6 ELSE 7 END,
             o.created_at DESC,o.id DESC"""
         if candidate_only:
+            rules = db.execute("SELECT * FROM strategies WHERE enabled=1").fetchall()
             candidates = []
             for row in db.execute(sql + " AND o.status='verified'" + order_by, args):
                 quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (row["id"],)).fetchall()
-                if is_evidence_candidate(row, quotes):
+                if is_evidence_candidate(row, quotes, rules):
                     candidates.append(row)
             total = len(candidates)
-            rows = candidates[(page - 1) * 36:page * 36]
+            source_match_counts = {}
+            for matched_row in candidates:
+                source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+            rows = [dict(row) for row in candidates[(page - 1) * page_size:page * page_size]]
+            search_assessments={}
+            quality_counts=dict(search_ready=0,comparable=0,source_claim_low=0,excluded=0)
+            candidate_pool_count=total
+            source_offer_count=total
         else:
-            total = db.execute("SELECT COUNT(*) FROM (" + sql + ")", args).fetchone()[0]
-            rows = db.execute(sql + order_by + " LIMIT 36 OFFSET ?",
-                              [*args, (page - 1) * 36]).fetchall()
-        sources = db.execute("SELECT * FROM sources ORDER BY id").fetchall()
-        alerts = sum(freshness_state(row) == "current" for row in notice_rows(db, "pending"))
+            all_rows = [enrich_links(dict(row),link_cache) for row in db.execute(sql + order_by,args)]
+            source_match_counts = {}
+            for matched_row in all_rows:
+                source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+            if not show_archive and not ready_only and not candidate_only:
+                # Do not make parsability a visibility gate. Price, quantity,
+                # specifications and promotion certainty are readiness evidence,
+                # not reasons to hide a fresh lead from the user's search.
+                source_offer_count = len(all_rows)
+                grouped = {}
+                for row in all_rows:
+                    brief = offer_summary(row['title'], row['url'], row.get('snippet'), row.get('auto_conditions'),
+                                          row.get('metadata_json'), row.get('detail_json'),
+                                          dict(checked_at=row.get('review_checked_at'),
+                                               detail_checked_at=row.get('detail_checked_at'),
+                                               detail_error=row.get('detail_error')))
+                    identity = (''.join(ch for ch in row['title'].casefold() if ch.isalnum()),
+                                brief.get('selected_spec'), brief.get('total_cents'), brief.get('quantity'),
+                                row.get('auto_state'), row.get('resource_kind'))
+                    platform_name = (row.get('platform') or '').strip()
+                    feed_name = (row.get('source_name') or '').strip()
+                    source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name)
+                    names = {source_label} if source_label else {'人工录入'}
+                    score = (bool(row.get('detail_checked_at')), len(row.get('auto_conditions') or row.get('snippet') or ''))
+                    if identity not in grouped:
+                        row['source_channels'] = names
+                        row['_evidence_score'] = score
+                        grouped[identity] = row
+                    else:
+                        existing = grouped[identity]
+                        existing['source_channels'].update(names)
+                        if score > existing['_evidence_score']:
+                            row['source_channels'] = existing['source_channels']
+                            row['_evidence_score'] = score
+                            grouped[identity] = row
+                all_rows = list(grouped.values())
+                for row in all_rows:
+                    row['source_channels'] = sorted(row.pop('source_channels'))
+                    row.pop('_evidence_score', None)
+                    row['source_count'] = len(row['source_channels'])
+            else:
+                source_offer_count = len(all_rows)
+                # Archive rows are not deduplicated, but still identify the exact
+                # configured feed so separate sources on one platform stay visible.
+                for row in all_rows:
+                    platform_name = (row.get('platform') or '').strip()
+                    feed_name = (row.get('source_name') or '').strip()
+                    source_label = f'{platform_name} · {feed_name}' if platform_name and feed_name and feed_name != platform_name else (platform_name or feed_name or '人工录入')
+                    row['source_channels'] = [source_label]
+                    row['source_count'] = 1
+            candidate_pool_count=len(all_rows)
+            search_assessments={row['id']:assess_readiness(row,comparisons.get(row['id'],{})) for row in all_rows}
+            quality_counts=dict(
+                search_ready=sum(bool(value['search_ready']) for value in search_assessments.values()),
+                comparable=sum(bool(value['comparable']) for value in search_assessments.values()),
+                source_claim_low=sum(bool(value['source_claim_low']) for value in search_assessments.values()))
+            quality_counts['excluded']=candidate_pool_count-quality_counts['search_ready']
+            if ready_only and not show_archive:
+                all_rows=[row for row in all_rows if search_assessments[row['id']]['search_ready']]
+                source_match_counts = {}
+                for matched_row in all_rows:
+                    source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+            total=len(all_rows)
+            if sort_mode == 'comparison':
+                all_rows.sort(key=lambda r: comparisons.get(r['id'],{}).get('rank',0),reverse=True)
+            elif sort_mode == 'latest':
+                all_rows.sort(key=lambda r: (r.get('published_at') or '', r['id']), reverse=True)
+            elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
+                priced, unpriced = [], []
+                for row in all_rows:
+                    brief = offer_summary(row['title'], row['url'], row.get('snippet'), row.get('auto_conditions'),
+                                          row.get('metadata_json'), row.get('detail_json'),
+                                          dict(checked_at=row.get('review_checked_at'),
+                                               detail_checked_at=row.get('detail_checked_at'),
+                                               detail_error=row.get('detail_error')))
+                    value = brief.get('total_cents')
+                    if value is None:
+                        value = row.get('advertised_cents')
+                    if sort_mode == 'paper_unit_low':
+                        title = brief.get('title') or row['title']
+                        paper = paper_package_prices(title, brief.get('total_cents'), brief.get('quantity'))
+                        value = paper.get('per_pack_cents') if paper else None
+                    if value is None:
+                        unpriced.append(row)
+                    else:
+                        row['_sort_price_cents'] = value
+                        priced.append(row)
+                priced.sort(key=lambda r: (r['_sort_price_cents'], r.get('published_at') or '', r['id']),
+                            reverse=sort_mode == 'price_high')
+                for row in priced:
+                    row.pop('_sort_price_cents', None)
+                all_rows = priced + unpriced
+            rows=all_rows[(page-1)*page_size:page*page_size]
+        sources = [dict(row) for row in db.execute("SELECT * FROM sources ORDER BY id").fetchall()]
+        source_coverage = [dict(source, match_count=source_match_counts.get(source['id'], 0)) for source in sources]
+        source_coverage.sort(key=lambda source: (-int(bool(source['enabled'])), -source['match_count'], source['platform'], source['name']))
+        enabled_source_count = sum(bool(source['enabled']) for source in sources)
+        matched_enabled_source_count = sum(bool(source['enabled']) and source['match_count'] > 0 for source in source_coverage)
+        alerts = sum(is_current_notice(row) for row in notice_rows(db, "pending"))
+        benefit_link_counts=linked_benefit_counts(db,[row['id'] for row in rows])
+        merchant_checks={(r['opportunity_id'],r['product_url']):dict(r) for r in db.execute(
+            'SELECT * FROM merchant_page_checks WHERE opportunity_id IN (' + ','.join('?' for _ in rows) + ')',
+            [row['id'] for row in rows]).fetchall()} if rows else {}
+        for row in rows:
+            row['merchant_page_check']=summarize_merchant_page(dict(row),merchant_checks)
+        merchant_page_counts={}
+        for row in rows:
+            state=row['merchant_page_check']['state']
+            merchant_page_counts[state]=merchant_page_counts.get(state,0)+1
     return render_template("index.html", rows=rows, sources=sources,
+                           benefit_link_counts=benefit_link_counts,
+                           comparisons=comparisons,sort_mode=sort_mode,
+                           search_assessments=search_assessments,quality_counts=quality_counts,
+                           merchant_page_counts=merchant_page_counts,
+                           candidate_pool_count=candidate_pool_count, source_offer_count=source_offer_count,
                            alerts=alerts, query=query, category=category, status=status,
                            platform=platform, budget_text=budget_text,
-                           offer_filter=offer_filter,
-                           total=total, page=page, has_next=page * 36 < total,
-                           candidate_only=candidate_only, show_archive=show_archive)
+                           offer_filter=offer_filter,topic=topic,resource=resource,
+                           total=total, page=page, has_next=page * page_size < total,
+                           page_size=page_size, layout_mode=layout_mode,
+                           source_coverage=source_coverage, enabled_source_count=enabled_source_count,
+                           matched_enabled_source_count=matched_enabled_source_count,
+                           candidate_only=candidate_only, show_archive=show_archive, view_mode=view_mode, ready_only=ready_only)
+
+
+@app.get("/benefits")
+def benefits_page():
+    query=request.args.get('q','').strip()
+    benefit_kind=request.args.get('kind','').strip()
+    if benefit_kind not in BENEFIT_KINDS:benefit_kind=''
+    try:page=max(1,int(request.args.get('page','1')))
+    except ValueError:page=1
+    page_size=20
+    with connect() as db:
+        rows=list_benefits(db,query,benefit_kind,limit=page_size+1,offset=(page-1)*page_size)
+        summary=benefit_stats(db)
+    return render_template('benefits.html',benefits=rows[:page_size],benefits_summary=summary,
+                           query=query,benefit_kind=benefit_kind,page=page,
+                           has_next=len(rows)>page_size)
+
+
+@app.get("/verification")
+def verification():
+    state = request.args.get('state', '')
+    with connect() as db:
+        counts = dict(db.execute('SELECT state,COUNT(*) FROM auto_reviews GROUP BY state').fetchall())
+        run = db.execute('SELECT * FROM review_runs WHERE id=1').fetchone()
+        rows = db.execute('''SELECT a.*,o.title,o.url FROM auto_reviews a
+            JOIN opportunities o ON o.id=a.opportunity_id WHERE (?='' OR a.state=?)
+            ORDER BY o.id DESC LIMIT 100''', (state,state)).fetchall()
+    from acceptance import QUERY,evaluate,freeze
+    with connect() as db:
+        evidence=[dict(r) for r in db.execute(QUERY)]
+        cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
+    cohort=freeze(evidence,current_only=True)
+    acceptance=evaluate(evidence,cohort,cache)
+    return render_template('verification.html',counts=counts,run=run,rows=rows,state=state,acceptance=acceptance)
 
 
 @app.post("/manual")
@@ -427,6 +717,8 @@ def manual():
             db.execute("""INSERT INTO opportunities
                 (event_id,source_id,title,category,url,offer_type) VALUES(?,?,?,?,?,?)""",
                 (event.lastrowid,source_id,title,category,url,detected_offer_type(title)))
+    from offer import resource_kind
+    if resource_kind(title) in BENEFIT_KINDS:add_benefit(title,url,source_type='manual',source_url=url)
     flash("人工线索已保存；价格、规格和利润仍需核实", "ok")
     return go("index")
 
@@ -444,7 +736,139 @@ def sources():
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at IS NULL) unknown_count,
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at>CURRENT_TIMESTAMP) future_count
                              FROM sources s ORDER BY s.enabled DESC,s.id""").fetchall()
-    return render_template("sources.html", rows=rows)
+        candidates = db.execute("""SELECT * FROM source_candidates
+            ORDER BY CASE state WHEN 'validated' THEN 0 WHEN 'discovered' THEN 1
+                       WHEN 'failed' THEN 2 WHEN 'rejected' THEN 3 ELSE 4 END,
+                     updated_at DESC,id DESC""").fetchall()
+    return render_template("sources.html", rows=rows, candidates=candidates)
+
+
+@app.post("/sources/candidates/refresh")
+def source_candidates_refresh():
+    try:
+        result = refresh_channel_candidates()
+        flash(f"GitHub 候选目录已刷新：检索 {result['matched_files']} 个路由文件，"
+              f"记录 {result['discovered']} 个相关候选，其中 {result['rejected']} 个因账号或浏览器要求被隔离；"
+              f"{result['fetch_errors']} 个源码文件本轮读取失败，可下次重试", "ok")
+    except Exception as exc:
+        flash("GitHub 候选刷新失败：" + str(exc)[:300], "error")
+    return go("sources")
+
+
+@app.post("/sources/candidates/bulk")
+def source_candidates_bulk():
+    action = request.form.get("action", "")
+    raw_ids = request.form.getlist("candidate_ids")
+    if action not in ("validate", "promote") or not raw_ids or len(raw_ids) > 50:
+        flash("请选择 1 到 50 个候选渠道和有效操作", "error")
+        return go("sources")
+    try:
+        if any(not value.isdecimal() or int(value) <= 0 for value in raw_ids):
+            raise ValueError("候选渠道编号无效")
+        ids = sorted(set(int(value) for value in raw_ids))
+        if action == "validate":
+            results = validate_channel_candidates(ids)
+            passed = sum(result["state"] == "validated" for result in results)
+            items = sum(result["items"] for result in results)
+            flash(f"已实测 {len(results)} 个候选；通过 {passed} 个，共解析 {items} 条当前数据",
+                  "ok" if passed == len(results) else "error")
+        else:
+            source_ids = [promote_channel_candidate(candidate_id) for candidate_id in ids]
+            outcomes = [scan_source(source_id) for source_id in source_ids]
+            healthy = sum(item["status"] == "healthy" for item in outcomes)
+            flash(f"已接入 {len(source_ids)} 个渠道并立即采集；正常 {healthy} 个，"
+                  f"新增 {sum(item['new'] for item in outcomes)} 条", "ok" if healthy == len(outcomes) else "error")
+    except Exception as exc:
+        flash(str(exc)[:300], "error")
+    return go("sources")
+
+
+@app.get("/xianyu")
+def xianyu():
+    accounts, tasks, files, error = [], [], [], None
+    try:
+        accounts, tasks, files = xianyu_snapshot()
+    except XianyuError as exc:
+        error = str(exc)
+    with connect() as db:
+        linked = {row[0] for row in db.execute("SELECT url FROM sources WHERE method='goofish'")}
+    return render_template("xianyu.html", accounts=accounts, tasks=tasks,
+                           files=files, linked=linked, error=error, result_url=result_url)
+
+
+@app.post("/xianyu/accounts")
+def xianyu_account():
+    try:
+        if request.content_length and request.content_length > 600_000:
+            abort(413)
+        import_xianyu_account(request.form.get("name", "").strip(),
+                              request.form.get("content", ""))
+        flash("闲鱼登录态已保存到本机采集服务；页面不会回显内容", "ok")
+    except XianyuError as exc:
+        flash(str(exc), "error")
+    return go("xianyu")
+
+
+@app.post("/xianyu/tasks")
+def xianyu_task_add():
+    try:
+        create_xianyu_task(request.form)
+        flash("闲鱼搜索任务已创建；手动启动后才会访问闲鱼", "ok")
+    except XianyuError as exc:
+        flash(str(exc), "error")
+    return go("xianyu")
+
+
+@app.post("/xianyu/tasks/<int:task_id>/<action>")
+def xianyu_task_action(task_id, action):
+    if action not in ("start", "stop", "update"):
+        abort(404)
+    try:
+        tasks = xianyu_api("GET", "/api/tasks")
+        task = next((item for item in tasks if item.get("id") == task_id), None)
+        if not task:
+            raise XianyuError("任务不存在")
+        if action == "update":
+            update_xianyu_task(task_id, task, request.form)
+            flash("任务条件已保存", "ok")
+            return go("xianyu")
+        if action == "start":
+            if not task.get("enabled"):
+                raise XianyuError("任务已暂停，请先编辑条件并启用")
+            account_file = task.get("account_state_file")
+            accounts = xianyu_api("GET", "/api/accounts")
+            if not account_file or not any(item.get("path") == account_file for item in accounts):
+                raise XianyuError("任务没有可用的本机闲鱼账号，请先导入登录态")
+        xianyu_api("POST", f"/api/tasks/{action}/{task_id}")
+        flash("任务已启动，结果出现后可在本页接入工作台" if action == "start" else "任务已停止", "ok")
+    except XianyuError as exc:
+        flash(str(exc), "error")
+    return go("xianyu")
+
+
+@app.post("/xianyu/results")
+def xianyu_result_add():
+    filename = request.form.get("filename", "")
+    try:
+        files = xianyu_api("GET", "/api/results/files").get("files", [])
+        if filename not in files:
+            raise XianyuError("该闲鱼结果尚未产生")
+        url = result_url(filename)
+        with connect() as db:
+            db.execute("""INSERT OR IGNORE INTO sources
+                (platform,name,category,url,method,parser,status,enabled,interval_minutes)
+                VALUES(?,?,?,?,?,?,?,?,?)""",
+                ("闲鱼", "搜索结果 · " + filename.removesuffix("_full_data.jsonl"),
+                 "二手与闲置", url, "goofish", "", "pending", 1, 60))
+            source_id = db.execute("SELECT id FROM sources WHERE platform='闲鱼' AND url=? AND method='goofish'",
+                                   (url,)).fetchone()[0]
+        outcome = scan_source(source_id)
+        if outcome["status"] != "healthy":
+            raise XianyuError("结果来源已登记，但读取失败：" + outcome.get("error", "未知错误"))
+        flash(f"闲鱼结果已接入工作台，本次读取 {outcome['seen']} 条；挂牌价仍待核实", "ok")
+    except XianyuError as exc:
+        flash(str(exc), "error")
+    return go("xianyu")
 
 
 @app.post("/sources")
@@ -460,14 +884,17 @@ def source_add():
                     "yiwugo": "www.yiwugo.com", "kongfz": "book.kongfz.com",
                     "suning": "www.suning.com", "lenovo": "www.lenovo.com.cn",
                     "honor": "www.honor.com"}
-    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "rsshub", "goofish", "html"):
+    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "rsshub", "goofish", "html", "xianbao"):
         flash("来源信息不完整", "error")
         return go("sources")
     try:
         interval = int(request.form.get("interval_minutes", "60"))
-        if not 5 <= interval <= 1440:
-            raise ValueError("检查间隔须在 5 到 1440 分钟之间")
-        if method == "rsshub":
+        minimum = 1 if method=='xianbao' else 5
+        if not minimum <= interval <= 1440:
+            raise ValueError(f"检查间隔须在 {minimum} 到 1440 分钟之间")
+        if method == 'xianbao':
+            validate_xianbao_url(url)
+        elif method == "rsshub":
             _local_adapter_url(url, os.environ.get("RSSHUB_BASE", "http://127.0.0.1:1200"), "/")
         elif method == "goofish":
             _local_adapter_url(url, os.environ.get("GOOFISH_BASE", "http://127.0.0.1:8000"), "/api/results/")
@@ -532,8 +959,9 @@ def source_bulk():
                     raise ValueError("请先启用所选渠道，再批量检查")
             elif action == "interval":
                 interval = int(request.form.get("interval_minutes", ""))
-                if not 5 <= interval <= 1440:
-                    raise ValueError("检查间隔须在 5 到 1440 分钟之间")
+                minimum = 1 if all(row['method']=='xianbao' for row in rows) else 5
+                if not minimum <= interval <= 1440:
+                    raise ValueError(f"检查间隔须在 {minimum} 到 1440 分钟之间")
                 db.execute(f"UPDATE sources SET interval_minutes=? WHERE id IN ({placeholders})", [interval, *ids])
             elif action == "enable":
                 db.execute(f"UPDATE sources SET enabled=1,status=CASE WHEN enabled=0 THEN 'pending' ELSE status END WHERE id IN ({placeholders})", ids)
@@ -556,9 +984,11 @@ def source_bulk():
 def source_interval(source_id):
     try:
         interval = int(request.form.get("interval_minutes", "60"))
-        if not 5 <= interval <= 1440:
-            raise ValueError("检查间隔须在 5 到 1440 分钟之间")
         with connect() as db:
+            source = db.execute('SELECT method FROM sources WHERE id=?',(source_id,)).fetchone()
+            if source is None:raise ValueError('来源不存在')
+            minimum = 1 if source['method']=='xianbao' else 5
+            if not minimum <= interval <= 1440:raise ValueError(f'检查间隔须在 {minimum} 到 1440 分钟之间')
             db.execute("UPDATE sources SET interval_minutes=? WHERE id=?", (interval,source_id))
         flash("检查间隔已更新", "ok")
     except ValueError as exc:
@@ -593,9 +1023,10 @@ def opportunity(opportunity_id):
                              s.method AS source_method,s.status AS source_status,
                              s.enabled AS source_enabled,s.interval_minutes AS source_interval,
                              s.last_success AS source_last_success,
-                             e.snippet,e.is_baseline,e.observed_at,e.published_at,e.last_seen_at
+                             e.snippet,e.metadata_json,e.is_baseline,e.observed_at,e.published_at,e.last_seen_at,a.state AS auto_state
                              FROM opportunities o LEFT JOIN sources s ON s.id=o.source_id
-                             LEFT JOIN events e ON e.id=o.event_id WHERE o.id=?""", (opportunity_id,)).fetchone()
+                             LEFT JOIN events e ON e.id=o.event_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+                             WHERE o.id=?""", (opportunity_id,)).fetchone()
         if not opp:
             abort(404)
         quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=? ORDER BY observed_at DESC,id DESC",
@@ -603,11 +1034,41 @@ def opportunity(opportunity_id):
         buy_checks = db.execute("SELECT * FROM buy_checks WHERE opportunity_id=? ORDER BY checked_at DESC,id DESC LIMIT 30",
                                 (opportunity_id,)).fetchall()
         trades = db.execute("SELECT * FROM trades WHERE opportunity_id=? ORDER BY id DESC", (opportunity_id,)).fetchall()
+        review = db.execute("SELECT * FROM auto_reviews WHERE opportunity_id=?", (opportunity_id,)).fetchone()
+        comparison = load_comparisons(db).get(opportunity_id,{})
+        identity_row=dict(opp,detail_json=review['detail_json'] if review else '{}')
+        resolved= enrich_links(identity_row,{r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')})
+        opp=dict(opp,metadata_json=resolved['metadata_json'])
+        brief=offer_summary(opp['title'],opp['url'],opp['snippet'],metadata=opp['metadata_json'],detail_json=review['detail_json'] if review else None,
+                            sync_meta=dict(checked_at=review['checked_at'],detail_checked_at=review['detail_checked_at'],detail_error=review['detail_error']) if review else {})
+        opp_for_merchant=dict(opp,detail_json=review['detail_json'] if review else '{}')
+        product_identity=merchant_identity(opp_for_merchant)
+        merchant_checks={(r['opportunity_id'],r['product_url']):dict(r) for r in db.execute(
+            'SELECT * FROM merchant_page_checks WHERE opportunity_id=?',(opportunity_id,)).fetchall()}
+        merchant_page_check=summarize_merchant_page(opp_for_merchant,merchant_checks)
+        public_price_history = assess_public_price_history(db, merchant_page_check.get('product_url'),
+                                                           merchant_page_check)
+        readiness=assess_readiness(opp,comparison,brief)
+        benefit_relations=related_benefits(db,opportunity_id)
+        product_benefit_candidates=match_product_benefits(db,opp_for_merchant)
+        confirmed_benefits=[item for item in benefit_relations if item['relation_state']=='confirmed']
+        source_linked_benefits=[item for item in benefit_relations if item['relation_state']=='source_linked']
     estimate, basis = estimated_profit(opp, quotes)
+    profit_mode = request.args.get('profit_mode','sold')
+    public_estimate = public_profit_estimate(opp, quotes, brief, review, profit_mode)
     buy_difference, buy_basis, below_observed = historical_buy_assessment(opp, quotes)
-    return render_template("opportunity.html", opp=opp, quotes=quotes, buy_checks=buy_checks, trades=trades,
-                           estimate=estimate, basis=basis, buy_difference=buy_difference,
-                           buy_basis=buy_basis, below_observed=below_observed)
+    resale_allowed, resale_basis = resale_assessment(opp, quotes)
+    return render_template("opportunity.html", opp=opp, quotes=quotes, buy_checks=buy_checks, trades=trades, review=review,
+                           public_offer=public_offer(opp['url'],opp['snippet'],opp['title']),comparison=comparison,
+                           readiness=readiness,confirmed_benefits=confirmed_benefits,source_linked_benefits=source_linked_benefits,
+                           product_benefit_candidates=product_benefit_candidates,
+                           product_benefit_searchable=product_identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not product_identity['conflict'],
+                           merchant_page_check=merchant_page_check,
+                           public_price_history=public_price_history,
+                           estimate=estimate, basis=basis, public_estimate=public_estimate,
+                           profit_mode=public_estimate['mode'], buy_difference=buy_difference,
+                           buy_basis=buy_basis, below_observed=below_observed,
+                           resale_allowed=resale_allowed, resale_basis=resale_basis)
 
 
 @app.post("/opportunities/<int:opportunity_id>/details")
@@ -794,7 +1255,7 @@ def strategies():
         rows = db.execute("SELECT * FROM strategies ORDER BY id DESC").fetchall()
         notices = notice_rows(db, limit=500)
         if not show_archive:
-            notices = [row for row in notices if freshness_state(row) == "current"]
+            notices = [row for row in notices if is_current_notice(row)]
         notices = notices[:100]
         deliveries = db.execute("""SELECT d.*,o.title FROM notification_deliveries d
                                    JOIN notifications n ON n.id=d.notification_id
@@ -882,20 +1343,34 @@ def test_message_channel(channel):
 
 
 @app.post("/strategies")
-def add_strategy():
+@app.post("/strategies/<int:strategy_id>")
+def add_strategy(strategy_id=None):
     name = request.form.get("name", "").strip()
     if not name:
         flash("策略名称不能为空", "error")
         return go("strategies")
     try:
+        max_buy = cents(request.form.get("max_buy"))
+        min_profit = cents(request.form.get("min_profit"))
+        if (max_buy is None) != (min_profit is None):
+            raise ValueError("转售策略须同时填写买入含运费预算和最低净利；都留空时仅筛选普通线索")
+        if max_buy is not None and (max_buy <= 0 or min_profit <= 0):
+            raise ValueError("转售预算和最低净利必须大于 0")
+        enabled = 0 if request.form.get("enabled") == "0" else 1
+        values = (name,request.form.get("include_words", "")[:300],
+                  request.form.get("exclude_words", "")[:300],request.form.get("category", ""),
+                  max_buy,min_profit,enabled)
         with connect() as db:
-            db.execute("""INSERT INTO strategies
-                (name,include_words,exclude_words,category,max_buy_cents,min_profit_cents)
-                VALUES(?,?,?,?,?,?)""",
-                (name,request.form.get("include_words", "")[:300],
-                 request.form.get("exclude_words", "")[:300],request.form.get("category", ""),
-                 cents(request.form.get("max_buy")),cents(request.form.get("min_profit"))))
-        flash("策略已保存；目前关键词与类别用于站内新线索提醒", "ok")
+            if strategy_id is None:
+                db.execute("""INSERT INTO strategies
+                    (name,include_words,exclude_words,category,max_buy_cents,min_profit_cents,enabled)
+                    VALUES(?,?,?,?,?,?,?)""", values)
+            else:
+                updated = db.execute("""UPDATE strategies SET name=?,include_words=?,exclude_words=?,category=?,
+                    max_buy_cents=?,min_profit_cents=?,enabled=? WHERE id=?""", (*values,strategy_id))
+                if not updated.rowcount:
+                    abort(404)
+        flash("策略已保存；完整金额门槛用于转售测算候选，发送前也会重新检查。未填金额的策略只筛选普通线索。", "ok")
     except ValueError as exc:
         flash(str(exc), "error")
     return go("strategies")
@@ -920,21 +1395,45 @@ def retry_delivery(delivery_id):
 def main():
     initialize()
     command = sys.argv[1] if len(sys.argv) > 1 else "serve"
+    if command == "benefits-import":
+        if len(sys.argv)!=3:raise SystemExit("Usage: python app.py benefits-import <normalized-records.jsonl>")
+        imported=0
+        with open(sys.argv[2],encoding='utf-8') as records:
+            for line_number,line in enumerate(records,1):
+                if not line.strip():continue
+                try:record=json.loads(line);import_authorized_record(record)
+                except (json.JSONDecodeError,ValueError) as exc:
+                    raise SystemExit(f"优惠记录第 {line_number} 行未导入：{exc}") from exc
+                imported+=1
+        print({"imported":imported})
+        return
+    review_all()
     if command == "serve":
         app.run(host="127.0.0.1", port=5002, debug=False)
     elif command == "scan":
         print(scan_all())
+        print(run_cycle())
+    elif command == "review":
+        print(run_cycle())
+    elif command == "channels-refresh":
+        print(refresh_channel_candidates())
+    elif command == "channels-validate":
+        print(validate_channel_candidates())
     elif command == "worker":
         while True:
             result = scan_all(due_only=True)
             if result:
                 print(result, flush=True)
+            print(run_cycle(), flush=True)
+            print({'public_links':resolve_links()},flush=True)
+            print({'merchant_public_pages':verify_merchant_pages()},flush=True)
+            print({'benefit_pages':refresh_benefits()},flush=True)
             deliveries = dispatch_verified_alerts()
             if deliveries["sent"] or deliveries["failed"]:
                 print(deliveries, flush=True)
             time.sleep(60)
     else:
-        raise SystemExit("Usage: python app.py [serve|scan|worker]")
+        raise SystemExit("Usage: python app.py [serve|scan|review|worker|channels-refresh|channels-validate|benefits-import <normalized-records.jsonl>]")
 
 
 if __name__ == "__main__":

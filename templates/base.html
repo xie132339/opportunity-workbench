@@ -6,11 +6,11 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header><div class="shell top"><div><strong>多平台机会工作台</strong><small>本地源码开发版 · 人工核实后决策</small></div>
-    <nav><a href="{{ url_for('index') }}">机会中心</a><a href="{{ url_for('sources') }}">渠道管理</a><a href="{{ url_for('messages') }}">消息接入</a><a href="{{ url_for('strategies') }}">筛选策略与提醒</a><a href="{{ url_for('market') }}">行情与对比</a><a href="{{ url_for('trades') }}">交易与复盘</a></nav></div></header>
+  <header><div class="shell top"><div><strong>多平台机会工作台</strong><small>本地源码开发版 · 自动筛查与证据追踪</small></div>
+    <nav><a href="{{ url_for('index') }}">商品搜索</a><a href="{{ url_for('benefits_page') }}">优惠归属</a><a href="{{ url_for('sources') }}">渠道管理</a><a href="{{ url_for('verification') }}">自动核验</a><a href="{{ url_for('xianyu') }}">闲鱼任务</a><a href="{{ url_for('messages') }}">消息接入</a><a href="{{ url_for('strategies') }}">筛选策略与提醒</a><a href="{{ url_for('market') }}">行情与对比</a><a href="{{ url_for('trades') }}">交易与复盘</a></nav></div></header>
   <main class="shell">
     {% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="message {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
     {% block content %}{% endblock %}
   </main>
-  <footer class="shell">公开页面变化只是线索；报价、资格、库存与利润均需独立核实。金额为人民币，未知成本不按零计算。</footer>
+  <footer class="shell">公开页面变化只是线索；未知资格、库存、费用与利润不会被猜测或按零计算。金额为人民币。</footer>
 </body></html>

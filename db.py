@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
  external_key TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
- snippet TEXT, fingerprint TEXT NOT NULL, observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ snippet TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', fingerprint TEXT NOT NULL, observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  published_at TEXT, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  is_baseline INTEGER NOT NULL DEFAULT 0,
  UNIQUE(source_id, external_key, fingerprint)
@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
  source_id INTEGER REFERENCES sources(id), title TEXT NOT NULL, category TEXT NOT NULL,
  url TEXT, notes TEXT NOT NULL DEFAULT '', specification TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT 'pending', buy_cents INTEGER,
+ resource_kind TEXT NOT NULL DEFAULT 'unknown', topic TEXT NOT NULL DEFAULT 'other',
  offer_type TEXT NOT NULL DEFAULT 'unknown', eligibility TEXT NOT NULL DEFAULT 'unknown',
  purchase_limit INTEGER,
  buy_checked_at TEXT, buy_proof TEXT NOT NULL DEFAULT '',
@@ -104,6 +105,105 @@ CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_opportunities_status ON opportunities(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON notification_deliveries(status, id);
 CREATE INDEX IF NOT EXISTS idx_buy_checks_opp ON buy_checks(opportunity_id, checked_at);
+CREATE TABLE IF NOT EXISTS auto_reviews (
+ opportunity_id INTEGER PRIMARY KEY REFERENCES opportunities(id),
+ state TEXT NOT NULL, reason TEXT NOT NULL,
+ advertised_cents INTEGER, specification TEXT NOT NULL DEFAULT '',
+ conditions TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '',
+ checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ detail_checked_at TEXT, detail_json TEXT, detail_error TEXT,
+ attempts INTEGER NOT NULL DEFAULT 0, next_check_at TEXT
+);
+CREATE TABLE IF NOT EXISTS benefit_observations (
+ id INTEGER PRIMARY KEY, resource_url TEXT NOT NULL, checked_at TEXT NOT NULL,
+ method TEXT NOT NULL, evidence_json TEXT NOT NULL,
+ UNIQUE(resource_url,checked_at,method)
+);
+CREATE TABLE IF NOT EXISTS benefit_resources (
+ id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE, title TEXT NOT NULL, kind TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'pending', reason TEXT NOT NULL DEFAULT '',
+ source_type TEXT NOT NULL, source_url TEXT NOT NULL DEFAULT '', source_opportunity_id INTEGER,
+ origin_text TEXT NOT NULL DEFAULT '', published_at TEXT,
+ first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ target_url TEXT, evidence_json TEXT NOT NULL DEFAULT '{}', checked_at TEXT, next_check_at TEXT
+);
+CREATE TABLE IF NOT EXISTS benefit_resource_sources (
+ id INTEGER PRIMARY KEY, resource_id INTEGER NOT NULL REFERENCES benefit_resources(id),
+ source_key TEXT NOT NULL, source_type TEXT NOT NULL, source_url TEXT NOT NULL DEFAULT '',
+ source_opportunity_id INTEGER, source_title TEXT NOT NULL DEFAULT '',
+ origin_text TEXT NOT NULL DEFAULT '', published_at TEXT,
+ first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(resource_id,source_key)
+);
+CREATE TABLE IF NOT EXISTS benefit_product_relations (
+ id INTEGER PRIMARY KEY,
+ resource_id INTEGER NOT NULL REFERENCES benefit_resources(id),
+ opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
+ state TEXT NOT NULL DEFAULT 'source_linked',
+ basis TEXT NOT NULL DEFAULT '', evidence_url TEXT NOT NULL DEFAULT '',
+ checked_at TEXT, valid_until TEXT, stackable TEXT NOT NULL DEFAULT 'unknown',
+ UNIQUE(resource_id,opportunity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_benefit_product_opportunity
+ ON benefit_product_relations(opportunity_id,state,resource_id);
+CREATE TRIGGER IF NOT EXISTS benefit_source_product_relation
+AFTER INSERT ON benefit_resource_sources
+WHEN NEW.source_opportunity_id IS NOT NULL
+BEGIN
+ INSERT OR IGNORE INTO benefit_product_relations
+  (resource_id,opportunity_id,state,basis,evidence_url)
+ VALUES(NEW.resource_id,NEW.source_opportunity_id,'source_linked',
+        '优惠入口与商品出现在同一条来源记录中',NEW.source_url);
+END;
+CREATE TABLE IF NOT EXISTS link_resolutions (
+ url TEXT PRIMARY KEY, target_url TEXT, state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS merchant_page_checks (
+ opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
+ product_url TEXT NOT NULL,
+ state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+ page_title TEXT NOT NULL DEFAULT '', price_cents INTEGER, currency TEXT NOT NULL DEFAULT '',
+ availability TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL,
+ PRIMARY KEY(opportunity_id, product_url)
+);
+CREATE INDEX IF NOT EXISTS idx_merchant_page_checks_due
+ ON merchant_page_checks(next_check_at, checked_at);
+CREATE TABLE IF NOT EXISTS public_price_observations (
+ id INTEGER PRIMARY KEY,
+ opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
+ product_url TEXT NOT NULL,
+ price_cents INTEGER NOT NULL CHECK(price_cents >= 0),
+ currency TEXT NOT NULL,
+ availability TEXT NOT NULL DEFAULT '',
+ checked_at TEXT NOT NULL,
+ observation_hour TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_public_price_observations_product_time
+ ON public_price_observations(product_url, checked_at);
+CREATE TABLE IF NOT EXISTS review_runs (
+ id INTEGER PRIMARY KEY CHECK(id=1), started_at TEXT, finished_at TEXT,
+ reviewed INTEGER NOT NULL DEFAULT 0, probed INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS source_candidates (
+ id INTEGER PRIMARY KEY,
+ platform TEXT NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL,
+ url TEXT NOT NULL, method TEXT NOT NULL DEFAULT 'rsshub', parser TEXT NOT NULL DEFAULT '',
+ discovery_provider TEXT NOT NULL, discovery_repo TEXT NOT NULL,
+ discovery_path TEXT NOT NULL, discovery_url TEXT NOT NULL,
+ repo_license TEXT NOT NULL DEFAULT '', repo_pushed_at TEXT,
+ route_example TEXT NOT NULL, requires_auth INTEGER NOT NULL DEFAULT 0,
+ requires_browser INTEGER NOT NULL DEFAULT 0,
+ state TEXT NOT NULL DEFAULT 'discovered', reason TEXT NOT NULL DEFAULT '',
+ observed_items INTEGER NOT NULL DEFAULT 0,
+ last_checked TEXT, last_error TEXT, source_id INTEGER REFERENCES sources(id),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(discovery_repo, discovery_path, route_example)
+);
+CREATE INDEX IF NOT EXISTS idx_source_candidates_state
+ ON source_candidates(state, updated_at);
 """
 
 
@@ -134,10 +234,19 @@ def initialize():
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        price_observation_columns = {row[1] for row in db.execute("PRAGMA table_info(public_price_observations)")}
+        if "observation_hour" not in price_observation_columns:
+            db.execute("ALTER TABLE public_price_observations ADD COLUMN observation_hour TEXT NOT NULL DEFAULT ''")
+        db.execute("UPDATE public_price_observations SET observation_hour=substr(checked_at,1,13) WHERE observation_hour='' ")
+        db.execute("""CREATE INDEX IF NOT EXISTS idx_public_price_observations_product_hour
+            ON public_price_observations(product_url,observation_hour)""")
         trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
         if "deposit_lost_cents" not in trade_columns:
             db.execute("ALTER TABLE trades ADD COLUMN deposit_lost_cents INTEGER NOT NULL DEFAULT 0")
         opportunity_columns = {row[1] for row in db.execute("PRAGMA table_info(opportunities)")}
+        for column,default in [('resource_kind','unknown'),('topic','other')]:
+            if column not in opportunity_columns:
+                db.execute(f"ALTER TABLE opportunities ADD COLUMN {column} TEXT NOT NULL DEFAULT '{default}'")
         if "buy_checked_at" not in opportunity_columns:
             db.execute("ALTER TABLE opportunities ADD COLUMN buy_checked_at TEXT")
         if "buy_proof" not in opportunity_columns:
@@ -153,6 +262,26 @@ def initialize():
                 db.execute("UPDATE opportunities SET offer_type='suspected_new_user' WHERE id=?", (row["id"],))
         quote_columns = {row[1] for row in db.execute("PRAGMA table_info(quotes)")}
         event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
+        benefit_columns = {row[1] for row in db.execute("PRAGMA table_info(benefit_resources)")}
+        if "state" not in benefit_columns:
+            db.execute("ALTER TABLE benefit_resources ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'")
+        if "reason" not in benefit_columns:
+            db.execute("ALTER TABLE benefit_resources ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+        db.execute("""INSERT OR IGNORE INTO benefit_resource_sources
+            (resource_id,source_key,source_type,source_url,source_opportunity_id,
+             source_title,origin_text,published_at,first_seen_at,last_seen_at)
+            SELECT id,
+              CASE WHEN source_opportunity_id IS NOT NULL THEN 'opportunity:'||source_opportunity_id
+                   ELSE source_type||':'||COALESCE(NULLIF(source_url,''),url) END,
+              source_type,source_url,source_opportunity_id,title,origin_text,published_at,
+              first_seen_at,last_seen_at FROM benefit_resources""")
+        db.execute("""INSERT OR IGNORE INTO benefit_product_relations
+            (resource_id,opportunity_id,state,basis,evidence_url)
+            SELECT resource_id,source_opportunity_id,'source_linked',
+              '优惠入口与商品出现在同一条来源记录中',source_url
+            FROM benefit_resource_sources WHERE source_opportunity_id IS NOT NULL""")
+        if 'metadata_json' not in event_columns:
+            db.execute("ALTER TABLE events ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
         if "last_seen_at" not in event_columns:
             db.execute("ALTER TABLE events ADD COLUMN last_seen_at TEXT")
         db.execute("UPDATE events SET last_seen_at=observed_at WHERE last_seen_at IS NULL")

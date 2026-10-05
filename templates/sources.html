@@ -1,25 +1,50 @@
 {% extends 'base.html' %}
 {% block title %}渠道管理 · 多平台机会工作台{% endblock %}
 {% block content %}
-<h1>渠道管理</h1>
+<h1>渠道管理</h1><p>优先覆盖家用低价、免费/试用、餐饮出行及会员权益；不同栏目可能来自同一聚合上游，不当作独立比价证据。线报JSON可设1分钟检查，其他来源最低5分钟；实际更新时间见每行。</p>
+<section class="card"><p>闲鱼账号、搜索任务和采集结果统一从 <a href="{{ url_for('xianyu') }}">闲鱼任务</a> 管理。采集组件在本机后台运行，无需打开另一个管理网站。</p></section>
 <section class="card">
   <p>“提取正常”只表示当前解析出条目，不代表商品仍有货或优惠有效。原文时间未知、超过 2 小时和未来日期的条目不进入默认机会列表；失败会显示原因。</p>
   <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
 </section>
 <details class="card"><summary>新增来源</summary><div class="source-add">
-  <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSSHub 填本机 127.0.0.1:1200 的订阅 URL；闲鱼监控填本机 127.0.0.1:8000/api/results/关键词_full_data.jsonl。两项需要各自源码服务先运行并经过“现在检查”；人工线索在机会中心录入。</p>
+  <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。RSSHub 填本机 127.0.0.1:1200 的订阅 URL；闲鱼账号、任务和结果请在本站“闲鱼任务”操作；人工线索在机会中心录入。</p>
   <form method="post" action="{{ url_for('source_add') }}" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>平台<input name="platform" required></label>
     <label>入口名称<input name="name" required></label>
     <label>类别<select name="category">{% for x in ['零售优惠','二手与闲置','供货与清仓','拍卖与资产','新品与补货','服务与合作'] %}<option>{{ x }}</option>{% endfor %}</select></label>
-    <label>方式<select name="method"><option value="html">公开网页解析</option><option value="monitor">网页变化监控</option><option value="rss">公开 RSS 订阅</option><option value="rsshub">本机 RSSHub 订阅</option><option value="goofish">本机闲鱼监控结果</option><option value="manual">人工录入</option></select></label>
+    <label>方式<select name="method"><option value="xianbao">线报公开JSON</option><option value="html">公开网页解析</option><option value="monitor">网页变化监控</option><option value="rss">公开 RSS 订阅</option><option value="rsshub">本机 RSSHub 订阅</option><option value="manual">人工录入</option></select></label>
     <label>网页解析规则（仅选公开网页解析时生效）<select name="parser"><option value="smzdm">什么值得买 www.smzdm.com</option><option value="apple">Apple 中国 www.apple.com.cn</option><option value="mi">小米商城 www.mi.com</option><option value="kongfz">孔夫子旧书网 book.kongfz.com</option><option value="suning">苏宁易购 www.suning.com</option><option value="lenovo">联想商城 www.lenovo.com.cn</option><option value="honor">荣耀商城 www.honor.com</option><option value="ccgp">中国政府采购网 www.ccgp.gov.cn</option><option value="yiwugo">义乌购 www.yiwugo.com（候选）</option></select></label>
     <label>公开 HTTPS 地址<input type="url" name="url" required></label>
-    <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="60" required></label>
+    <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="1" max="1440" value="60" required></label>
     <div><button>新增来源</button></div>
   </form></div>
 </details>
+<section class="card">
+  <h2>GitHub 候选渠道 <span class="pill">{{ candidates|length }} 个</span></h2>
+  <p class="muted">GitHub CLI 动态读取公开适配目录；仓库有代码不代表渠道可用。系统会保存源码路径、更新时间、许可证与失败原因，只有本机当前真实解析出条目的候选才能接入。需要账号、私有配置、浏览器验证或反爬的路由自动隔离。</p>
+  <div class="source-actions">
+    <form method="post" action="{{ url_for('source_candidates_refresh') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>从 GitHub 刷新候选</button></form>
+  </div>
+  {% if candidates %}
+  <form id="bulk-candidates" method="post" action="{{ url_for('source_candidates_bulk') }}" class="source-toolbar">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>批量操作 <select name="action" required><option value="">请选择</option><option value="validate">实测当前数据</option><option value="promote">接入已通过候选</option></select></label>
+    <button>应用到勾选候选</button>
+  </form>
+  <div class="table-wrap"><table class="source-table">
+    <thead><tr><th>选择</th><th>渠道 / 路由</th><th>GitHub 依据</th><th>校验状态</th><th>当前结果</th></tr></thead>
+    <tbody>{% for row in candidates %}<tr>
+      <td data-label="选择">{% if row.state not in ('rejected','promoted') %}<input form="bulk-candidates" type="checkbox" name="candidate_ids" value="{{ row.id }}" aria-label="选择候选 {{ row.platform }} {{ row.name }}">{% else %}—{% endif %}</td>
+      <td data-label="渠道 / 路由"><strong>{{ row.platform }} · {{ row.name }}</strong><br><code>{{ row.route_example }}</code><br><small>{{ row.category }}</small></td>
+      <td data-label="GitHub 依据"><a href="{{ row.discovery_url }}" target="_blank" rel="noopener noreferrer">{{ row.discovery_repo }} / {{ row.discovery_path }} ↗</a><br><small>许可证 {{ row.repo_license or '未标明' }} · 仓库更新 {{ row.repo_pushed_at|cn_time if row.repo_pushed_at else '未知' }}</small></td>
+      <td data-label="校验状态"><span class="pill {{ 'healthy' if row.state in ('validated','promoted') else 'failed' if row.state in ('failed','rejected') else 'pending' }}">{{ {'discovered':'待实测','validated':'实测通过','failed':'实测失败','rejected':'自动隔离','promoted':'已接入'}.get(row.state,row.state) }}</span><br><small>{{ row.reason }}</small>{% if row.last_error %}<details><summary>失败原因</summary><small class="error-text">{{ row.last_error }}</small></details>{% endif %}</td>
+      <td data-label="当前结果">解析 {{ row.observed_items }} 条<br><small>最近实测：{{ row.last_checked|cn_time if row.last_checked else '尚未实测' }}{% if row.source_id %}<br>正式渠道 #{{ row.source_id }}{% endif %}</small></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p>尚无候选。点击“从 GitHub 刷新候选”后，再批量实测与接入。</p>{% endif %}
+</section>
 <section class="card">
   <h2>渠道列表 <span class="pill">{{ rows|length }} 个</span></h2>
   <p class="muted">先勾选渠道，再批量启用、暂停、修改检查间隔或立即检查。人工来源不参与自动检查。最近检查仅表示来源被访问，不能证明商品价格仍有效。</p>
@@ -27,19 +52,19 @@
   <form id="bulk-sources" method="post" action="{{ url_for('source_bulk') }}" class="source-toolbar">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>批量操作 <select name="action" required><option value="">请选择</option><option value="enable">启用</option><option value="pause">暂停</option><option value="interval">更新检查间隔</option><option value="scan">现在检查</option></select></label>
-    <label>间隔（分钟，仅更新频率时使用）<input name="interval_minutes" type="number" min="5" max="1440" placeholder="5–1440"></label>
+    <label>间隔（分钟，仅更新频率时使用）<input name="interval_minutes" type="number" min="1" max="1440" placeholder="线报1起，其他5起"></label>
     <button>应用到勾选渠道</button>
   </form>
   <div id="source-view" class="table-wrap"><table class="source-table">
     <thead><tr><th><label><input id="select-all-sources" type="checkbox" aria-label="全选可操作渠道"> 全选</label></th><th>平台 / 入口</th><th>方式 / 类别</th><th>状态</th><th>线索与时效</th><th>最近检查</th><th>检查间隔</th><th>单条操作</th></tr></thead>
     <tbody>{% for row in rows %}<tr>
       <td data-label="选择">{% if row.method!='manual' %}<input class="source-check" form="bulk-sources" type="checkbox" name="source_ids" value="{{ row.id }}" aria-label="选择 {{ row.platform }} {{ row.name }}">{% else %}—{% endif %}</td>
-      <td data-label="平台 / 入口"><strong>{{ row.platform }}</strong><br><a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">{{ row.name }} ↗</a></td>
-      <td data-label="方式 / 类别">{{ {'html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}<br><small>{{ row.category }}</small></td>
+      <td data-label="平台 / 入口"><strong>{{ row.platform }}</strong><br>{% if row.method=='goofish' %}<a href="{{ url_for('xianyu') }}">{{ row.name }} →</a>{% else %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">{{ row.name }} ↗</a>{% endif %}</td>
+      <td data-label="方式 / 类别">{{ {'xianbao':'线报公开JSON','html':'公开网页解析','monitor':'网页监控','rss':'公开 RSS','rsshub':'本机 RSSHub','goofish':'本机闲鱼结果','manual':'人工'}.get(row.method,row.method) }}<br><small>{{ row.category }}</small></td>
       <td data-label="状态"><span class="pill {{ row.status if row.enabled else 'manual' }}">{{ '已暂停' if not row.enabled else {'healthy':'提取正常','failed':'暂时失败','login_required':'需要登录或验证','pending':'待验证','manual':'人工'}.get(row.status,row.status) }}</span>{% if row.last_error %}<details><summary>失败原因</summary><small class="error-text">{{ row.last_error }}</small></details>{% endif %}</td>
       <td data-label="线索与时效">已存 {{ row.event_count }}<br><small>近期有时间依据 {{ row.recent_count }}<br>原文时间未知 {{ row.unknown_count }} · 未来 {{ row.future_count }}</small></td>
       <td data-label="最近检查"><small>{{ row.last_checked|cn_time if row.last_checked else '尚未检查' }}<br>成功：{{ row.last_success|cn_time if row.last_success else '尚未成功' }}</small></td>
-      <td data-label="检查间隔">{% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="source-inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="interval_minutes" type="number" min="5" max="1440" value="{{ row.interval_minutes }}" aria-label="{{ row.platform }} {{ row.name }} 检查间隔" required><button class="secondary">保存</button></form>{% else %}—{% endif %}</td>
+      <td data-label="检查间隔">{% if row.method!='manual' %}<form method="post" action="{{ url_for('source_interval',source_id=row.id) }}" class="source-inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="interval_minutes" type="number" min="1" max="1440" value="{{ row.interval_minutes }}" aria-label="{{ row.platform }} {{ row.name }} 检查间隔" required><button class="secondary">保存</button></form>{% else %}—{% endif %}</td>
       <td data-label="单条操作">{% if row.method!='manual' %}<div class="source-actions"><form method="post" action="{{ url_for('source_toggle',source_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if row.enabled else '启用' }}</button></form>{% if row.enabled %}<form method="post" action="{{ url_for('scan_one',source_id=row.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查</button></form>{% endif %}</div>{% else %}人工录入{% endif %}</td>
     </tr>{% endfor %}</tbody>
   </table></div>
