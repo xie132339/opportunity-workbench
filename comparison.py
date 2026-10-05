@@ -33,7 +33,7 @@ def merchant_identity(row):
     metadata=json.loads(row.get('metadata_json') or '{}')
     detail=json.loads(row.get('detail_json') or '{}')
     links=[row.get('url','')]+metadata.get('activity_links',[])+detail.get('activity_links',[])
-    ids=set();evidence=[]
+    ids=set()
     for link in links:
         u=urlparse(link)
         if u.scheme!='https' or u.username or u.password or u.port not in (None,443):continue
@@ -64,18 +64,18 @@ def merchant_identity(row):
             match=re.fullmatch(r'/detail-(\d+)-(\d+)\.html',u.path)
             if match:key='vip:'+match[1]+':'+match[2]
         if key:
-            ids.add(key);evidence.append(link)
+            ids.add(key)
     if len(ids)==1:
         key=next(iter(ids));platform,raw=key.split(':',1)
         label={'jd':'京东','taobao':'淘宝/天猫','pdd':'拼多多','suning':'苏宁','vip':'唯品会'}[platform]
-        return dict(key=key,label=label+'商品ID '+raw.replace(':',' / '),evidence=evidence,conflict=False)
-    if len(ids)>1:return dict(key='ambiguous:'+str(row['id']),label='原文含多个商品ID，需先拆分方案',evidence=evidence,conflict=True)
+        return dict(key=key,label=label+'商品ID '+raw.replace(':',' / '),conflict=False)
+    if len(ids)>1:return dict(key='ambiguous:'+str(row['id']),label='原文含多个商品ID，需先拆分方案',conflict=True)
     title=row.get('title','');key=product_key(title);spec=structured_spec(title)
     model=re.search(r'(?<![A-Za-z0-9])(?:[A-Za-z]{1,12}[ -]?)?\d{1,4}[A-Za-z][A-Za-z0-9+-]*|[A-Za-z]{2,12}\d{1,4}[A-Za-z0-9+-]*',title)
     ambiguous=re.search(r'任选|多规格|多款|随机|NB\s*/\s*S\s*/\s*M\s*/\s*L|S\s*/\s*M\s*/\s*L',title,re.I)
     if key and not ambiguous and (spec or model):
-        return dict(key='catalog:'+key,label='标题型号/规格指纹（非商家SKU）'+((' · '+spec) if spec else ''),evidence=[row.get('url','')],conflict=False)
-    return dict(key='title:'+key,label='仅同标题候选，缺稳定型号或规格',evidence=[],conflict=False)
+        return dict(key='catalog:'+key,label='标题型号/规格指纹（非商家SKU）'+((' · '+spec) if spec else ''),conflict=False)
+    return dict(key='title:'+key,label='仅同标题候选，缺稳定型号或规格',conflict=False)
 
 
 def assess_readiness(row, comparison=None, brief=None):
@@ -197,7 +197,7 @@ def comparison_index(rows, now=None):
         conditions=tuple(sorted(brief['qualifications']+[risk for risk in brief['audit']['risks'] if risk!='需要指定入口或操作']))
         restrictive=re.findall(r'[^，,。；;\n]{0,30}(?:限地区|限城市|限\w{1,4}地区|仅限|部分用户|部分账号|限时)[^，,。；;\n]{0,30}',body)
         conditions+=tuple(sorted(restrictive))
-        item=dict(identity_label=identity['label'],identity_evidence=identity['evidence'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
+        item=dict(identity_label=identity['label'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
                   total_cents=total,quantity=quantity,unit=Fraction(total,quantity) if total is not None and quantity else None,
                   unit_cents=round(Fraction(total,quantity)) if total is not None and quantity else None,
                   published_at=row.get('published_at'),conditions='；'.join(conditions) or '原文未注明资格限制（不代表人人适用）',
@@ -208,7 +208,7 @@ def comparison_index(rows, now=None):
     for oid,key in by_id.items():
         items=groups.get(key,[]);target=next((i for i in items if i['id']==oid),None)
         if target is None:
-            result[oid]=dict(items=items,peers=0,best_id=None,saving_cents=0,message='旧快照或尚无完整商品方案',rank=0,identity_label='',quantity_options=None)
+            result[oid]=dict(items=items,peers=0,best_id=None,saving_cents=0,message='旧快照或尚无完整商品方案',identity_label='',quantity_options=None)
             continue
         peers=[i for i in items if i['partition']==target['partition'] and not i['problems']
                and not i['optimization_gaps']]
@@ -234,6 +234,5 @@ def comparison_index(rows, now=None):
         result[oid]=dict(identity_label=target['identity_label'],quantity_options=quantity_options(items,target),items=ordered,
                         peers=len(peers) if not same_merchant_listing else min(len(peers),1),
                         best_id=best['id'] if best else None, saving_cents=saving,
-                        source_claim_delta_cents=saving,
-                        message=message,rank=1 if best and not target['problems'] and saving==0 and len({i['total_cents'] for i in peers})>1 else 0)
+                        message=message)
     return result

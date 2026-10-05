@@ -625,3 +625,9 @@ benefit_observations独立保存本次19张浏览器券卡及实际时间。后�
 - 新增4项回归覆盖同商品ID的不同包装、不同颜色、缺选中规格及详情页不得推荐另一变体。全量172项 unittest、受影响模块编译与差异检查通过；测试使用隔离合成行，没有改动正式数据库。
 
 该修复只防止现有比较引擎把已明确的不同变体混成同一方案；它不能从聚合帖推断缺失SKU/颜色/地区，也没有接入新的商家数据。完整跨平台SKU映射和同款覆盖仍未完成，C02/C04保持处理中，整体省钱/捡漏目标仍为 `PARTIAL`。
+
+## 2026-10-05 D27：移除比较结果中无消费者的重复字段
+
+全仓核查 `comparison_index()` 输出字段后，确认 `rank`、`identity_evidence`、`source_claim_delta_cents` 只有生成端、没有生产读取端；其中 rank/claim delta也可由现存 best、saving、message 与 `assess_readiness.source_claim_low`表达。删除这些重复输出及 `merchant_identity()` 中未消费的 evidence 列表收集，不改最低方案选择、金额、比较口径或证据来源。
+
+回归调整为直接断言 best/saving/message 等实际业务结果，并增加死字段不存在的断言。全量173项 unittest、comparison及测试模块编译、差异检查通过；对活动代码重新搜索，已无这些死字段的生产引用。该清理不改变任何报价结论，也不提升捡漏/利润验收状态。

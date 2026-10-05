@@ -124,6 +124,15 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['quantity_options']['count'],1)
         self.assertEqual(result[2]['quantity_options']['count'],1)
 
+    def test_comparison_response_omits_unconsumed_legacy_fields(self):
+        row=self.row(1)
+        identity=merchant_identity(row)
+        result=comparison_index([row])[1]
+        self.assertNotIn('evidence',identity)
+        self.assertNotIn('identity_evidence',result['items'][0])
+        self.assertNotIn('rank',result)
+        self.assertNotIn('source_claim_delta_cents',result)
+
     def test_unrecalculated_optimization_gap_cannot_be_a_comparison_peer(self):
         a=self.row(1,total='4.37')
         b=self.row(2,total='4.00',tail='需凑单其他商品')

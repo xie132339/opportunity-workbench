@@ -542,3 +542,10 @@ git diff --check
 环境操作：未执行数据库迁移、正式库写入、采集任务、通知发送或服务器重启。使用仓库 `.venv` 编译 `comparison.py` 和新增回归模块；隔离合成报价验证同一商家商品ID的不同包装、不同颜色各自只进入自己的数量方案，缺少选中规格的报价不给数量推荐。
 
 验证：全量 `unittest discover -s tests` 172项通过；`py_compile comparison.py tests/test_market_methods.py tests/test_core_rules.py` 与 `git diff --check` 通过。正式数据库和运行服务未被本项测试触碰。此结果验证本地分区及隔离详情页，不证明上游原文提供了完整真实SKU或完成跨平台同款匹配。
+
+
+## 2026-10-05 D27：比较结果死字段清理
+
+只读仓库引用检查确认 `rank`、`identity_evidence`、`source_claim_delta_cents` 无页面、路由或验收消费者。移除比较结果构造字段及身份证据数组收集；没有更改正式数据或启动运行服务。
+
+验证：全量 `unittest discover -s tests` 173项通过；相关模块编译和 `git diff --check` 通过；活动代码扫描仅剩测试里的“字段不应存在”断言，无运行时读取。

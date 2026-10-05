@@ -17,7 +17,8 @@ class ComparisonTests(unittest.TestCase):
     def test_compares_full_order_not_title_price(self):
         r=comparison_index([self.row(1,'10'),self.row(2,'8')])
         self.assertEqual(r[1]['saving_cents'],200);self.assertEqual(r[1]['best_id'],2)
-        self.assertEqual(r[2]['rank'],1)
+        self.assertEqual(r[2]['best_id'],2)
+        self.assertEqual(r[2]['saving_cents'],0)
 
     def test_different_counts_and_qualifications_do_not_compete(self):
         for changed in [self.row(2,'8',quantity=3),self.row(2,'8',tail='限新客首单'),self.row(2,'8',tail='仅限北京地区')]:
@@ -68,7 +69,7 @@ class ComparisonTests(unittest.TestCase):
 
     def test_identical_quotes_not_claimed_as_discount(self):
         r=comparison_index([self.row(1),self.row(2)])
-        self.assertEqual(r[1]['rank'],0);self.assertIn('相同',r[1]['message'])
+        self.assertEqual(r[1]['saving_cents'],0);self.assertIn('相同',r[1]['message'])
 
     def test_checkout_step_does_not_become_account_qualification(self):
         sku='{"activity_links":["https://item.jd.com/123.html"]}'
