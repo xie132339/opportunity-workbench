@@ -523,3 +523,8 @@ git diff --check
 全量177项 unittest 通过；编译通过；diff检查通过。隔离临时目录SQLite + Flask test client 对 `/health`、`/`、`/benefits`、`/verification`、`/sources`、`/xianyu`、`/market`、`/trades`、`/strategies`、`/messages` 请求均返回200；`/manual`、`/sources`、`/messages`、`/strategies` 不带CSRF的POST均返回400。旧 endpoint 的首页、详情、来源新增、策略新增/编辑URL反向解析通过。与HEAD旧 `app.py` AST逐项比较34个(path, endpoint, method)，缺少0、多余0；隔离CLI无效命令打印原Usage并以1退出。HTTP应用endpoint共34个，含Flask static规则共35条。
 
 代码边界：`app.py` 由1440行收至130行，现只做环境加载、Flask装配、公共模板/CSRF与CLI/worker编排。`services/` 独立管理金额、时效/资格/利润评估和通知派发；`routes/` 按搜索、机会、优惠、渠道、闲鱼、账本、通知、系统分区。无数据库迁移、线上采集、服务重启或外部消息发送；这次只证明隔离回归和请求处理行为，不能证明真实上游、价格或利润。
+
+
+## 2026-10-05 D24 撤下商家公开价历史抓取
+
+根据用户对核心业务的纠正，移除仅能读公开HTML结构化标价、且长期无有效数据的商家页采集器与P10历史低价候选模块。清除了worker调用、搜索/详情页状态与候选展示及对应模块测试；`merchant_page_checks` / `public_price_observations` 在新库不再创建。没有执行 DROP、DELETE 或清表；既有数据库内的表和记录均保留。验证：全量165项回归、Python编译、差异检查通过；活动代码无残留引用；隔离新库不创建旧表，隔离旧库初始化后两张表各1条记录仍保留。未启动真实worker或访问商城。

@@ -27,7 +27,6 @@ from autoreview import LABELS as REVIEW_LABELS, review_all, run_cycle, offer_sum
 from benefits import KINDS as BENEFIT_KINDS, run_cycle as refresh_benefits, import_authorized_record
 from channel_discovery import refresh as refresh_channel_candidates, validate_many as validate_channel_candidates
 from link_resolution import run_cycle as resolve_links
-from merchant_verification import run_cycle as verify_merchant_pages
 from notifier import active_channels, deliver
 from scanner import scan_all, scan_source, strategy_matches
 from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
@@ -116,7 +115,6 @@ def main():
                 print(result, flush=True)
             print(run_cycle(), flush=True)
             print({"public_links": resolve_links()}, flush=True)
-            print({"merchant_public_pages": verify_merchant_pages()}, flush=True)
             print({"benefit_pages": refresh_benefits()}, flush=True)
             deliveries = dispatch_verified_alerts()
             if deliveries["sent"] or deliveries["failed"]:

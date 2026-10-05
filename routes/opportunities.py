@@ -7,10 +7,8 @@ from comparison import load_comparisons, assess_readiness, merchant_identity
 from benefits import (KINDS as BENEFIT_KINDS, add as add_benefit, product_match_candidates as match_product_benefits, related as related_benefits)
 from autoreview import offer_summary, public_offer
 from offer import detected_offer_type
-from price_history import for_product as assess_public_price_history
 from scanner import _public_url
 from link_resolution import enrich as enrich_links
-from merchant_verification import summarize as summarize_merchant_page
 from services.money import COST_FIELDS, cents
 from services.opportunity_analysis import (estimated_profit, historical_buy_assessment, public_profit_estimate, resale_assessment)
 from routes.common import go
@@ -41,11 +39,6 @@ def opportunity(opportunity_id):
                             sync_meta=dict(checked_at=review['checked_at'],detail_checked_at=review['detail_checked_at'],detail_error=review['detail_error']) if review else {})
         opp_for_merchant=dict(opp,detail_json=review['detail_json'] if review else '{}')
         product_identity=merchant_identity(opp_for_merchant)
-        merchant_checks={(r['opportunity_id'],r['product_url']):dict(r) for r in db.execute(
-            'SELECT * FROM merchant_page_checks WHERE opportunity_id=?',(opportunity_id,)).fetchall()}
-        merchant_page_check=summarize_merchant_page(opp_for_merchant,merchant_checks)
-        public_price_history = assess_public_price_history(db, merchant_page_check.get('product_url'),
-                                                           merchant_page_check)
         readiness=assess_readiness(opp,comparison,brief)
         benefit_relations=related_benefits(db,opportunity_id)
         product_benefit_candidates=match_product_benefits(db,opp_for_merchant)
@@ -61,8 +54,6 @@ def opportunity(opportunity_id):
                            readiness=readiness,confirmed_benefits=confirmed_benefits,source_linked_benefits=source_linked_benefits,
                            product_benefit_candidates=product_benefit_candidates,
                            product_benefit_searchable=product_identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not product_identity['conflict'],
-                           merchant_page_check=merchant_page_check,
-                           public_price_history=public_price_history,
                            estimate=estimate, basis=basis, public_estimate=public_estimate,
                            profit_mode=public_estimate['mode'], buy_difference=buy_difference,
                            buy_basis=buy_basis, below_observed=below_observed,

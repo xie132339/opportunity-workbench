@@ -92,7 +92,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertNotIn('/opportunities/1',c.get('/?resource=purchase').get_data(as_text=True))
             self.assertNotIn('价格未明确',c.get('/?resource=coupon').get_data(as_text=True))
 
-    def test_source_price_is_visible_without_unreachable_merchant_filter(self):
+    def test_source_price_visible_without_retired_public_history_widget(self):
         body='该价格商品规格：100抽3层6包\n活动售价5元，下单1件，实付5元，包邮'
         self.seed('某品牌抽纸100抽3层6包 5元',body,'observed',500)
         with app.test_client() as c:
@@ -113,7 +113,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('/opportunities/1',archive);self.assertIn('来源原文报价 · 1件',archive)
             cards=c.get('/?layout=cards').get_data(as_text=True)
             self.assertIn('可分析来源报价',cards)
-            self.assertIn('公开商品页观测：',cards)
+            self.assertNotIn('公开商品页观测：',cards)
             self.assertIn('来源原文报价 · 1件',cards)
             detail=c.get('/opportunities/1').get_data(as_text=True)
             self.assertIn('本商品当前结论',detail);self.assertIn('自动分析资料',detail);self.assertIn('同口径价格比较',detail)

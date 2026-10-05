@@ -160,28 +160,6 @@ CREATE TABLE IF NOT EXISTS link_resolutions (
  url TEXT PRIMARY KEY, target_url TEXT, state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
  checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS merchant_page_checks (
- opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
- product_url TEXT NOT NULL,
- state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
- page_title TEXT NOT NULL DEFAULT '', price_cents INTEGER, currency TEXT NOT NULL DEFAULT '',
- availability TEXT NOT NULL DEFAULT '', checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL,
- PRIMARY KEY(opportunity_id, product_url)
-);
-CREATE INDEX IF NOT EXISTS idx_merchant_page_checks_due
- ON merchant_page_checks(next_check_at, checked_at);
-CREATE TABLE IF NOT EXISTS public_price_observations (
- id INTEGER PRIMARY KEY,
- opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
- product_url TEXT NOT NULL,
- price_cents INTEGER NOT NULL CHECK(price_cents >= 0),
- currency TEXT NOT NULL,
- availability TEXT NOT NULL DEFAULT '',
- checked_at TEXT NOT NULL,
- observation_hour TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_public_price_observations_product_time
- ON public_price_observations(product_url, checked_at);
 CREATE TABLE IF NOT EXISTS review_runs (
  id INTEGER PRIMARY KEY CHECK(id=1), started_at TEXT, finished_at TEXT,
  reviewed INTEGER NOT NULL DEFAULT 0, probed INTEGER NOT NULL DEFAULT 0
@@ -234,12 +212,6 @@ def initialize():
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
-        price_observation_columns = {row[1] for row in db.execute("PRAGMA table_info(public_price_observations)")}
-        if "observation_hour" not in price_observation_columns:
-            db.execute("ALTER TABLE public_price_observations ADD COLUMN observation_hour TEXT NOT NULL DEFAULT ''")
-        db.execute("UPDATE public_price_observations SET observation_hour=substr(checked_at,1,13) WHERE observation_hour='' ")
-        db.execute("""CREATE INDEX IF NOT EXISTS idx_public_price_observations_product_hour
-            ON public_price_observations(product_url,observation_hour)""")
         trade_columns = {row[1] for row in db.execute("PRAGMA table_info(trades)")}
         if "deposit_lost_cents" not in trade_columns:
             db.execute("ALTER TABLE trades ADD COLUMN deposit_lost_cents INTEGER NOT NULL DEFAULT 0")

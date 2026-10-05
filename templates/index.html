@@ -20,7 +20,6 @@
   <p class="muted">本视图保留缺价、规格/数量缺口、自动复查排队和报价冲突等待补证据线索；它们不等于通过商品搜索准入。过期、来源失效和优惠资源不作为当前商品线索。</p>
   {% endif %}
   {% endif %}
-  <p class="muted">本页公开商品页读到标价 {{ merchant_page_counts.get('public_price_observed',0) }} 条；短链待安全解析 {{ merchant_page_counts.get('awaiting_link',0) }} 条；页面无价或未取得可读商品页 {{ rows|length-merchant_page_counts.get('public_price_observed',0)-merchant_page_counts.get('awaiting_link',0) }} 条。</p>
   {% if query %}<details class="source-coverage"><summary>本次命中 {{ matched_enabled_source_count }} / {{ enabled_source_count }} 个已启用采集入口；展开查看未命中来源</summary><ul>{% for source in source_coverage %}<li><span>{{ source.platform }} · {{ source.name }}</span><small>{% if source.enabled %}启用 · {{ source.status }}{% else %}已暂停{% endif %} · 命中 {{ source.match_count }} 条{% if source.last_success %} · 最近成功 {{ source.last_success|cn_time }}{% endif %}</small>{% if source.last_error and source.match_count==0 %}<small class="muted">{{ source.last_error[:140] }}</small>{% endif %}</li>{% endfor %}</ul><small>未命中表示该入口在当前关键词、时效和筛选条件下没有记录，不表示对应商城没有商品。采集来源与购买平台是两类数据。</small></details>{% endif %}
 </section>
 
@@ -126,7 +125,6 @@
     <div><span>购买数量</span><b>{% if brief.quantity %}{{ brief.quantity }} 件{% else %}尚未确认{% endif %}</b></div>
     <div><span>优惠信息</span><b>{{ brief.promotion_sync.label }}</b><small class="clamp-2">{{ brief.promotion_sync.explanation }}</small></div>
     <div><span>原文发布时间</span><b>{{ row.published_at|cn_time }}</b></div>
-    <div><span>公开商品页观测：</span><b>{{ row.merchant_page_check.reason }}</b>{% if row.merchant_page_check.checked_at %}<small>检查于 {{ row.merchant_page_check.checked_at|cn_time }}</small>{% endif %}</div>
   </div>
 
   {% if brief.promotions or brief.qualifications %}<div class="offer-tags promotion-tags">{% for item in brief.promotions + brief.qualifications %}<span>{{ item }}</span>{% endfor %}<small>原文提及，不代表已确认可用或可叠加</small></div>{% endif %}

@@ -6,7 +6,6 @@ from autoreview import offer_summary
 from benefits import linked_counts as linked_benefit_counts
 from offer import RESOURCE_LABELS, TOPIC_LABELS, paper_package_prices
 from link_resolution import enrich as enrich_links
-from merchant_verification import summarize as summarize_merchant_page
 from services.money import cents
 from services.opportunity_analysis import is_current_notice, is_evidence_candidate, notice_rows
 
@@ -232,20 +231,10 @@ def index():
         matched_enabled_source_count = sum(bool(source['enabled']) and source['match_count'] > 0 for source in source_coverage)
         alerts = sum(is_current_notice(row) for row in notice_rows(db, "pending"))
         benefit_link_counts=linked_benefit_counts(db,[row['id'] for row in rows])
-        merchant_checks={(r['opportunity_id'],r['product_url']):dict(r) for r in db.execute(
-            'SELECT * FROM merchant_page_checks WHERE opportunity_id IN (' + ','.join('?' for _ in rows) + ')',
-            [row['id'] for row in rows]).fetchall()} if rows else {}
-        for row in rows:
-            row['merchant_page_check']=summarize_merchant_page(dict(row),merchant_checks)
-        merchant_page_counts={}
-        for row in rows:
-            state=row['merchant_page_check']['state']
-            merchant_page_counts[state]=merchant_page_counts.get(state,0)+1
     return render_template("index.html", rows=rows, sources=sources,
                            benefit_link_counts=benefit_link_counts,
                            comparisons=comparisons,sort_mode=sort_mode,
                            search_assessments=search_assessments,quality_counts=quality_counts,
-                           merchant_page_counts=merchant_page_counts,
                            candidate_pool_count=candidate_pool_count, source_offer_count=source_offer_count,
                            alerts=alerts, query=query, category=category, status=status,
                            platform=platform, budget_text=budget_text,
