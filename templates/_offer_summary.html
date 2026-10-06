@@ -7,7 +7,7 @@
 {% elif brief.quantity == 1 %}
 <div><span class="muted">来源原文声称价 · 1件</span><div><strong>{{ money(brief.total_cents) }}</strong></div><small>单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。</small></div>
 {% else %}
-<div><span class="muted">折合每件（由整单换算）</span><div><strong>{{ money(brief.display_unit_cents) }}</strong><span> / 件</span></div></div>
+<div><span class="muted">整单声称价算术均摊 · 不代表该SKU商家单价</span><div><strong>{{ money(brief.display_unit_cents) }}</strong><span> / 件</span></div></div>
 <div><span class="muted">来源原文声称整单价 · {{ brief.quantity }}件</span><div class="order-price">{{ money(brief.total_cents) }}</div><small>显示来源公开声称值</small></div>
 {% endif %}
 {% else %}

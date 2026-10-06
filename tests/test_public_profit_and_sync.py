@@ -74,6 +74,10 @@ class PublicProfitTests(unittest.TestCase):
         topic = resource_topic(bath, '国内折扣 / 海外折扣')
         self.assertEqual(topic, 'beauty')
         self.assertEqual(product_subcategory(bath, topic), '洗护')
+        toothpaste = '参半3天白高纯度葡萄籽牙膏120g 任拍3件'
+        topic = resource_topic(toothpaste, '食品优惠')
+        self.assertEqual(topic, 'beauty')
+        self.assertEqual(product_subcategory(toothpaste, topic), '洗护')
         oranges = '巨无霸 四川眉山 特大果 爱媛38号果冻橙 4.5斤装'
         topic = resource_topic(oranges, '公开优惠线索')
         self.assertEqual(topic, 'food')

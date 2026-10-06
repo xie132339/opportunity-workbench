@@ -238,11 +238,12 @@ class AdmissionTests(unittest.TestCase):
         self.seed('某品牌抽纸100抽3层6包 5元',body,'observed',1000)
         with app.test_client() as c:
             text=c.get('/?view=all&layout=cards').get_data(as_text=True)
-        self.assertIn('折合每件（由整单换算）',text)
+        self.assertIn('整单声称价算术均摊 · 非商家单价',text)
         self.assertIn('来源原文整单声称价 · 2件',text)
         self.assertIn('¥5.00',text)
         self.assertIn('¥10.00',text)
         with app.test_client() as c:
             detail=c.get('/opportunities/1').get_data(as_text=True)
         self.assertIn('整单 ¥10.00',detail)
-        self.assertIn('折合每件 ¥5.00',detail)
+        self.assertIn('整单声称价算术均摊 · 不代表该SKU商家单价',detail)
+        self.assertIn('¥5.00',detail)

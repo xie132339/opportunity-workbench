@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from db import connect
-from pricing import discount_audit, purchase_terms, promotion_mentions
+from pricing import discount_audit, explicit_source_order_claim, purchase_terms, promotion_mentions
 from xianbao import extract_links
 from offer import resource_kind, resource_topic, RESOURCE_LABELS
 from services.source_freshness import is_catalog_listing, source_snapshot_is_current
@@ -55,7 +55,8 @@ def supported(url):
             and re.fullmatch(r'/p/\d+/', u.path) is not None and not u.query)
 
 
-def detail_probe_needed(url, title='', body='', detail=None):
+def detail_probe_needed(url, title='', body='', detail=None, published_at=None,
+                        body_truncated=False):
     """Fetch supported pages only when current evidence cannot form a complete plan."""
     if supports_apple_catalog_product(url):
         return True
@@ -72,6 +73,18 @@ def detail_probe_needed(url, title='', body='', detail=None):
         offer = public_offer(url, plan_body, plan_title)
         return bool(offer.get('error') or offer.get('total_cents') is None
                     or not offer.get('quantity'))
+    if urlparse(url or '').hostname in ('new.ixbk.net', 'www.smzdm.com'):
+        detail = detail or {}
+        plan_title = detail.get('title') or title
+        plan_body = detail.get('conditions') or body
+        offer = public_offer(url, plan_body, plan_title)
+        complete_plan = (not offer.get('error') and offer.get('total_cents') is not None
+                         and bool(offer.get('quantity')))
+        reliable_time = published_at or detail.get('published_at')
+        # These feeds already carry their article body. Avoid spending the
+        # bounded detail queue when the source claim and publication time are
+        # complete; incomplete, truncated or undated items still need a read.
+        return bool(body_truncated or not reliable_time or not complete_plan)
     return supported(url)
 
 
@@ -146,11 +159,16 @@ def public_offer(url, body, title=''):
                       or (u.hostname == 'new.ixbk.net' and re.fullmatch(r'/[a-zA-Z0-9_-]+/\d+\.html',u.path)))
     body = (body or '').split('商品介绍')[0].split('品牌介绍')[0]
     fields = purchase_terms(body)
+    order_claim = explicit_source_order_claim(body, title) if supported_plan else dict(
+        total_cents=None, quantity=None, error='')
     # Other sources may provide the same explicit full purchase plan. A net-after-rebate claim
     # is preserved for display, but never becomes the cash order total.
     if not supported_plan and not ((fields['total'] and fields['quantity']) or fields['net_after_rebate']):
         return {}
     unit, total, counts, net_after = (set(fields[key]) for key in ('unit','total','quantity','net_after_rebate'))
+    if order_claim['total_cents'] is not None:
+        total.add(order_claim['total_cents'])
+        counts.add(order_claim['quantity'])
     if title and resource_kind(title,body)=='purchase':
         if not counts:
             title_counts={int(v) for v in re.findall(r'(?:购买|需买|下单|拍|买)\s*(\d+)\s*件(?!\s*(?:返|送|赠|享|折))',title)}
@@ -165,6 +183,8 @@ def public_offer(url, body, title=''):
                   store=store[1].strip() if store else '', error='')
     if any(len(values)>1 for values in (unit,total,counts,net_after)):
         result['error'] = '原文购买方案包含多个单价、总价或件数，无法确定同一报价口径'
+    elif order_claim['error']:
+        result['error'] = order_claim['error']
     elif (result['unit_cents'] is not None and result['total_cents'] is not None and result['quantity']
           and abs(result['unit_cents']*result['quantity']-result['total_cents'])>result['quantity']):
         result['error'] = '原文单件价乘购买件数与整单报价不一致'
@@ -536,7 +556,12 @@ def classify(row, now, duplicate=False):
             and timedelta(0) <= now - page_checked <= timedelta(minutes=30)):
         return state('missing_price', '商家商品详情明确标记已下架；主价区没有当前报价，页面其他区域金额不采纳')
     listing_card_observation = detail.get('evidence_kind') == 'apple_catalog_card'
-    if detail_probe_needed(row['url'], row['title'], snippet, detail) and not listing_card_observation:
+    metadata = json.loads(row.get('metadata_json') or '{}')
+    if detail_probe_needed(
+            row['url'], row['title'], snippet, detail,
+            published_at=row.get('published_at') or detail.get('published_at'),
+            body_truncated=bool(metadata.get('content_truncated') or metadata.get('body_truncated'))
+    ) and not listing_card_observation:
         if row.get('detail_error'):
             return state('retry', '详情访问失败；按退避时间自动重试，不认定价格有效')
         checked = moment(row.get('detail_checked_at'))
@@ -642,9 +667,12 @@ def run_cycle(limit=6, opportunity_id=None):
         with connect() as db:
             queue = db.execute('''SELECT a.*,o.url,o.event_id FROM auto_reviews a
                 JOIN opportunities o ON o.id=a.opportunity_id
+                JOIN events e ON e.id=o.event_id
                 WHERE a.state IN ('queued','retry') AND (a.next_check_at IS NULL OR a.next_check_at<=CURRENT_TIMESTAMP)
                 AND (? IS NULL OR o.id=?)
-                ORDER BY a.detail_checked_at IS NOT NULL,a.next_check_at,o.id DESC LIMIT ?''', (opportunity_id,opportunity_id,limit)).fetchall()
+                ORDER BY COALESCE(e.published_at,e.last_seen_at,e.observed_at,o.created_at),
+                    a.next_check_at,a.detail_checked_at IS NOT NULL,o.id ASC LIMIT ?''',
+                (opportunity_id,opportunity_id,limit)).fetchall()
         from scanner import _fetch
         for row in queue:
             if not supported(row['url']):

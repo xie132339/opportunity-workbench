@@ -66,6 +66,10 @@ def resource_kind(title, body=''):
 
 
 def resource_topic(title, source_category=''):
+    # Product identity is more specific than a broad feed label or ingredient
+    # word (for example, grape-seed toothpaste is personal care, not produce).
+    if re.search(r'牙膏', title or '', re.I):
+        return 'beauty'
     categories=[('home',r'家用|日用|家居|家清|厨'),('food',r'食品|饮料|果蔬|餐饮'),
                 ('beauty',r'美妆|个护'),('baby',r'母婴'),('pet',r'宠物'),
                 ('travel',r'出行'),('digital',r'会员|数字'),('electronics',r'数码|手机')]

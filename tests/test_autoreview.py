@@ -28,6 +28,9 @@ from scenario_groups import grouped_scenarios
         'challenge_is_failure',
         'guangdiu_detail_is_main_article_scoped',
     ),
+    'test_complete_feed_plans_do_not_wait_for_redundant_detail_reads': (
+        'complete_source_plan_skips_unnecessary_page_fetch',
+    ),
     'test_selected_specification_evidence_boundaries': (
         'selected_spec_normalization_and_conflict_regressions',
         'title_spec_is_only_a_hint_until_source_selects_the_priced_variant',
@@ -154,6 +157,62 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertIn('满14元减5元', detail['conditions'])
         self.assertNotIn('99.9元', detail['evidence'])
         self.assertTrue(ar.detail_probe_needed(url, detail['title'], detail['conditions']))
+
+    def _case_complete_source_plan_skips_unnecessary_page_fetch(self):
+        title = '某品牌抽纸100抽3层6包 5元'
+        body = '购买方案 1 店铺 某京东自营店 2 加购 购买1件 3 实付5元（实付单件5元）'
+        published = ar.stamp(self.now)
+        for url in ('https://new.ixbk.net/haodan/1.html',
+                    'https://www.smzdm.com/p/123/'):
+            with self.subTest(url=url):
+                self.assertFalse(ar.detail_probe_needed(
+                    url, title, body, published_at=published))
+                self.assertTrue(ar.detail_probe_needed(
+                    url, title, '商品价5元', published_at=published))
+                self.assertTrue(ar.detail_probe_needed(
+                    url, title, body, published_at=None))
+                self.assertTrue(ar.detail_probe_needed(
+                    url, title, body, published_at=published, body_truncated=True))
+        row = dict(self.row, title=title, url='https://new.ixbk.net/haodan/1.html',
+                   snippet=body, published_at=published)
+        result = ar.classify(row, self.now)
+        self.assertIn(result['state'], ('observed', 'conditional'))
+        self.assertEqual(result['advertised_cents'], 500)
+
+        # Real feed wording binds the original amount to an order action but
+        # does not use the parser's older “实付” label.
+        paper_title = '清风卡皮巴拉抽纸4层250抽*10提拍4件 79.6元'
+        paper_body = 'JD【79.60/拍4件】清风卡皮巴拉悬挂式抽纸，共到手40提，折1.99元/提'
+        paper_url = 'https://new.ixbk.net/haodan/2.html'
+        paper = ar.public_offer(paper_url, paper_body, paper_title)
+        self.assertEqual((paper['total_cents'], paper['quantity']), (7960, 4))
+        self.assertFalse(paper['error'])
+        self.assertFalse(ar.detail_probe_needed(
+            paper_url, paper_title, paper_body, published_at=published))
+        paper_row = dict(self.row, title=paper_title, url=paper_url, snippet=paper_body)
+        paper_review = ar.classify(paper_row, self.now)
+        self.assertIn(paper_review['state'], ('observed', 'conditional'))
+        self.assertEqual(paper_review['advertised_cents'], 7960)
+        from services.product_search import listing_quote
+        paper_brief = ar.offer_summary(paper_title, paper_url, paper_body)
+        displayed = listing_quote({'auto_state': paper_review['state']}, paper_brief)
+        self.assertEqual(displayed['kind'], 'source_claim')
+        self.assertIn('不是商家结算价', displayed['note'])
+
+        multi_buy_title = '王饱饱麦片拍8件29.6元'
+        multi_buy_body = '拍8件券后【29.6元】包邮，任选8件'
+        multi_buy = ar.public_offer(paper_url, multi_buy_body, multi_buy_title)
+        self.assertEqual((multi_buy['total_cents'], multi_buy['quantity']), (2960, 8))
+
+        cross_line_title = '参半牙膏120g/100g任选 任拍3件 领80券 到手29.7元'
+        cross_line_body = '领59-10券：参半两款牙膏任拍3，领80券，到手29.7'
+        cross_line = ar.public_offer(paper_url, cross_line_body, cross_line_title)
+        self.assertEqual((cross_line['total_cents'], cross_line['quantity']), (2970, 3))
+
+        per_item_only = ar.public_offer(paper_url, '拍3件21.4元/件', '防晒霜拍3件21.4元/件')
+        self.assertIsNone(per_item_only['total_cents'])
+        mismatched_title = ar.public_offer(paper_url, '79.60/拍4件', '纸品89元')
+        self.assertIsNone(mismatched_title['total_cents'])
 
     def _case_detail_no_comments_or_update_time(self):
         r = ar.parse_detail('''<h1 class="J_title">88VIP 抽纸24包90抽</h1>
@@ -300,7 +359,7 @@ class ReviewRulesTests(unittest.TestCase):
         multi=ar.public_offer(url,'','纸尿裤NB/S/M/L 多规格 20.49元')
         self.assertEqual(multi['selected_spec'],'')
         two=ar.public_offer(url,'','拖鞋拍2件 10.8元')
-        self.assertEqual((two['total_cents'],two['quantity']),(None,2))
+        self.assertEqual((two['total_cents'],two['quantity']),(1080,2))
 
     def _case_explicit_order_body_keeps_total_and_quantity(self):
         offer=ar.public_offer('https://new.ixbk.net/haodan/1.html','购买1件，实付59元',
@@ -357,6 +416,9 @@ class ReviewRulesTests(unittest.TestCase):
         'guangdiu_detail_cycle_extracts_and_displays_headline_money_without_promoting_it',
         'merchant_product_detail_cycle_upgrades_missing_catalog_price_from_exact_offer',
         'honor_page_estimate_renders_as_a_claim_without_entering_search_or_budget',
+    ),
+    'test_detail_probe_queue_serves_oldest_fresh_source_first': (
+        'oldest_fresh_detail_is_probed_before_newer_posts',
     ),
 })
 class ReviewPipelineTests(unittest.TestCase):
@@ -523,6 +585,53 @@ class ReviewPipelineTests(unittest.TestCase):
 
         with patch.object(ar, 'review_all', return_value={'observed': 1}):
             self.assertEqual(ar.run_cycle(), {'counts': {'observed': 1}, 'probed': 0})
+
+    def _case_oldest_fresh_detail_is_probed_before_newer_posts(self):
+        now = datetime.now(ar.timezone.utc).replace(tzinfo=None)
+        urls = [f'https://new.ixbk.net/haodan/{n}.html' for n in (11, 12, 13)]
+        rows = [
+            (2, 11, '较早商品 200ml 19元', urls[0], ar.stamp(now-timedelta(minutes=95))),
+            (3, 12, '中间商品 200ml 20元', urls[1], ar.stamp(now-timedelta(minutes=45))),
+            (4, 13, '最新商品 200ml 21元', urls[2], ar.stamp(now-timedelta(minutes=2))),
+        ]
+        with db.connect() as c:
+            c.execute("UPDATE opportunities SET status='expired' WHERE id=1")
+            for oid, eid, title, url, published in rows:
+                c.execute('''INSERT INTO events(id,source_id,external_key,title,url,snippet,
+                    fingerprint,published_at,last_seen_at) VALUES(?,1,?,?,?, ?,?,?,CURRENT_TIMESTAMP)''',
+                    (eid, str(eid), title, url, '正文稍后详述', f'fp-{eid}', published))
+                c.execute('''INSERT INTO opportunities(id,event_id,source_id,title,category,url)
+                    VALUES(?,?,1,?,'零售优惠',?)''', (oid, eid, title, url))
+        with patch('scanner._fetch', side_effect=PermissionError('fixture only')) as fetch:
+            result = ar.run_cycle(limit=1)
+        self.assertEqual(result['probed'], 1)
+        fetch.assert_called_once_with(urls[0])
+
+        # A catalog listing has no publication date: order it by the latest
+        # item observation, not by its original discovery timestamp.
+        older_seen = ar.stamp(now-timedelta(minutes=10))
+        newer_seen = ar.stamp(now-timedelta(minutes=2))
+        catalog_urls = [
+            'https://product.suning.com/0000000000/21.html',
+            'https://product.suning.com/0000000000/22.html',
+        ]
+        with db.connect() as c:
+            c.execute("UPDATE auto_reviews SET next_check_at=datetime('now','+30 minutes') WHERE opportunity_id IN (2,3,4)")
+            c.execute("UPDATE sources SET parser='suning',platform='苏宁',last_success=CURRENT_TIMESTAMP WHERE id=1")
+            for oid,eid,title,url,last_seen in (
+                (5,15,'目录商品旧观察 100ml',catalog_urls[0],older_seen),
+                (6,16,'目录商品新观察 100ml',catalog_urls[1],newer_seen),
+            ):
+                c.execute('''INSERT INTO events(id,source_id,external_key,title,url,snippet,
+                    fingerprint,observed_at,published_at,last_seen_at)
+                    VALUES(?,1,?,?,?,'',?, '2026-10-02 01:02:05',NULL,?)''',
+                    (eid,str(eid),title,url,f'fp-{eid}',last_seen))
+                c.execute('''INSERT INTO opportunities(id,event_id,source_id,title,category,url)
+                    VALUES(?,?,1,?,'零售优惠',?)''',(oid,eid,title,url))
+        with patch('scanner._fetch', side_effect=PermissionError('fixture only')) as fetch:
+            result = ar.run_cycle(limit=1)
+        self.assertEqual(result['probed'], 1)
+        fetch.assert_called_once_with(catalog_urls[0])
 
 if __name__ == '__main__':
     unittest.main()

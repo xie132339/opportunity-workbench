@@ -1,5 +1,6 @@
 """Evidence excerpts and explicit arithmetic only; never infer eligibility or stack coupons."""
 import re
+import unicodedata
 from itertools import permutations
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -61,6 +62,61 @@ def promotion_mentions(text):
 
 def amount(value):
     return int(Decimal(value) * 100)
+
+
+def explicit_source_order_claim(body, title=''):
+    """Bind a source-stated amount to an explicit purchase action and item count.
+
+    This is only a claim from the source text. It does not assert that a merchant
+    page, account, coupon, inventory, or checkout will honor the amount.
+    """
+    body = unicodedata.normalize('NFKC', (body or '').split('商品介绍')[0].split('品牌介绍')[0])
+    title = unicodedata.normalize('NFKC', title or '')
+    plan_text = title + '\n' + body
+    claims = set()
+    amount_re = r'('+NUMBER+r')'
+    forward = re.compile(
+        r'(?:拍|下单|购买|买)\s*(\d+)\s*件\s*'
+        r'(?:(?:券后|到手|实付|合计|总计|共计|共|一共)\s*)?'
+        r'[【〔\[（(]?\s*[¥￥]?\s*'+amount_re+r'\s*元(?!起)'
+        r'(?!\s*[/／]\s*(?:件|个|提|包|卷|片|支|盒|瓶))')
+    for match in forward.finditer(plan_text):
+        claims.add((amount(match.group(2)), int(match.group(1))))
+
+    title_prices = set()
+    for match in re.finditer(r'[¥￥]\s*('+NUMBER+r')|(?<![\d.])('+NUMBER+r')\s*元', title):
+        title_prices.add(amount(match.group(1) or match.group(2)))
+    reverse = re.compile(
+        r'(?P<price>(?:[¥￥]\s*)?'+NUMBER+r'(?:\s*元)?)\s*[/／]\s*'
+        r'(?:拍|下单|购买|买)\s*(?P<quantity>\d+)\s*件')
+    for match in reverse.finditer(plan_text):
+        token = match.group('price')
+        cents = amount(re.sub(r'[¥￥元\s]', '', token))
+        if re.search(r'[¥￥]|元', token) or cents in title_prices:
+            claims.add((cents, int(match.group('quantity'))))
+
+    action_quantities = {
+        int(value) for value in re.findall(
+            r'(?:任拍|拍|下单|购买|需买|买)\s*(\d+)\s*件'
+            r'(?!\s*(?:返|送|赠|享|折))', plan_text)
+    }
+    labeled_totals = {
+        amount(value) for value in re.findall(
+            r'(?<!返现后)(?<!返款后)(?<!返利后)'
+            r'(?:最终)?(?:实付|到手(?:价)?|券后|合计|总计|共计)\s*'
+            r'(?:低至)?[【〔\[（(]?\s*[¥￥]?('+NUMBER+r')\s*元(?!起)'
+            r'(?!\s*[/／]\s*(?:件|个|提|包|卷|片|支|盒|瓶))', plan_text)
+    }
+    if len(action_quantities) == 1 and len(labeled_totals) == 1:
+        claims.add((next(iter(labeled_totals)), next(iter(action_quantities))))
+
+    if len(claims) > 1:
+        return dict(total_cents=None, quantity=None,
+                    error='原文包含多个“购买件数—金额”方案，不能合并成一条报价')
+    if not claims:
+        return dict(total_cents=None, quantity=None, error='')
+    total_cents, quantity = next(iter(claims))
+    return dict(total_cents=total_cents, quantity=quantity, error='')
 
 
 def discount_audit(title, body):
