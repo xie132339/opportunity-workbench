@@ -1,0 +1,28 @@
+{% set source_claims = item.discount_claims or [] %}
+{% set page_claims = item.page_claims or [] %}
+{% if source_claims or page_claims %}
+<details class="benefit-claim-evidence">
+  <summary>自动抽取 {{ source_claims|length + page_claims|length }} 条优惠候选（逐条未核实）</summary>
+  <p class="muted">解析结果只说明对应文字出现在来源或公开入口页面；不证明券有效、商品适用、资格满足、库存存在或能够叠加。</p>
+  <ul>
+    {% for claim in source_claims %}
+    <li>来源文案：<code>{{ claim.matched_text }}</code>
+      {% if claim.mechanism == 'coupon_face_value_claim' %} · 券面额候选，不代表实际减免
+      {% elif claim.mechanism == 'noncash_credit_claim' %} · 积分/金币等非现金权益，不计入现金扣款
+      {% elif claim.mechanism == 'random_reward_claim' %} · {% if claim.claim_mode == 'source_claimed_minimum_reward' %}来源声称抽奖最低奖励；保底规则与兑现未核实{% else %}来源声称曾抽到奖励；不代表其他参与者可得{% endif %}，不计为商品现金折价
+      {% elif claim.mechanism == 'subsidy_rate_claim' %} · 补贴比例声称，基数、地区和资格未核实
+      {% elif claim.mechanism == 'subsidy_reduction_claim' %} · 补贴金额声称，商品范围和资格未核实
+      {% elif claim.mechanism == 'new_product_gift_claim' %} · 新品礼金声称，适用范围未核实
+      {% else %} · 金额/折扣规则声称，适用范围和领取资格未核实{% endif %}
+      {% if claim.occurrence_count > 1 %} · 原文命中 {{ claim.occurrence_count }} 处{% endif %}
+      {% if claim.evidence_excerpt %}<br><small>原文依据：<code>{{ claim.evidence_excerpt }}</code></small>{% endif %}
+    </li>
+    {% endfor %}
+    {% for claim in page_claims %}
+    <li>优惠入口页面：<code>{{ claim.matched_text }}</code> · 页面文字候选；本次页面读取本身不证明仍有效或适用本商品
+      {% if claim.evidence_excerpt %}<br><small>页面依据：<code>{{ claim.evidence_excerpt }}</code></small>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}

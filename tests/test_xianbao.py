@@ -142,7 +142,7 @@ class XianbaoTests(unittest.TestCase):
             page=response.get_data(as_text=True)
         self.assertEqual(response.status_code,200)
         self.assertIn('5片 × 54小包',page)
-        self.assertIn('来源报价、状态与复查时间来自最近一次核验快照',page)
+        self.assertIn('来源金额、状态与复查时间来自最近一次核验快照',page)
         self.assertIn('自动复查排队中',page)
         with db.connect() as c:
             row=c.execute('SELECT state,specification FROM auto_reviews WHERE opportunity_id=1').fetchone()

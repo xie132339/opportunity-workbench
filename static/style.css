@@ -113,17 +113,16 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 /* Keep product-list columns readable and turn the table into labeled rows on narrow screens. */
 .offer-list-view{min-width:0}
 .offer-list-table{width:100%;min-width:1120px;table-layout:fixed}
-.offer-list-table .offer-col-product{width:25%}
-.offer-list-table .offer-col-price{width:14%}
-.offer-list-table .offer-col-store{width:10%}
-.offer-list-table .offer-col-source{width:9%}
+.offer-list-table .offer-col-product{width:23%}
+.offer-list-table .offer-col-price{width:12%}
+.offer-list-table .offer-col-store{width:8%}
+.offer-list-table .offer-col-source{width:8%}
 .offer-list-table .offer-col-benefits{width:14%}
-.offer-list-table .offer-col-status{width:18%}
-.offer-list-table .offer-col-actions{width:10%}
+.offer-list-table .offer-col-status{width:19%}
+.offer-list-table .offer-col-actions{width:16%}
 .offer-list-table th,.offer-list-table td{min-width:0;max-width:none;overflow-wrap:anywhere;word-break:normal}
-.offer-list-table td:nth-child(6)>span{white-space:nowrap}
-.offer-list-table td:nth-child(7) a{white-space:nowrap}
-.offer-row-actions{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:flex-start}
+.offer-list-table td:nth-child(6)>span{display:block;white-space:normal}
+.offer-row-actions{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
 .offer-row-actions a{white-space:nowrap;font-weight:600}
 .offer-row-actions .muted{font-size:12px}
 .mobile-sort-toggle{display:none}
@@ -147,6 +146,13 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 .source-coverage ul{max-height:260px;overflow:auto;list-style:none;padding:0;margin:8px 0}
 .source-coverage li{padding:6px 0;border-bottom:1px solid var(--line)}
 .source-coverage li small{display:block}
+.search-funnel{display:grid;gap:4px;margin-top:12px;padding:10px 12px;border-left:3px solid var(--accent);border-radius:6px;background:#f1f7f6;font-size:13px}
+.search-funnel small{color:var(--muted);line-height:1.45}
+.source-origin-details{margin-top:4px;font-size:11px;line-height:1.4}
+.source-origin-details summary{cursor:pointer;color:var(--accent)}
+.source-origin-details ul{list-style:none;margin:4px 0;padding:0}
+.source-origin-details li{margin:2px 0;overflow-wrap:anywhere}
+.source-origin-details small{display:block;color:var(--muted)}
 .metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:14px 0}
 .metric-grid>div{display:grid;align-content:start;gap:4px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:#f9fbfc}
 .metric-grid strong{font-size:27px;line-height:1.2}

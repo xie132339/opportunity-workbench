@@ -9,7 +9,7 @@ import os
 import re
 import calendar
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunsplit
 
 from bs4 import BeautifulSoup
 import feedparser
@@ -20,6 +20,7 @@ from offer import detected_offer_type, resource_kind, resource_topic
 from xianbao import fetch_rows as xianbao_rows
 
 USER_AGENT = "OpportunityWorkbench/0.1 (personal low-frequency public-source research)"
+FAILED_SOURCE_RETRY_MINUTES = 15
 
 
 def _public_url(url):
@@ -45,9 +46,9 @@ def _local_adapter_url(url, base, prefix):
         raise ValueError("适配器地址须是配置的本机服务和有效路径")
 
 
-def _fetch(url):
+def _fetch(url, timeout=(5, 18)):
     _public_url(url)
-    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=(5, 18),
+    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout,
                             allow_redirects=False, stream=True)
     if response.status_code in (301, 302, 303, 307, 308):
         raise RuntimeError("入口发生跳转，需人工核对新地址")
@@ -68,14 +69,30 @@ def _fetch(url):
 
 
 def _allowed(parser, url):
-    host = (urlparse(url).hostname or "").lower()
-    path = urlparse(url).path
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path
     if parser == "smzdm":
         return host == "www.smzdm.com" and re.match(r"^/p/\d+/?$", path)
     if parser == "apple":
         return host == "www.apple.com.cn" and path.startswith("/shop/product/")
     if parser == "mi":
-        return host == "www.mi.com" and path == "/shop/buy"
+        try:
+            port = parsed.port
+        except ValueError:
+            return False
+        if (parsed.scheme != "https" or host != "www.mi.com"
+                or port not in (None, 443) or parsed.username or parsed.password
+                or parsed.fragment or path not in {
+                    "/shop/buy", "/shop/buy/detail", "/buy/detail"}):
+            return False
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        product_ids = query.get("product_id", [])
+        tracking = query.get("cfrom", [])
+        return (len(product_ids) == 1 and product_ids[0].isdigit()
+                and set(query) <= {"product_id", "cfrom"}
+                and (not tracking or (len(tracking) == 1
+                     and re.fullmatch(r"[A-Za-z0-9_-]{1,40}", tracking[0]))))
     if parser == "ccgp":
         return host == "www.ccgp.gov.cn" and "/cggg/" in path and "/gkzb/" in path and path.endswith(".htm")
     if parser == "yiwugo":
@@ -91,6 +108,18 @@ def _allowed(parser, url):
     return False
 
 
+def _canonical_source_url(parser, url):
+    """Drop only known Xiaomi listing attribution while preserving product identity."""
+    if parser == "mi":
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        # Xiaomi currently emits both legacy and detail paths for the same
+        # product. Normalize only the URL path/query shape, retaining its ID.
+        return urlunsplit(("https", "www.mi.com", "/shop/buy/detail",
+                           urlencode({"product_id": query["product_id"][0]}), ""))
+    return url.split("?", 1)[0]
+
+
 def extract_html(parser, page_url, html):
     soup = BeautifulSoup(html, "html.parser")
     found = {}
@@ -99,8 +128,37 @@ def extract_html(parser, page_url, html):
         href = urljoin(page_url, link.get("href", ""))
         if not 6 <= len(title) <= 300 or not _allowed(parser, href):
             continue
-        canonical = href.split("?", 1)[0] if parser != "mi" else href.split("&", 1)[0]
+        canonical = _canonical_source_url(parser, href)
         published_at = None
+        snippet = ""
+        metadata = {}
+        if parser == "apple":
+            card = link.find_parent("li")
+            if card:
+                snippet = " ".join(card.get_text(" ", strip=True).split())
+                product_links = {
+                    urljoin(page_url, candidate.get("href", "")).split("?", 1)[0]
+                    for candidate in card.select("a[href]")
+                    if _allowed("apple", urljoin(page_url, candidate.get("href", "")))
+                }
+                if product_links == {canonical}:
+                    try:
+                        from services.apple_catalog import parse_listing_card
+                        metadata["catalog_observation"] = parse_listing_card(
+                            canonical, title, snippet, page_url)
+                    except ValueError:
+                        # Preserve the raw card as a clue; price admission stays fail-closed.
+                        pass
+        if parser == "mi":
+            card = link.find_parent("li")
+            if card:
+                product_links = {
+                    _canonical_source_url("mi", urljoin(page_url, candidate.get("href", "")))
+                    for candidate in card.select("a[href]")
+                    if _allowed("mi", urljoin(page_url, candidate.get("href", "")))
+                }
+                if product_links == {canonical}:
+                    snippet = " ".join(card.get_text(" ", strip=True).split())[:1200]
         if parser == "ccgp":
             parent_text = link.parent.get_text(" ", strip=True) if link.parent else ""
             match = re.search(r"发布时间\s*[:：]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", parent_text)
@@ -108,7 +166,10 @@ def extract_html(parser, page_url, html):
                 local_time = datetime.strptime(match.group(1), "%Y-%m-%d %H:%M")
                 published_at = local_time.replace(tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         if canonical not in found or len(title) > len(found[canonical][0]):
-            found[canonical] = (title, canonical, "", published_at)
+            record = (title, canonical, snippet, published_at)
+            if parser == "apple":
+                record += (metadata,)
+            found[canonical] = record
         if len(found) >= 80:
             break
     return list(found.values())
@@ -291,8 +352,11 @@ def scan_source(source_id, *, review=True):
             records = xianbao_rows(source['url'])
         elif source["method"] == "html":
             html = _fetch(source["url"])
-            records = [(url, title, url, snippet, published_at)
-                       for title, url, snippet, published_at in extract_html(source["parser"], source["url"], html)]
+            records = []
+            for item in extract_html(source["parser"], source["url"], html):
+                title, url, snippet, published_at = item[:4]
+                metadata = item[4] if len(item) > 4 else {}
+                records.append((url, title, url, snippet, published_at, metadata))
         else:
             raise RuntimeError("此来源仅支持人工录入")
         if not records and source["method"] == "monitor" and prior:
@@ -357,10 +421,14 @@ def scan_source(source_id, *, review=True):
 def scan_all(due_only=False):
     with connect() as db:
         sql = "SELECT id FROM sources WHERE enabled=1 AND method!='manual'"
+        params = []
         if due_only:
-            sql += " AND (last_checked IS NULL OR datetime(last_checked, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP)"
+            sql += """ AND (last_checked IS NULL OR
+                (status='healthy' AND datetime(last_checked, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP) OR
+                (status!='healthy' AND datetime(last_checked, '+' || min(interval_minutes, ?) || ' minutes') <= CURRENT_TIMESTAMP))"""
+            params.append(FAILED_SOURCE_RETRY_MINUTES)
         sql += " ORDER BY CASE WHEN method='xianbao' THEN 0 ELSE 1 END, last_checked, id"
-        ids = [r[0] for r in db.execute(sql)]
+        ids = [r[0] for r in db.execute(sql, params)]
     results = [scan_source(source_id, review=False) for source_id in ids]
     if results:
         from autoreview import review_all

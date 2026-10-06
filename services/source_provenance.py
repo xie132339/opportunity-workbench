@@ -1,15 +1,20 @@
 """Read-only provenance and exact-text overlap audit for preserved source claims."""
 import json
+import re
 import unicodedata
 from collections import defaultdict
 from urllib.parse import urlparse
+
+from services.benefit_claims import parse_discount_claims
 
 
 CLAIM_STATES = {"observed", "conditional", "stale"}
 
 
 def _text_key(value):
-    return " ".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
+    if not isinstance(value, str):
+        return ""
+    return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
 def _host(url):
@@ -34,6 +39,130 @@ def _safe_https_url(value):
             or parsed.password):
         return None
     return value
+
+
+def _comparison_url(value):
+    """Normalize only URL syntax we can compare without guessing identity."""
+    if not isinstance(value, str):
+        return ""
+    try:
+        parsed = urlparse(value.strip())
+        port = parsed.port
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if port and not ((parsed.scheme.lower() == "http" and port == 80)
+                     or (parsed.scheme.lower() == "https" and port == 443)):
+        host = f"{host}:{port}"
+    path = re.sub(r"/{2,}", "/", parsed.path or "/")
+    return f"{parsed.scheme.lower()}://{host}{path}?{parsed.query}".rstrip("?")
+
+
+def _activity_links(metadata_json):
+    try:
+        metadata = json.loads(metadata_json or "{}")
+    except (TypeError, ValueError):
+        return ()
+    links = metadata.get("activity_links", []) if isinstance(metadata, dict) else []
+    if not isinstance(links, list):
+        return ()
+    return tuple(dict.fromkeys(key for item in links if (key := _comparison_url(item))))
+
+
+def _discount_signature(text):
+    fields = ("threshold_cents", "discount_cents", "threshold_quantity", "face_value_cents",
+              "discount_rate_basis_points", "subsidy_rate_basis_points")
+    claims = parse_discount_claims(text or "", evidence_type="source_post")
+    return tuple(sorted({
+        (claim["mechanism"], *(claim.get(field) for field in fields))
+        for claim in claims
+        if claim.get("mechanism") in {
+            "threshold_discount_claim", "quantity_threshold_discount_claim",
+            "fixed_reduction_claim", "coupon_fixed_claim", "subsidy_reduction_claim",
+            "subsidy_rate_claim", "percentage_reduction_claim", "pay_rate_claim",
+        }
+    }))
+
+
+def _search_source_keys(row):
+    title = _text_key(row.get("title"))
+    snippet = _text_key(row.get("snippet"))
+    page = _comparison_url(row.get("event_url") or row.get("url"))
+    targets = _activity_links(row.get("metadata_json"))
+    amount = row.get("advertised_cents")
+    text = row.get("snippet") or row.get("auto_conditions") or ""
+    discount = _discount_signature(text) if any(mark in text for mark in ("减", "券", "劵", "折扣", "补贴")) else ()
+    keys = []
+    if title and snippet:
+        keys.append(("same_text", title, snippet))
+    if page:
+        keys.append(("same_page", page))
+    keys.extend(("same_target", target) for target in targets)
+    if title and amount is not None and discount:
+        keys.append(("same_claim", title, int(amount), discount))
+    return keys
+
+
+def annotate_search_sources(rows, corpus=None):
+    """Attach auditable source relationships without merging or dropping rows.
+
+    Exact page/text/target overlap is stronger than a title-price-condition
+    signature. Every relationship remains a candidate: no relationship proves
+    that two channels copied one another or that their prices are independent.
+    ``corpus`` lets a paginated result show matching sources outside its page.
+    """
+    rows = [dict(row) for row in rows]
+    corpus_rows = rows if corpus is None else corpus
+    indexes_by_key = defaultdict(dict)
+    for row in corpus_rows:
+        for key in _search_source_keys(row):
+            source_id = row.get("source_id")
+            if source_id is not None:
+                indexes_by_key[key][source_id] = row
+
+    reason_labels = {
+        "same_text": "标题与正文完全相同",
+        "same_page": "原文页面链接相同",
+        "same_target": "商品/活动目标链接相同",
+        "same_claim": "标题、来源金额与优惠声称相同",
+    }
+    for index, row in enumerate(rows):
+        origins = {row.get("source_id"): row} if row.get("source_id") is not None else {}
+        reasons = set()
+        correlation_keys = set()
+        for key in _search_source_keys(row):
+            group = indexes_by_key.get(key, {})
+            if len(group) > 1:
+                for source_id, peer in group.items():
+                    if source_id != row.get("source_id"):
+                        origins[source_id] = peer
+                reasons.add(key[0])
+                if key[0] in {"same_text", "same_page", "same_claim"}:
+                    correlation_keys.add(json.dumps(key, ensure_ascii=True, separators=(",", ":")))
+        ordered = sorted(origins.values(), key=lambda item: (
+            item.get("source_id") != row.get("source_id"),
+            str(item.get("platform") or ""), str(item.get("source_name") or "")))
+        row["source_origins"] = [{
+            "source_id": item.get("source_id"),
+            "label": (f'{item.get("platform")} · {item.get("source_name")}'
+                      if item.get("platform") and item.get("source_name")
+                      and item.get("platform") != item.get("source_name")
+                      else item.get("platform") or item.get("source_name") or "人工录入"),
+            "url": _comparison_url(item.get("event_url") or item.get("url")) or None,
+        } for item in ordered]
+        row["source_channels"] = list(dict.fromkeys(origin["label"] for origin in row["source_origins"]))
+        row["source_count"] = len(origins)
+        row["source_provenance_reasons"] = [reason_labels[key] for key in (
+            "same_page", "same_text", "same_target", "same_claim") if key in reasons]
+        row["source_provenance_label"] = (
+            "关联线索；来源独立性未证" if row["source_count"] > 1 else "单一采集入口")
+        row["source_correlation_keys"] = sorted(correlation_keys)
+        row["source_page_identity_key"] = _comparison_url(row.get("event_url") or row.get("url"))
+    return rows
 
 
 def _group(rows):

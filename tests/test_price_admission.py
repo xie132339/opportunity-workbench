@@ -40,25 +40,31 @@ class AdmissionTests(unittest.TestCase):
         with patch('scanner.xianbao_rows',return_value=parse_items([item])):scanner.scan_source(1)
         with db.connect() as c:c.execute('UPDATE auto_reviews SET state=?,advertised_cents=?',(state,price))
 
-    def test_default_product_search_uses_evidence_gate_and_keeps_lead_inbox(self):
+    def test_default_product_search_shows_quotes_and_keeps_unpriced_clues_separate(self):
         self.seed('限时活动5元','没有具体商品和规格','observed',500)
         with app.test_client() as c:
-            self.assertIn('/opportunities/1',c.get('/').get_data(as_text=True))
-            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
+            default=c.get('/').get_data(as_text=True)
+            self.assertNotIn('/opportunities/1',default)
+            self.assertIn('当前明确来源报价',default)
+            self.assertIn('当前线索池（含缺价与待补证据）',default)
             self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/?view=offers').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=all').get_data(as_text=True))
-            self.assertIn('资料达到商品搜索准入 0 条',c.get('/').get_data(as_text=True))
+            self.assertIn('未形成可用报价',c.get('/?view=current').get_data(as_text=True))
 
     def test_missing_price_is_visible_as_a_fresh_lead_not_a_notice(self):
         self.seed('终于活动开始了','没有具体价格','missing_price',None)
         with app.test_client() as c:
             page=c.get('/').get_data(as_text=True)
-            self.assertIn('/opportunities/1',page)
+            self.assertNotIn('/opportunities/1',page)
+            self.assertNotIn('/opportunities/1',c.get('/?view=offers').get_data(as_text=True))
             self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
             lead_page=c.get('/?view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',lead_page)
-            self.assertIn('金额未提取',lead_page)
-            self.assertIn('缺结构化价格来源',lead_page)
+            self.assertIn('未形成可用报价',lead_page)
+            self.assertNotIn('金额未提取',lead_page)
+            self.assertNotIn('金额口径待确认',lead_page)
             self.assertIn('/opportunities/1',c.get('/?view=all').get_data(as_text=True))
             self.assertIn('终于活动开始了',c.get('/verification?state=missing_price').get_data(as_text=True))
         self.assertFalse(is_current_notice(dict(opp_status='pending',auto_state='missing_price')))
@@ -67,27 +73,70 @@ class AdmissionTests(unittest.TestCase):
         self.seed('某品牌抽纸100抽3层6包 5元','原文只有包邮提示，未写购买件数或实付方案','observed',500)
         with app.test_client() as c:
             page=c.get('/?view=current&layout=cards').get_data(as_text=True)
-            self.assertIn('来源声称报价（计价单位待核）',page)
+            self.assertIn('未形成可用报价',page)
             self.assertIn('原文未提取',page)
+            visible=page.split('<details class="offer-evidence">',1)[0]
+            self.assertIn('¥5.00',visible)
+            self.assertIn('标题金额线索',visible)
+            self.assertIn('不参与低价排序',visible)
+            self.assertNotIn('金额口径待确认',page)
+            self.assertNotIn('金额未提取',page)
             self.assertNotIn('来源原文报价 · 1件',page)
             detail=c.get('/opportunities/1').get_data(as_text=True)
-            self.assertIn('计价单位未明确',detail)
+            self.assertIn('标题金额线索',detail)
+            self.assertIn('¥5.00',detail)
+            self.assertIn('标题金额线索',detail)
             self.assertIn('购买件数',detail)
             self.assertIn('原文未提取',detail)
-            self.assertIn('计价单位未明确',detail)
+            self.assertNotIn('金额口径待确认',detail)
+            self.assertNotIn('金额未提取',detail)
             self.assertNotIn('单件订单，单价与整单金额相同',detail)
+            verification=c.get('/verification?state=observed').get_data(as_text=True)
+            self.assertIn('原文金额线索：¥5.00',verification)
+            self.assertIn('不作为报价',verification)
+            self.assertNotIn('来源原文整单声称价',verification)
+
+    def test_post_cashback_amount_is_a_detail_claim_not_a_current_quote(self):
+        title='愛媛38号果冻橙4.5斤装 14.99元（需买2件，需用券）'
+        body='此款目前活动售价24.99元，下单领取满40减10元优惠券，下单2件。返现后实付低至29.98元。'
+        self.seed(title,body,'conditional',None)
+        with app.test_client() as c:
+            page=c.get('/opportunities/1').get_data(as_text=True)
+            self.assertIn('来源声称返现后净成本 ¥29.98（2件）',page)
+            self.assertIn('这不是当前应付价，不用于低价排序或利润判断',page)
+            self.assertIn('返现前现金支出、到账时间与返款条件未核实',page)
+            self.assertNotIn('来源原文整单报价',page)
+
+    def test_budget_filter_requires_a_displayable_quote_not_an_amount_hint(self):
+        self.seed('某品牌抽纸100抽3层6包 5元','标题中的5元没有购买件数或整单价','observed',500)
+        with app.test_client() as c:
+            clue=c.get('/?view=current').get_data(as_text=True)
+            self.assertIn('/opportunities/1',clue)
+            self.assertIn('¥5.00',clue)
+            self.assertIn('标题金额线索',clue)
+            self.assertIn('不参与低价排序',clue)
+            self.assertNotIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/?budget=5').get_data(as_text=True))
+        with db.connect() as c:
+            c.execute("UPDATE events SET snippet='该价格商品规格：100抽3层6包，活动售价5元，下单1件，实付5元，包邮'")
+        with app.test_client() as c:
+            budget=c.get('/?budget=5').get_data(as_text=True)
+            self.assertIn('/opportunities/1',budget)
+            self.assertIn('来源原文整单声称价 · 1件',budget)
 
     def test_queued_price_is_visible_but_not_promoted_to_a_notice(self):
         self.seed('纸巾2元','包邮','queued',200)
         with app.test_client() as c:
             page=c.get('/').get_data(as_text=True)
-            self.assertIn('/opportunities/1',page)
+            self.assertNotIn('/opportunities/1',page)
+            self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
+            self.assertNotIn('¥2.00',page)
             self.assertNotIn('/opportunities/1',c.get('/?view=ready').get_data(as_text=True))
             lead_page=c.get('/?view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',lead_page)
             self.assertIn('自动复查排队中',lead_page)
             with db.connect() as sql:sql.execute("UPDATE auto_reviews SET state='observed'")
-            self.assertIn('/opportunities/1',c.get('/').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',c.get('/').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=current').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?view=all').get_data(as_text=True))
         self.assertFalse(is_current_notice(dict(opp_status='pending',auto_state='queued')))
@@ -115,8 +164,10 @@ class AdmissionTests(unittest.TestCase):
         with app.test_client() as c:
             text=c.get('/').get_data(as_text=True)
             self.assertIn('/opportunities/1',text)
-            self.assertIn('商品搜索（仅资料达到准入）',text)
-            self.assertIn('来源原文声称',text)
+            self.assertIn('当前明确来源报价',text)
+            self.assertIn('入口抓取正常',text)
+            self.assertIn('不代表商品报价已核实',text)
+            self.assertIn('来源原文整单声称价 · 1件',text)
             self.assertIn('¥5.00',text)
             self.assertIn('aria-label="商品结果展示方式"',text)
             self.assertIn('列表每页 100 条，卡片每页 36 条',text)
@@ -127,11 +178,11 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('/opportunities/1',verified)
             self.assertIn('自动分析不会等待商家人工核实',verified)
             archive=c.get('/?view=all&layout=cards').get_data(as_text=True)
-            self.assertIn('/opportunities/1',archive);self.assertIn('来源原文整单报价 · 1件',archive)
+            self.assertIn('/opportunities/1',archive);self.assertIn('来源原文整单声称价 · 1件',archive)
             cards=c.get('/?layout=cards').get_data(as_text=True)
-            self.assertIn('可分析来源报价',cards)
+            self.assertIn('来源原文整单声称价 · 1件',cards)
             self.assertNotIn('公开商品页观测：',cards)
-            self.assertIn('来源原文整单报价 · 1件',cards)
+            self.assertIn('来源原文整单声称价 · 1件',cards)
             detail=c.get('/opportunities/1').get_data(as_text=True)
             self.assertIn('本商品当前结论',detail);self.assertIn('自动分析资料',detail);self.assertIn('同口径价格比较',detail)
 
@@ -174,13 +225,12 @@ class AdmissionTests(unittest.TestCase):
         self.seed('某品牌抽纸100抽3层6包 5元',body,'observed',500)
         with app.test_client() as c:
             text=c.get('/?view=all&layout=cards').get_data(as_text=True)
-        self.assertIn('来源原文整单报价 · 1件',text)
-        self.assertIn('单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。',text)
+        self.assertIn('来源原文整单声称价 · 1件',text)
         self.assertNotIn('折合每件（由整单换算）',text)
         self.assertEqual(text.count('¥5.00'),1)
         with app.test_client() as c:
             detail=c.get('/opportunities/1').get_data(as_text=True)
-        self.assertIn('1件订单，不重复列单价',detail)
+        self.assertIn('来源原文声称价 · 1件',detail)
         self.assertNotIn('<th>折合每件</th>',detail)
 
     def test_multi_item_price_keeps_unit_and_order_amount(self):
@@ -189,7 +239,7 @@ class AdmissionTests(unittest.TestCase):
         with app.test_client() as c:
             text=c.get('/?view=all&layout=cards').get_data(as_text=True)
         self.assertIn('折合每件（由整单换算）',text)
-        self.assertIn('来源原文整单报价 · 2件',text)
+        self.assertIn('来源原文整单声称价 · 2件',text)
         self.assertIn('¥5.00',text)
         self.assertIn('¥10.00',text)
         with app.test_client() as c:

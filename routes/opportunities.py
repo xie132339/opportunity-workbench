@@ -3,23 +3,26 @@ import hashlib
 from datetime import date
 from flask import abort, flash, render_template, request
 from db import connect
-from comparison import load_comparisons, assess_readiness, merchant_identity
+from comparison import load_comparisons, assess_readiness, merchant_identity, MERCHANT_PRODUCT_PREFIXES
 from benefits import (KINDS as BENEFIT_KINDS, add as add_benefit, product_match_candidates as match_product_benefits, related as related_benefits)
-from autoreview import offer_summary, public_offer
-from offer import detected_offer_type
+from autoreview import offer_summary
+from offer import detected_offer_type, resource_topic
 from scanner import _public_url
-from link_resolution import enrich as enrich_links
+from link_resolution import enrich as enrich_links, resolution_cache
+from services.source_freshness import CATALOG_LISTING_PARSERS
+from services.product_search import listing_quote, quote_note
 from services.money import cents
 from services.opportunity_analysis import public_profit_estimate
 from routes.common import go
 
 def opportunity(opportunity_id):
     with connect() as db:
-        opp = db.execute("""SELECT o.*,s.platform,s.name AS source_name,
+        opp = db.execute("""SELECT o.*,s.platform,s.category AS source_category,s.name AS source_name,
                              s.method AS source_method,s.status AS source_status,
                              s.enabled AS source_enabled,s.interval_minutes AS source_interval,
-                             s.last_success AS source_last_success,
-                             e.snippet,e.metadata_json,e.is_baseline,e.observed_at,e.published_at,e.last_seen_at,a.state AS auto_state
+                             s.last_success AS source_last_success,s.parser AS source_parser,
+                             e.snippet,e.metadata_json,e.is_baseline,e.observed_at,e.published_at,e.last_seen_at,
+                             a.state AS auto_state,a.advertised_cents
                              FROM opportunities o LEFT JOIN sources s ON s.id=o.source_id
                              LEFT JOIN events e ON e.id=o.event_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
                              WHERE o.id=?""", (opportunity_id,)).fetchone()
@@ -28,12 +31,16 @@ def opportunity(opportunity_id):
         quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=? AND kind!='historical_buy' ORDER BY observed_at DESC,id DESC",
                             (opportunity_id,)).fetchall()
         review = db.execute("SELECT * FROM auto_reviews WHERE opportunity_id=?", (opportunity_id,)).fetchone()
-        comparison = load_comparisons(db).get(opportunity_id,{})
+        comparison = load_comparisons(db,[opportunity_id]).get(opportunity_id,{})
         identity_row=dict(opp,detail_json=review['detail_json'] if review else '{}')
-        resolved= enrich_links(identity_row,{r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')})
-        opp=dict(opp,metadata_json=resolved['metadata_json'])
-        brief=offer_summary(opp['title'],opp['url'],opp['snippet'],metadata=opp['metadata_json'],detail_json=review['detail_json'] if review else None,
+        resolved= enrich_links(identity_row,resolution_cache(db,[identity_row]))
+        display_topic=resource_topic(opp['title'],opp['source_category'] or '')
+        opp=dict(opp,metadata_json=resolved['metadata_json'],topic=display_topic,display_topic=display_topic)
+        brief=offer_summary(opp['title'],opp['url'],opp['snippet'],review['conditions'] if review else '',
+                            metadata=opp['metadata_json'],detail_json=review['detail_json'] if review else None,
                             sync_meta=dict(checked_at=review['checked_at'],detail_checked_at=review['detail_checked_at'],detail_error=review['detail_error']) if review else {})
+        detail_quote=listing_quote(dict(opp,catalog_listing=opp.get('source_parser') in CATALOG_LISTING_PARSERS),brief)
+        detail_quote_note=quote_note(brief)
         opp_for_merchant=dict(opp,detail_json=review['detail_json'] if review else '{}')
         product_identity=merchant_identity(opp_for_merchant)
         readiness=assess_readiness(opp,comparison,brief)
@@ -43,11 +50,11 @@ def opportunity(opportunity_id):
         source_linked_benefits=[item for item in benefit_relations if item['relation_state']=='source_linked']
     profit_mode = request.args.get('profit_mode','sold')
     public_estimate = public_profit_estimate(opp, quotes, brief, review, profit_mode)
-    return render_template("opportunity.html", opp=opp, quotes=quotes, review=review,
-                           public_offer=public_offer(opp['url'],opp['snippet'],opp['title']),comparison=comparison,
+    return render_template("opportunity.html", opp=opp, quotes=quotes, review=review, brief=brief,
+                           display_quote=detail_quote,display_quote_note=detail_quote_note,comparison=comparison,
                            readiness=readiness,confirmed_benefits=confirmed_benefits,source_linked_benefits=source_linked_benefits,
                            product_benefit_candidates=product_benefit_candidates,
-                           product_benefit_searchable=product_identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not product_identity['conflict'],
+                           product_benefit_searchable=product_identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES) and not product_identity['conflict'],
                            public_estimate=public_estimate,
                            profit_mode=public_estimate['mode'])
 

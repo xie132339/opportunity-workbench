@@ -190,7 +190,8 @@ BEGIN
 END;
 CREATE TABLE IF NOT EXISTS link_resolutions (
  url TEXT PRIMARY KEY, target_url TEXT, state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
- checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL
+ checked_at TEXT NOT NULL, next_check_at TEXT NOT NULL,
+ product_page_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS review_runs (
  id INTEGER PRIMARY KEY CHECK(id=1), started_at TEXT, finished_at TEXT,
@@ -220,8 +221,8 @@ CREATE INDEX IF NOT EXISTS idx_source_candidates_state
 SEEDS = [
  ("什么值得买", "公开优惠线索", "零售优惠", "https://www.smzdm.com/", "html", "smzdm", 1),
  ("Apple 中国", "认证翻新产品", "新品与补货", "https://www.apple.com.cn/shop/refurbished", "html", "apple", 1),
- ("Apple 中国", "Mac 认证翻新子栏目", "新品与补货", "https://www.apple.com.cn/shop/refurbished/mac", "html", "apple", 0),
- ("Apple 中国", "iPad 认证翻新子栏目", "新品与补货", "https://www.apple.com.cn/shop/refurbished/ipad", "html", "apple", 0),
+ ("Apple 中国", "Mac 认证翻新子栏目", "新品与补货", "https://www.apple.com.cn/shop/refurbished/mac", "html", "apple", 1),
+ ("Apple 中国", "iPad 认证翻新子栏目", "新品与补货", "https://www.apple.com.cn/shop/refurbished/ipad", "html", "apple", 1),
  ("小米商城", "公开商品入口", "新品与补货", "https://www.mi.com/shop", "html", "mi", 1),
  ("中国政府采购网", "中央公告", "服务与合作", "https://www.ccgp.gov.cn/cggg/zygg/", "html", "ccgp", 1),
  ("中国政府采购网", "中央公开招标子栏目", "服务与合作", "https://www.ccgp.gov.cn/cggg/zygg/gkzb/", "html", "ccgp", 0),
@@ -299,10 +300,22 @@ def initialize_benchmark_rules(db):
                    (topic_key, policy_json))
 
 
+def ensure_link_resolution_product_page_column(db=None):
+    """Add the current public-page result without rewriting existing link history."""
+    if db is not None:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(link_resolutions)")}
+        if "product_page_json" not in columns:
+            db.execute("ALTER TABLE link_resolutions ADD COLUMN product_page_json TEXT NOT NULL DEFAULT '{}'")
+        return
+    with connect() as connection:
+        ensure_link_resolution_product_page_column(connection)
+
+
 def initialize():
     with connect() as db:
         db.execute("PRAGMA journal_mode=WAL")
         db.executescript(SCHEMA)
+        ensure_link_resolution_product_page_column(db)
         initialize_benchmark_rules(db)
         provider_seeds = [
             ("smzdm_history", "什么值得买历史价格 API", "independent_index", "按商品URL的历史价格曲线；Price/FinalPrice字段", "需App Key与OAuth；历史索引不等于当前结算价", "https://openapi.zhidemai.com/pages/price/4.%E5%8E%86%E5%8F%B2%E4%BB%B7%E6%A0%BC%E6%9F%A5%E8%AF%A2API.html"),

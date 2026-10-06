@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -26,9 +27,9 @@ from db import connect, initialize
 from autoreview import LABELS as REVIEW_LABELS, run_cycle, offer_summary
 from benefits import KINDS as BENEFIT_KINDS, run_cycle as refresh_benefits, import_authorized_record
 from channel_discovery import refresh as refresh_channel_candidates, validate_many as validate_channel_candidates
-from link_resolution import run_cycle as resolve_links
 from notifier import active_channels, deliver
 from scanner import scan_all, scan_source, strategy_matches
+from services.link_resolution_worker import run_periodically as run_link_resolution_worker
 from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
 from offer import RESOURCE_LABELS, TOPIC_LABELS, product_subcategory, paper_package_prices
 from services.money import COST_FIELDS, cents, money
@@ -108,17 +109,28 @@ def main():
     elif command == "channels-validate":
         print(validate_channel_candidates())
     elif command == "worker":
-        while True:
-            result = scan_all(due_only=True)
-            if result:
-                print(result, flush=True)
-            print(run_cycle(), flush=True)
-            print({"public_links": resolve_links()}, flush=True)
-            print({"benefit_pages": refresh_benefits()}, flush=True)
-            deliveries = dispatch_verified_alerts()
-            if deliveries["sent"] or deliveries["failed"]:
-                print(deliveries, flush=True)
-            time.sleep(60)
+        link_stop = threading.Event()
+        link_worker = threading.Thread(
+            target=run_link_resolution_worker,
+            args=(link_stop,),
+            name="public-link-resolution",
+            daemon=True,
+        )
+        link_worker.start()
+        try:
+            while True:
+                result = scan_all(due_only=True)
+                if result:
+                    print(result, flush=True)
+                print(run_cycle(), flush=True)
+                print({"benefit_pages": refresh_benefits()}, flush=True)
+                deliveries = dispatch_verified_alerts()
+                if deliveries["sent"] or deliveries["failed"]:
+                    print(deliveries, flush=True)
+                time.sleep(60)
+        finally:
+            link_stop.set()
+            link_worker.join(timeout=2)
     else:
         raise SystemExit("Usage: python app.py [serve|scan|review|worker|channels-refresh|channels-validate|benefits-import <normalized-records.jsonl>]")
 

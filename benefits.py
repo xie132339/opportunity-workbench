@@ -7,8 +7,9 @@ import requests
 from bs4 import BeautifulSoup
 from db import connect
 from offer import resource_kind,RESOURCE_LABELS
-from link_resolution import supported,activity_target,canonical_target,resolve,enrich
+from link_resolution import supported,activity_target,canonical_target,resolve,enrich,resolution_cache
 from comparison import merchant_identity
+from services.benefit_claims import PARSER_VERSION as BENEFIT_CLAIM_PARSER_VERSION,parse_discount_claims
 
 KINDS={'coupon','points','trial','campaign','free_claim','lottery'}
 SHORT_HOSTS={'m.tb.cn','tb3.cn','s.click.taobao.com','p.pinduoduo.com','kurl07.cn','163cn.tv','m.duanqu.com'}
@@ -40,43 +41,96 @@ def initial_state(url,kind):
     return 'non_benefit','已保存原始链接；目前没有优惠机制或入口特征'
 
 def claims(text):
-    text=unicodedata.normalize('NFKC',text or '')
-    pairs=set(re.findall(r'(\d+(?:\.\d{1,2})?)\s*[-－]\s*(\d+(?:\.\d{1,2})?)\s*[^\d\s]{0,6}[券卷劵]',text))
-    label='门槛/面额未明确'
-    if len(pairs)==1:
-        a,b=next(iter(pairs))
-        if Decimal(a)>=Decimal(b)>0:label=f'声称满{a}减{b}，适用条件未核实'
-    elif len(pairs)>1:label='提及多个门槛/面额，尚未拆分'
+    text=text or ''
+    parsed=parse_discount_claims(text,evidence_type='source_post')
+    label='来源文案未识别到明确金额或折扣条件'
+    if len(parsed)==1:
+        claim=parsed[0]
+        if claim['mechanism']=='threshold_discount_claim':
+            threshold=Decimal(claim['threshold_cents'])/100
+            discount=Decimal(claim['discount_cents'])/100
+            label=f'原文声称满{threshold:g}减{discount:g}，商品适用与资格未核实'
+        elif claim['mechanism']=='quantity_threshold_discount_claim':
+            discount=Decimal(claim['discount_cents'])/100
+            label=f"原文声称满{claim['threshold_quantity']}件减¥{discount:.2f}，件数门槛和商品适用未核实"
+        elif claim['mechanism']=='fixed_reduction_claim':
+            discount=Decimal(claim['discount_cents'])/100
+            label=f"原文声称{claim['matched_text']}（立减¥{discount:.2f}），适用条件未核实"
+        elif claim['mechanism']=='subsidy_reduction_claim':
+            discount=Decimal(claim['discount_cents'])/100
+            label=f"原文声称{claim['matched_text']}（约¥{discount:.2f}），商品/地区与资格未核实"
+        elif claim['mechanism']=='subsidy_rate_claim':
+            rate=Decimal(claim['subsidy_rate_basis_points'])/100
+            label=f"原文声称{claim['qualifier']}{rate:g}%，补贴基数/地区与资格未核实"
+        elif claim['mechanism']=='new_product_gift_claim':
+            discount=Decimal(claim['discount_cents'])/100
+            unit_note='（金额单位未说明）' if claim.get('unit_evidence')=='unit_not_stated' else ''
+            label=f"原文声称{claim['qualifier']}优惠¥{discount:.2f}{unit_note}，适用范围未核实"
+        elif claim['mechanism']=='noncash_credit_claim':
+            value=Decimal(claim['claimed_equivalent_cents'])/100
+            if claim.get('claim_mode')=='source_claimed_equivalent':
+                label=f"原文声称{claim['qualifier']}金额等价约¥{value:.2f}；非现金权益，不能按现金券直接扣减"
+            else:
+                range_note='起' if claim.get('claim_mode')=='minimum_claim' else ('以内' if claim.get('claim_mode')=='maximum_claim' else '')
+                label=f"原文声称{claim['qualifier']}可抵¥{value:.2f}{range_note}；需对应积分/金币，不能按现金券直接扣减"
+        elif claim['mechanism']=='first_order_gift_claim':
+            discount=Decimal(claim['discount_cents'])/100
+            unit_note='（原文简写未标币种，仅按人民币元解析）' if claim.get('unit_evidence')=='inferred_from_first_order_shorthand' else ''
+            label=f"原文声称{claim['qualifier']}优惠约¥{discount:.2f}{unit_note}，商品适用与本人资格未核实"
+        elif claim['mechanism']=='coupon_face_value_claim':
+            face=Decimal(claim['face_value_cents'])/100
+            unit_note='' if claim.get('unit_evidence')=='explicit_cny' else '（币种/单位未标，仅为来源简写候选）'
+            label=f'原文声称优惠券面额约¥{face:.2f}{unit_note}；门槛与可抵金额未核实'
+        elif claim['mechanism']=='percentage_reduction_claim':
+            rate=Decimal(claim['discount_rate_basis_points'])/100
+            label=f"原文声称{claim['qualifier']}{rate:g}%；计算基数与适用条件未核实"
+        elif claim['mechanism']=='random_reward_claim':
+            reward=Decimal(claim['reward_cents'])/100
+            if claim.get('claim_mode')=='source_claimed_minimum_reward':
+                label=f"原文声称抽奖最低奖励¥{reward:.2f}（保底规则与兑现未核实）；不计入商品现金折价"
+            else:
+                label=f"原文声称曾随机抽中¥{reward:.2f}奖励；不计入普遍可得的商品现金折价"
+        elif claim['mechanism']=='pay_rate_claim':
+            rate=Decimal(claim['pay_rate_basis_points'])/1000
+            label=f'原文声称{claim["qualifier"]}{rate:g}折，商品范围与资格未核实'
+        else:
+            label=f"原文识别到优惠候选‘{claim['matched_text']}’，机制尚未适配；不可按现金减项计算"
+    elif len(parsed)>1:label=f'原文识别到{len(parsed)}段优惠金额/折扣候选，逐条条件尚未核实'
+    text=unicodedata.normalize('NFKC',text)
     times=re.findall(r'(?<!\d)([0-2]?\d)点',text)
     schedule='、'.join(t+'点' for t in dict.fromkeys(times) if int(t)<24)
     terms=[t for t in ('APP','PLUS','积分','特价版','宠物','医疗器械','全品') if t.casefold() in text.casefold()]
-    return dict(discount=label,schedule=(schedule+'（日期与场次未确认）') if schedule else '领取时间未明确',terms='、'.join(terms) or '资格与适用商品未明确')
+    return dict(discount=label,discount_claims=parsed,claim_parser_version=BENEFIT_CLAIM_PARSER_VERSION,
+                schedule=(schedule+'（日期与场次未确认）') if schedule else '领取时间未明确',
+                terms='、'.join(terms) or '资格与适用商品未明确')
 
-def add(title,url,source_type='collected',source_url='',source_opportunity_id=None,origin_text='',kind=None,published_at=None):
+def add(title,url,source_type='collected',source_url='',source_opportunity_id=None,origin_text='',kind=None,published_at=None,source_observed_at=None):
     if not candidate_url(url):return False
     kind=kind or resource_kind(title,origin_text)
     if kind not in KINDS:kind='pending'
     state,reason=initial_state(url,kind)
+    source_observed_at=(str(source_observed_at or '').strip()
+                        or datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
     source_url=source_url or (url if source_type in ('user_supplied','manual') else '')
     source_key=(f'opportunity:{source_opportunity_id}' if source_opportunity_id is not None
                 else f'{source_type}:{source_url or url}')
     with connect() as c:
         c.execute('''INSERT INTO benefit_resources
-            (url,title,kind,state,reason,source_type,source_url,source_opportunity_id,origin_text,published_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET
-            last_seen_at=CURRENT_TIMESTAMP,
+            (url,title,kind,state,reason,source_type,source_url,source_opportunity_id,origin_text,published_at,last_seen_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET
+            last_seen_at=excluded.last_seen_at,
             title=CASE WHEN benefit_resources.source_type='user_supplied' THEN benefit_resources.title ELSE excluded.title END,
             kind=CASE WHEN benefit_resources.kind='pending' THEN excluded.kind ELSE benefit_resources.kind END,
             state=CASE WHEN benefit_resources.state IN ('pending','unsupported','non_benefit') THEN excluded.state ELSE benefit_resources.state END,
             reason=CASE WHEN benefit_resources.state IN ('pending','unsupported','non_benefit') THEN excluded.reason ELSE benefit_resources.reason END''',
-            (url,title,kind,state,reason,source_type,source_url,source_opportunity_id,origin_text or title,published_at))
+            (url,title,kind,state,reason,source_type,source_url,source_opportunity_id,origin_text or title,published_at,source_observed_at))
         resource_id=c.execute('SELECT id FROM benefit_resources WHERE url=?',(url,)).fetchone()[0]
         c.execute('''INSERT INTO benefit_resource_sources
-            (resource_id,source_key,source_type,source_url,source_opportunity_id,source_title,origin_text,published_at)
-            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(resource_id,source_key) DO UPDATE SET
-            last_seen_at=CURRENT_TIMESTAMP,source_title=excluded.source_title,
+            (resource_id,source_key,source_type,source_url,source_opportunity_id,source_title,origin_text,published_at,last_seen_at)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(resource_id,source_key) DO UPDATE SET
+            last_seen_at=excluded.last_seen_at,source_title=excluded.source_title,
             origin_text=excluded.origin_text,published_at=COALESCE(excluded.published_at,benefit_resource_sources.published_at)''',
-            (resource_id,source_key,source_type,source_url,source_opportunity_id,title,origin_text or title,published_at))
+            (resource_id,source_key,source_type,source_url,source_opportunity_id,title,origin_text or title,published_at,source_observed_at))
         if source_opportunity_id is not None:
             c.execute('''INSERT OR IGNORE INTO benefit_product_relations
                 (resource_id,opportunity_id,state,basis,evidence_url)
@@ -114,7 +168,11 @@ def import_authorized_record(record):
     if not isinstance(identities,list):raise ValueError('适用商品必须是商品ID列表')
     identities=list(dict.fromkeys(str(x).strip() for x in identities if isinstance(x,str)))
     pattern=re.compile(r'^[a-z][a-z0-9_]{0,31}:[0-9]+(?::[0-9]+)?$')
-    if any(not pattern.fullmatch(x) or not x.startswith(identity_prefix) for x in identities):
+    def valid_identity(value):
+        if platform == 'apple':
+            return re.fullmatch(r'apple:[A-Z0-9]+/[A-Z]',value) is not None
+        return bool(pattern.fullmatch(value) and value.startswith(identity_prefix))
+    if any(not valid_identity(x) for x in identities):
         raise ValueError('适用商品 ID 格式与平台不一致')
     scope=str(record.get('scope_type','unknown')).strip().lower()
     if scope not in ('item','sku','store','category','platform','unknown'):
@@ -155,7 +213,8 @@ def import_authorized_record(record):
         'note':'本地接入器提交的结构化接口线索；此处未验证提供方授权状态，未证明当前账号可领或可叠加。',
     }
     if not add(title,coupon_url,source_type='authorized_api:'+provider,
-               source_url=source_url,origin_text=evidence['raw_rules'],kind='coupon'):
+               source_url=source_url,origin_text=evidence['raw_rules'],kind='coupon',
+               source_observed_at=observed.strftime('%Y-%m-%d %H:%M:%S')):
         raise ValueError('优惠入口 URL 无效')
     with connect() as c:
         row=c.execute('SELECT id,evidence_json FROM benefit_resources WHERE url=?',(coupon_url,)).fetchone()
@@ -174,7 +233,7 @@ def sync():
     # Full scan is deliberate at the current data size: resource coverage matters
     # more than saving a small local query. Add a cursor only after measured growth.
     with connect() as c:
-        rows=c.execute('''SELECT o.id,o.title,o.url,e.snippet,e.metadata_json,e.published_at,a.detail_json
+        rows=c.execute('''SELECT o.id,o.title,o.url,e.snippet,e.metadata_json,e.published_at,e.last_seen_at,a.detail_json
             FROM opportunities o JOIN events e ON e.id=o.event_id
             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
             ORDER BY o.id DESC''').fetchall()
@@ -192,7 +251,34 @@ def sync():
             if candidate_url(url):
                 added+=int(add(r['title'] if kind in KINDS else '待识别入口：'+r['title'],url,
                     source_url=r['url'],source_opportunity_id=r['id'],origin_text=body,
-                    kind=kind if kind in KINDS else 'pending',published_at=r['published_at']))
+                    kind=kind if kind in KINDS else 'pending',published_at=r['published_at'],
+                    source_observed_at=r['last_seen_at']))
+    # Reconcile the denormalized resource timestamp from its source evidence.
+    # The worker scans all opportunities every minute; the scan itself is not a
+    # new observation of an old offer. Keep every row, and correct only this
+    # derived cache field to the latest timestamp carried by its source records.
+    with connect() as c:
+        c.execute('''UPDATE benefit_resource_sources
+            SET last_seen_at=(SELECT e.last_seen_at FROM opportunities so
+                JOIN events e ON e.id=so.event_id
+                WHERE so.id=benefit_resource_sources.source_opportunity_id)
+            WHERE source_opportunity_id IS NOT NULL
+              AND EXISTS(SELECT 1 FROM opportunities so JOIN events e ON e.id=so.event_id
+                WHERE so.id=benefit_resource_sources.source_opportunity_id
+                  AND COALESCE(benefit_resource_sources.last_seen_at,'')<>COALESCE(e.last_seen_at,''))''')
+        c.execute('''UPDATE benefit_resources
+            SET last_seen_at=(SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
+                FROM benefit_resource_sources brs
+                LEFT JOIN opportunities so ON so.id=brs.source_opportunity_id
+                LEFT JOIN events e ON e.id=so.event_id
+                WHERE brs.resource_id=benefit_resources.id)
+            WHERE EXISTS(SELECT 1 FROM benefit_resource_sources brs
+                WHERE brs.resource_id=benefit_resources.id)
+              AND COALESCE(last_seen_at,'')<>COALESCE((SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
+                FROM benefit_resource_sources brs
+                LEFT JOIN opportunities so ON so.id=brs.source_opportunity_id
+                LEFT JOIN events e ON e.id=so.event_id
+                WHERE brs.resource_id=benefit_resources.id),'')''')
     return added
 
 def reclassify():
@@ -239,7 +325,9 @@ def inspect_page(target):
         notices=[x for x in ('已抢光','抢完了','活动已结束','活动已过期') if x in text]
         times=re.findall(r'\d{1,2}:\d{2}再来',text)
         note='页面提示：'+'；'.join(notices+times)+'。仅表示所读页面提示，未核实原文券规则。' if notices else ('已读取活动页面，券适用范围与可领取性仍未确认' if text else '公开响应无可读规则，需要动态页面或APP数据')
-        return dict(state='read' if text else 'dynamic',page_title=title,excerpt=text[:900],note=note,http_status=r.status_code)
+        return dict(state='read' if text else 'dynamic',page_title=title,excerpt=text[:900],note=note,
+                    coupon_claims=parse_discount_claims(text[:20000],evidence_type='target_page'),
+                    coupon_claim_parser_version=BENEFIT_CLAIM_PARSER_VERSION,http_status=r.status_code)
     except requests.RequestException:return dict(state='retry',note='公开页面暂时访问失败')
 
 def run_cycle(limit=4):
@@ -248,7 +336,7 @@ def run_cycle(limit=4):
     with connect() as c:rows=c.execute("""SELECT * FROM benefit_resources
         WHERE state IN ('pending','activity','retry','blocked','unresolved')
           AND (next_check_at IS NULL OR next_check_at<=CURRENT_TIMESTAMP)
-        ORDER BY next_check_at IS NOT NULL,next_check_at,source_type='user_supplied' DESC,id LIMIT ?""",(limit,)).fetchall()
+        ORDER BY source_type='user_supplied' DESC,next_check_at IS NOT NULL,next_check_at,id LIMIT ?""",(limit,)).fetchall()
     counts={}
     for r in rows:
         resolution=(resolve(r['url']) if supported(r['url']) else
@@ -279,31 +367,72 @@ def run_cycle(limit=4):
     return counts
 
 def listing(c,query='',kind='',limit=100,offset=0):
-    rows=c.execute('''SELECT * FROM benefit_resources WHERE state NOT IN ('product','non_benefit')
-        AND (?='' OR title LIKE ? OR origin_text LIKE ?) AND (?='' OR kind=?)
-        ORDER BY source_type='user_supplied' DESC,CASE WHEN source_type='user_supplied' THEN id END ASC,last_seen_at DESC,id DESC
+    rows=c.execute('''SELECT br.* FROM benefit_resources br WHERE br.state NOT IN ('product','non_benefit')
+        AND (?='' OR br.title LIKE ? OR br.origin_text LIKE ?) AND (?='' OR br.kind=?)
+        ORDER BY br.source_type='user_supplied' DESC,CASE WHEN br.source_type='user_supplied' THEN br.id END ASC,
+        COALESCE((SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
+            FROM benefit_resource_sources brs
+            LEFT JOIN opportunities so ON so.id=brs.source_opportunity_id
+            LEFT JOIN events e ON e.id=so.event_id
+            WHERE brs.resource_id=br.id),br.last_seen_at) DESC,br.id DESC
         LIMIT ? OFFSET ?''',(query,'%'+query+'%','%'+query+'%',kind,kind,limit,offset)).fetchall()
     return _present(c,rows)
 
 
 def _present(c,rows):
-    observations={r['resource_url']:dict(r) for r in c.execute('SELECT * FROM benefit_observations ORDER BY checked_at,id')}
-    source_rows=c.execute('''SELECT brs.*,s.platform,s.name FROM benefit_resource_sources brs
+    if not rows:
+        return []
+    resource_ids=sorted({r['id'] for r in rows})
+    marks=','.join('?' for _ in resource_ids)
+    urls=sorted({r['url'] for r in rows if r['url']})
+    observations={}
+    if urls:
+        url_marks=','.join('?' for _ in urls)
+        observations={r['resource_url']:dict(r) for r in c.execute(
+            f'SELECT * FROM benefit_observations WHERE resource_url IN ({url_marks}) ORDER BY checked_at,id',urls)}
+    source_rows=c.execute(f'''SELECT brs.*,s.platform,s.name,
+        COALESCE(e.last_seen_at,brs.last_seen_at) AS source_last_seen_at
+        FROM benefit_resource_sources brs
         LEFT JOIN opportunities o ON o.id=brs.source_opportunity_id
-        LEFT JOIN sources s ON s.id=o.source_id ORDER BY brs.last_seen_at DESC,brs.id DESC''').fetchall()
+        LEFT JOIN events e ON e.id=o.event_id
+        LEFT JOIN sources s ON s.id=o.source_id
+        WHERE brs.resource_id IN ({marks}) ORDER BY source_last_seen_at DESC,brs.id DESC''',resource_ids).fetchall()
     sources={}
     for row in source_rows:sources.setdefault(row['resource_id'],[]).append(dict(row))
-    relation_rows=c.execute('SELECT * FROM benefit_product_relations ORDER BY id').fetchall()
+    relation_rows=c.execute(f'SELECT * FROM benefit_product_relations WHERE resource_id IN ({marks}) ORDER BY id',resource_ids).fetchall()
     relations={}
     for row in relation_rows:relations.setdefault(row['resource_id'],[]).append(dict(row))
     result=[];now=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     for row in rows:
         r=dict(row);r.update(claims(r['title']+'\n'+r['origin_text']));r['label']=RESOURCE_LABELS.get(r['kind'],'优惠会场')
         r['sources']=sources.get(r['id'],[])
+        source_observations=[s['source_last_seen_at'] for s in r['sources'] if s.get('source_last_seen_at')]
+        r['source_last_seen_at']=max(source_observations) if source_observations else r['last_seen_at']
         r['relations']=relations.get(r['id'],[])
         r['source_linked_opportunities']=len({x['opportunity_id'] for x in r['relations'] if x['state']=='source_linked'})
         r['confirmed_opportunities']=len({x['opportunity_id'] for x in r['relations'] if x['state']=='confirmed'})
         r['evidence']=json.loads(r['evidence_json'] or '{}')
+        page_claims=r['evidence'].get('coupon_claims',[])
+        r['page_claims']=page_claims if isinstance(page_claims,list) else []
+        r['page_claim_parser_version']=r['evidence'].get('coupon_claim_parser_version','未记录解析器版本')
+        for claim in r['page_claims']:
+            if isinstance(claim,dict) and not claim.get('occurrences') and 'span_start' in claim and 'span_end' in claim:
+                claim['occurrences']=[{key:claim.get(key) for key in
+                    ('matched_text','evidence_excerpt','span_start','span_end')}]
+        evidence_state=r['evidence'].get('state')
+        if not r['checked_at']:
+            r['rule_sync_label']='目标优惠页尚未同步'
+        elif evidence_state=='read' and r['page_claims']:
+            r['rule_sync_label']=f"页面已同步，识别到{len(r['page_claims'])}条金额/门槛候选；可用性未核实"
+        elif evidence_state=='read':
+            r['rule_sync_label']='页面已同步，未识别到明确金额/门槛'
+        else:
+            r['rule_sync_label']={'login_required':'目标页要求登录，未同步规则',
+                                  'blocked':'目标页访问受限，未同步规则',
+                                  'dynamic':'目标页无可读文字，未同步规则',
+                                  'retry':'目标页同步失败，等待自动重试',
+                                  'unsupported':'目标页没有可用读取适配器',
+                                  'expired':'目标优惠已显示过期'}.get(evidence_state,'目标优惠页未取得可解析规则')
         api_scopes=r['evidence'].get('authorized_scopes',[])
         api_current=False
         for scope in api_scopes if isinstance(api_scopes,list) else []:
@@ -312,6 +441,8 @@ def _present(c,rows):
                 api_current=api_current or timedelta(0)<=datetime.now(timezone.utc)-observed<=timedelta(hours=2)
             except (KeyError,TypeError,ValueError):pass
         r['old_check']=not api_current and (not r['checked_at'] or not r['checked_at']<=now<(r['next_check_at'] or ''))
+        if r['checked_at'] and r['old_check']:
+            r['rule_sync_label']+='（同步结果已过期，需重新检查）'
         if api_scopes:
             latest=api_scopes[-1]
             if isinstance(latest,dict) and isinstance(latest.get('discount_cents'),int) and not isinstance(latest.get('discount_cents'),bool):
@@ -330,12 +461,15 @@ def _present(c,rows):
 
 def stats(c):
     counts=dict(c.execute('SELECT state,COUNT(*) FROM benefit_resources GROUP BY state').fetchall())
+    relations=dict(c.execute('SELECT state,COUNT(*) FROM benefit_product_relations GROUP BY state').fetchall())
     return dict(discovered=sum(counts.values()),
                 total=sum(v for k,v in counts.items() if k not in ('product','non_benefit')),
                 activity=counts.get('activity',0),
                 pending=sum(counts.get(k,0) for k in ('pending','retry','blocked','unresolved')),
                 unsupported=counts.get('unsupported',0),product=counts.get('product',0),
                 non_benefit=counts.get('non_benefit',0),
+                confirmed_relations=relations.get('confirmed',0),
+                source_linked_relations=relations.get('source_linked',0),
                 sources=c.execute('SELECT COUNT(*) FROM benefit_resource_sources').fetchone()[0])
 
 
@@ -351,7 +485,11 @@ def related(c,opportunity_id):
         FROM benefit_resources br JOIN benefit_product_relations r ON r.resource_id=br.id
         WHERE r.opportunity_id=? AND br.state NOT IN ('product','non_benefit')
           AND br.kind IN ('pending','coupon','points','trial','campaign','free_claim','lottery')
-        ORDER BY br.last_seen_at DESC,br.id DESC LIMIT 20''',(opportunity_id,)).fetchall()
+        ORDER BY COALESCE((SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
+            FROM benefit_resource_sources brs
+            LEFT JOIN opportunities so ON so.id=brs.source_opportunity_id
+            LEFT JOIN events e ON e.id=so.event_id
+            WHERE brs.resource_id=br.id),br.last_seen_at) DESC,br.id DESC LIMIT 20''',(opportunity_id,)).fetchall()
     items=_present(c,rows)
     for item in items:
         item['relation_label']=('公开证据支持适用' if item['relation_state']=='confirmed'
@@ -366,12 +504,18 @@ def product_match_candidates(c, opportunity):
     transferable, stackable, or verified.
     """
     identity=merchant_identity(opportunity)
-    if identity['conflict'] or not re.fullmatch(r'[a-z][a-z0-9_]{0,31}:[0-9]+(?::[0-9]+)?',identity['key']):
+    searchable_identity = re.fullmatch(
+        r'(?:[a-z][a-z0-9_]{0,31}:[0-9]+(?::[0-9]+)?|apple:[A-Z0-9]+/[A-Z])',
+        identity['key'] or '')
+    if identity['conflict'] or not searchable_identity:
         return []
     opportunity_id=opportunity.get('id')
+    # Narrow this detail-page lookup by the explicit product ID. The strict
+    # merchant_identity comparison below remains the actual match decision.
+    identity_pattern='%'+identity['key']+'%'
+    item_pattern='%'+identity['key'].split(':')[-1]+'%'
     current_ids={r['resource_id'] for r in c.execute(
         'SELECT resource_id FROM benefit_product_relations WHERE opportunity_id=?',(opportunity_id,))}
-    cache={r['url']:dict(r) for r in c.execute('SELECT * FROM link_resolutions')}
     rows=c.execute('''SELECT br.*,r.opportunity_id AS match_source_opportunity_id,
         o.title AS match_source_title,o.url AS match_source_url,s.platform AS match_source_platform,
         s.name AS match_source_name,e.metadata_json AS match_metadata_json,
@@ -386,30 +530,42 @@ def product_match_candidates(c, opportunity):
         WHERE r.state IN ('source_linked','confirmed')
           AND br.state NOT IN ('product','non_benefit','ignored','expired')
           AND br.kind IN ('pending','coupon','points','trial','campaign','free_claim','lottery')
-          AND o.id<>?
+          AND (e.metadata_json LIKE ? OR a.detail_json LIKE ? OR e.url LIKE ? OR o.url LIKE ?
+               OR EXISTS(SELECT 1 FROM link_resolutions lr
+                   WHERE lr.target_url LIKE ?
+                     AND (e.metadata_json LIKE '%'||lr.url||'%' OR a.detail_json LIKE '%'||lr.url||'%')))
           AND o.status NOT IN ('ignored','expired')
           AND s.enabled=1 AND s.status='healthy'
           AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
           AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
           AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
-        ORDER BY e.published_at DESC,br.id DESC LIMIT 500''',(opportunity_id,)).fetchall()
+        ORDER BY e.published_at DESC,br.id DESC LIMIT 500''',
+        (item_pattern,item_pattern,item_pattern,item_pattern,item_pattern)).fetchall()
     result={}
+    enriched_rows=[]
+    seen_resources=set(current_ids)
     for raw in rows:
-        if raw['id'] in current_ids or raw['id'] in result:
+        if raw['id'] in seen_resources:
             continue
+        seen_resources.add(raw['id'])
         row=dict(raw,metadata_json=raw['match_metadata_json'] or '{}',
-                 detail_json=raw['match_detail_json'] or '{}',url=raw['match_event_url'] or '')
+                 detail_json=raw['match_detail_json'] or '{}',url=raw['match_event_url'] or '',
+                 resource_url=raw['url'])
+        enriched_rows.append(row)
+    cache=resolution_cache(c,enriched_rows)
+    for row in enriched_rows:
         resolved=enrich(row,cache)
         match=merchant_identity(resolved)
         if match['conflict'] or match['key']!=identity['key']:
             continue
-        item=dict(raw)
+        item=dict(row,url=row['resource_url'])
         item.update(claims(item['title']+'\n'+item['origin_text']),
                     label=RESOURCE_LABELS.get(item['kind'],'优惠会场'),
                     relation_state='product_match_candidate',
                     relation_label='其他新鲜来源明确指向同一商城商品ID；优惠范围和可用性未核实',
                     match_product_label=identity['label'],
-                    match_source= f"{item['match_source_platform']} · {item['match_source_name']}")
+                    match_source= f"{item['match_source_platform']} · {item['match_source_name']}",
+                    evidence=dict(note='同一商品ID只证明原文关联；优惠入口规则页面尚未单独读取'))
         result[item['id']]=item
     # Authorized connectors write only normalized provider evidence. Broad
     # store/category coupons are searchable only when the provider also returns
@@ -417,7 +573,8 @@ def product_match_candidates(c, opportunity):
     api_rows=c.execute("""SELECT br.* FROM benefit_resources br
         WHERE br.kind IN ('coupon','campaign','points','trial','free_claim','lottery')
           AND br.state NOT IN ('product','non_benefit','ignored','expired')
-        ORDER BY br.last_seen_at DESC,br.id DESC LIMIT 500""").fetchall()
+          AND br.evidence_json LIKE ?
+        ORDER BY br.last_seen_at DESC,br.id DESC LIMIT 500""",(identity_pattern,)).fetchall()
     now=datetime.now(timezone.utc)
     for raw in api_rows:
         item=dict(raw)

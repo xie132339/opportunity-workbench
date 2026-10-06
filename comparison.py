@@ -7,10 +7,13 @@ from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from urllib.parse import urlparse, parse_qs
 from autoreview import offer_summary, moment, structured_spec
-from link_resolution import enrich
+from link_resolution import enrich, resolution_cache
 from services.source_freshness import publication_is_current
 from services.category_policy import decode_policy, default_policy, resolve_category_policy
 from services.category_comparison_rules import default_rule, normalized_spec, resolve_category_rule
+from services.source_provenance import annotate_search_sources
+
+MERCHANT_PRODUCT_PREFIXES = ('jd:','taobao:','pdd:','suning:','vip:','apple:')
 
 
 def product_key(title):
@@ -39,7 +42,7 @@ def comparison_group_key(row, identity, brief, title_keys_for_merchant=(), title
     have different IDs, an exact normalized title plus an explicit selected spec
     can form a candidate group; it is never described as a verified shared SKU.
     """
-    merchant_id = identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:'))
+    merchant_id = identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES)
     title_key = comparable_title_key or product_key(row.get('title',''))
     if identity_mode == 'merchant_id_only' and not merchant_id:
         return 'unmatched:'+str(row.get('id'))
@@ -84,11 +87,14 @@ def merchant_identity(row):
         elif host=='detail.vip.com':
             match=re.fullmatch(r'/detail-(\d+)-(\d+)\.html',u.path)
             if match:key='vip:'+match[1]+':'+match[2]
+        elif host=='www.apple.com.cn':
+            match=re.fullmatch(r'/shop/product/([a-z0-9]+)/([a-z])',u.path)
+            if match:key='apple:'+match[1].upper()+'/'+match[2].upper()
         if key:
             ids.add(key)
     if len(ids)==1:
         key=next(iter(ids));platform,raw=key.split(':',1)
-        label={'jd':'京东','taobao':'淘宝/天猫','pdd':'拼多多','suning':'苏宁','vip':'唯品会'}[platform]
+        label={'jd':'京东','taobao':'淘宝/天猫','pdd':'拼多多','suning':'苏宁','vip':'唯品会','apple':'Apple 中国'}[platform]
         return dict(key=key,label=label+'商品ID '+raw.replace(':',' / '),conflict=False)
     if len(ids)>1:return dict(key='ambiguous:'+str(row['id']),label='原文含多个商品ID，需先拆分方案',conflict=True)
     title=row.get('title','');key=product_key(title);spec=structured_spec(title)
@@ -109,7 +115,7 @@ def assess_readiness(row, comparison=None, brief=None):
     current = next((item for item in (comparison or {}).get('items',[])
                     if item['id'] == row.get('id')), None)
     identity_ok = not identity['key'].startswith(('title:','ambiguous:')) and not identity['conflict']
-    merchant_id_ok = identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not identity['conflict']
+    merchant_id_ok = identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES) and not identity['conflict']
     selected_spec_ok = bool(specification_key(brief.get('selected_spec'))) and not brief.get('error')
     amount_ok = brief.get('total_cents') is not None and bool(brief.get('quantity')) and not brief.get('error')
     current_ok = current is not None and current.get('source_current') is True
@@ -170,15 +176,69 @@ def quantity_options(items, target):
                 reason='按来源声称的含运费金额比较，资格仍未确认' if includes_shipping else '按商品金额比较；运费不全，不能确定最低到手价')
 
 
-def load_comparisons(db):
-    rows=db.execute("""SELECT o.*,e.snippet,e.metadata_json,e.published_at,e.last_seen_at,
+def load_comparisons(db, opportunity_ids=None):
+    """Build comparisons for the whole corpus or a bounded set of target rows.
+
+    Search and detail pages only need the rows sharing a target's explicit
+    merchant ID or a conservative title stem. Parsing every historical record
+    on every GET made ordinary page loads scale with the whole database.
+    """
+    query="""SELECT o.*,e.snippet,e.metadata_json,e.published_at,e.last_seen_at,
         s.platform,s.parser AS source_parser,s.enabled,s.status AS source_status,s.interval_minutes,s.last_success,
         a.state AS auto_state,a.advertised_cents,a.detail_json,br.policy_json AS category_policy_json
         FROM opportunities o JOIN events e ON e.id=o.event_id JOIN sources s ON s.id=o.source_id
         LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
-        LEFT JOIN benchmark_topic_rules br ON br.topic_key=o.topic ORDER BY o.id DESC""").fetchall()
-    cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
-    rows=[enrich(r,cache) for r in rows]
+        LEFT JOIN benchmark_topic_rules br ON br.topic_key=o.topic"""
+    if opportunity_ids is None:
+        rows=[dict(r) for r in db.execute(query+' ORDER BY o.id DESC').fetchall()]
+    else:
+        target_ids=sorted({int(value) for value in opportunity_ids})
+        if not target_ids:
+            return {}
+        marks=','.join('?' for _ in target_ids)
+        seeds=[dict(r) for r in db.execute(query+f' WHERE o.id IN ({marks})',target_ids).fetchall()]
+        if not seeds:
+            return {}
+        seed_cache=resolution_cache(db,seeds)
+        seeds=[enrich(row,seed_cache) for row in seeds]
+        seed_ids={row['id'] for row in seeds}
+        id_terms=set();title_terms=set();exact_titles=set()
+        for row in seeds:
+            identity=merchant_identity(row)
+            if not identity['conflict'] and identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES):
+                id_terms.update(part for part in identity['key'].split(':')[1:] if len(part)>=4)
+            key=product_key(row.get('title',''))
+            cjk=re.search(r'[\u4e00-\u9fff]{8,}',key)
+            latin=re.search(r'[a-z][a-z0-9-]{7,}',key)
+            stem=(cjk or latin).group()[:12] if cjk or latin else ''
+            if stem:
+                title_terms.add(stem)
+            elif row.get('title'):
+                exact_titles.add(row['title'])
+        source_urls=set()
+        for term in id_terms:
+            source_urls.update(r['url'] for r in db.execute(
+                'SELECT url FROM link_resolutions WHERE target_url LIKE ?',('%'+term+'%',)).fetchall())
+        predicates=['o.id IN ('+','.join('?' for _ in seed_ids)+')']
+        params=list(seed_ids)
+        for term in sorted(id_terms):
+            predicates.append('(o.url LIKE ? OR e.url LIKE ? OR e.metadata_json LIKE ? OR a.detail_json LIKE ?)')
+            params.extend(['%'+term+'%']*4)
+        for url in sorted(source_urls):
+            predicates.append('(o.url LIKE ? OR e.url LIKE ? OR e.metadata_json LIKE ? OR a.detail_json LIKE ?)')
+            params.extend(['%'+url+'%']*4)
+        for stem in sorted(title_terms):
+            predicates.append('o.title LIKE ?')
+            params.append('%'+stem+'%')
+        for title in sorted(exact_titles):
+            predicates.append('(o.title=? OR e.title=?)')
+            params.extend([title,title])
+        rows=[dict(r) for r in db.execute(query+' WHERE ('+' OR '.join(predicates)+') ORDER BY o.id DESC',params).fetchall()]
+        if not seed_ids.issubset({row['id'] for row in rows}):
+            found={row['id'] for row in rows}
+            rows.extend(row for row in seeds if row['id'] not in found)
+    cache=resolution_cache(db,rows)
+    rows=[enrich(row,cache) for row in rows]
     categories=[dict(r) for r in db.execute("SELECT * FROM benchmark_categories WHERE enabled=1")]
     for row in rows:
         policy, category_name, error, policy_scope=resolve_category_policy(
@@ -197,7 +257,8 @@ def load_comparisons(db):
 
 def comparison_index(rows, now=None):
     now=now or datetime.now(timezone.utc).replace(tzinfo=None)
-    groups=defaultdict(list);by_id={};seen=set()
+    groups=defaultdict(list);by_id={}
+    rows=annotate_search_sources(rows)
     rows=sorted(rows,key=lambda r:r['id'],reverse=True)
     merchant_title_keys=defaultdict(set);title_platforms=defaultdict(set);prepared={}
     for row in rows:
@@ -212,7 +273,7 @@ def comparison_index(rows, now=None):
             row.get('title',''),brief.get('selected_spec'),rule)
         comparable_title_key=title_identity if rule['unit_mode']!='exact_spec' and not measure_error else product_key(row.get('title',''))
         prepared[row['id']]=(brief,rule,title_identity,variant,measure,measure_error,comparable_title_key)
-        if identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+        if identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES):
             merchant_title_keys[identity['key']].add(comparable_title_key)
             title_platforms[comparable_title_key].add(identity['key'].split(':',1)[0])
     for row in rows:
@@ -222,8 +283,6 @@ def comparison_index(rows, now=None):
         policy_scope=row.get('resolved_policy_scope','topic')
         if not isinstance(policy,dict):
             policy, policy_error=decode_policy(row.get('category_policy_json'))
-        if row['url'] in seen:continue
-        seen.add(row['url'])
         brief,rule,title_identity,variant,measure,measure_error,comparable_title_key=prepared[row['id']]
         body=json.loads(row.get('detail_json') or '{}').get('conditions') or row.get('snippet') or ''
         title_key=comparable_title_key
@@ -237,7 +296,7 @@ def comparison_index(rows, now=None):
         if identity['conflict']:problems.append(identity['label'])
         conditional=(row.get('auto_state')=='conditional' or bool(brief['promotions'])
                      or bool(brief['qualifications']) or bool(brief['audit']['risks']))
-        merchant_id=identity['key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) and not identity['conflict']
+        merchant_id=identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES) and not identity['conflict']
         if conditional and not merchant_id:
             problems.append('条件优惠缺商家商品ID，无法证明优惠与该商品绑定')
         optimization_gaps=[]
@@ -277,7 +336,12 @@ def comparison_index(rows, now=None):
                          if rule['unit_mode']!='exact_spec' and total is not None and comparison_measure else None)
         normalized_variant=variant if rule['unit_mode']!='exact_spec' else selected_spec_key
         compare_quantity=quantity if rule['unit_mode']=='exact_spec' else None
-        item=dict(identity_label=identity_label,merchant_key=identity['key'],optimization_gaps=optimization_gaps,id=row['id'],url=row['url'],platform=row.get('platform',''),title=row['title'],
+        item=dict(identity_label=identity_label,merchant_key=identity['key'],optimization_gaps=optimization_gaps,id=row['id'],source_id=row.get('source_id'),
+                  source_channels=row.get('source_channels',[]),source_count=row.get('source_count',1),
+                  source_provenance_reasons=row.get('source_provenance_reasons',[]),
+                  source_correlation_keys=row.get('source_correlation_keys',[]),
+                  source_page_identity_key=row.get('source_page_identity_key',''),
+                  url=row['url'],platform=row.get('platform',''),title=row['title'],
                   total_cents=total,quantity=quantity,unit=Fraction(total,quantity) if total is not None and quantity else None,
                   normalized_unit_price=normalized_unit, normalized_base_unit=('g' if rule['unit_mode']=='mass' else 'ml' if rule['unit_mode']=='volume' else rule['count_unit'] if rule['unit_mode']=='count' else None),
                   unit_cents=round(Fraction(total,quantity)) if total is not None and quantity else None,
@@ -298,13 +362,26 @@ def comparison_index(rows, now=None):
             continue
         peers=[i for i in items if i['partition']==target['partition'] and not i['problems']
                and not i['optimization_gaps']]
+        raw_peer_count=len(peers)
+        independent_peers=[]
+        for item in sorted(peers,key=lambda value:(value['id']!=target['id'],-value['id'])):
+            item_keys=set(item.get('source_correlation_keys',[]))
+            page_key=item.get('source_page_identity_key')
+            if ((item_keys and any(item_keys.intersection(chosen.get('source_correlation_keys',[]))
+                                   for chosen in independent_peers))
+                    or (page_key and any(page_key==chosen.get('source_page_identity_key')
+                                         for chosen in independent_peers))):
+                continue
+            independent_peers.append(item)
+        peers=independent_peers
+        related_peer_count=max(0,raw_peer_count-len(peers))
         if key.startswith('title-candidate:'):
             target_platform=target['merchant_key'].split(':',1)[0]
             # Count this listing once per marketplace; copied source posts do not
             # create extra independent offers for the same product ID.
             by_listing={}
             for item in peers:
-                if item['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+                if item['merchant_key'].startswith(MERCHANT_PRODUCT_PREFIXES):
                     by_listing.setdefault(item['merchant_key'],item)
             peers=[item for item in by_listing.values()
                    if item['merchant_key']==target['merchant_key']
@@ -313,9 +390,9 @@ def comparison_index(rows, now=None):
         # repeated claims about one listing, not independent buying options.
         # Keep them visible for audit, but do not use them as a savings baseline.
         merchant_keys={i['merchant_key'] for i in items
-                       if i['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:'))}
+                       if i['merchant_key'].startswith(MERCHANT_PRODUCT_PREFIXES)}
         merchant_platforms={key.split(':',1)[0] for key in merchant_keys}
-        has_unidentified=any(not i['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')) for i in items)
+        has_unidentified=any(not i['merchant_key'].startswith(MERCHANT_PRODUCT_PREFIXES) for i in items)
         same_merchant_listing=bool(merchant_keys) and (len(merchant_keys)==1 or len(merchant_platforms)==1 or has_unidentified)
         required_offers=target['policy']['minimum_comparable_offers']
         metric=lambda i:i['normalized_unit_price'] if i['normalized_unit_price'] is not None else i['total_cents']
@@ -324,8 +401,10 @@ def comparison_index(rows, now=None):
         difference=metric(target)-metric(best) if best and not target['problems'] else Fraction(0)
         saving=round(difference)
         if best and not target['problems']:
-            candidate_note=('按完全一致标题、原文明示报价规格、数量与资格形成候选，商家SKU未核验；'
-                            if key.startswith('title-candidate:') else '')
+            duplicate_note=(f'已排除{related_peer_count}条疑似关联线索，不计为独立价格样本；'
+                            if related_peer_count else '')
+            candidate_note=(duplicate_note+('按完全一致标题、原文明示报价规格、数量与资格形成候选，商家SKU未核验；'
+                            if key.startswith('title-candidate:') else ''))
             peer_prices=[metric(item) for item in peers]
             basis=(f"每{target['normalized_base_unit']}" if target['normalized_base_unit'] else '整单')
             if min(peer_prices)==max(peer_prices):
@@ -351,6 +430,8 @@ def comparison_index(rows, now=None):
             else:
                 message='同一购买平台内的不同商品ID尚不能证明是同一商品；不合并为独立跨渠道基准'
         elif target['problems']:message='暂不能参与当前比较：'+ '；'.join(target['problems'])
+        elif related_peer_count:
+            message=f'发现{related_peer_count}条疑似同源/同优惠的重复线索，已保留但不计作独立价格样本；仍缺独立同口径报价，不能判断省钱或捡漏'
         else:message='当前没有第二个同商品候选、同数量及已提及资格的可比报价'
         ordered=sorted(items,key=lambda i:(bool(i['problems']),i['quantity'] or 10**9,i['total_cents'] if i['total_cents'] is not None else 10**12))
         ordered=[dict(i,comparison_note='与本方案数量、规格或资格不同，仅供对照' if i['partition']!=target['partition'] else '') for i in ordered]
@@ -358,7 +439,7 @@ def comparison_index(rows, now=None):
         if key.startswith('title-candidate:'):
             unique_listings={}
             for item in items:
-                if item['merchant_key'].startswith(('jd:','taobao:','pdd:','suning:','vip:')):
+                if item['merchant_key'].startswith(MERCHANT_PRODUCT_PREFIXES):
                     unique_listings.setdefault(item['merchant_key'],item)
             quantity_items=list(unique_listings.values())
         result[oid]=dict(identity_label=target['identity_label'],quantity_options=quantity_options(quantity_items,target),items=ordered,
@@ -367,6 +448,7 @@ def comparison_index(rows, now=None):
                         unit_mode=target['unit_mode'], normalized_base_unit=target['normalized_base_unit'],
                         policy_scope=target['policy_scope'], resolved_category_name=target['resolved_category_name'],
                         policy_error=target['policy_error'], comparison_basis='source_claim',
+                        related_peer_count=related_peer_count,
                         saving_unit=target['normalized_base_unit'] or 'order_total',
                         best_id=best['id'] if best else None, saving_cents=saving,
                         message=message)

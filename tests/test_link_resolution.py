@@ -1,9 +1,10 @@
-import json,unittest,tempfile
+import json,unittest,tempfile,sqlite3
 from pathlib import Path
 from unittest.mock import patch,MagicMock
 from datetime import datetime,timezone,timedelta
 import requests,db
-from link_resolution import supported,intermediate_hop,canonical_target,login_return_target,resolve,enrich,run_cycle
+from link_resolution import (supported,intermediate_hop,canonical_target,login_return_target,
+                             resolve,enrich,run_cycle,probe_resolved_pages)
 from comparison import merchant_identity
 
 class LinkResolutionTests(unittest.TestCase):
@@ -83,6 +84,72 @@ class LinkResolutionTests(unittest.TestCase):
     def test_worker_cache_prevents_repeat_requests(self):
         with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'test.db'):
             db.initialize()
-            with patch('link_resolution.resolve',return_value=dict(state='resolved',target_url='https://item.jd.com/123.html',reason='test')) as resolver:
-                self.assertEqual(run_cycle(urls=['https://u.jd.com/Abc']),{'resolved':1})
+            product_page=dict(state='public_price',checked_at='2026-10-06 00:00:00',next_check_at='2099-01-01 00:00:00',
+                              title='纸巾',product_identity='jd:123',advertised_cents=1234,currency='CNY',
+                              specification='',price_evidence='schema.org Product/Offer',reason='公开标价')
+            with patch('link_resolution.resolve',return_value=dict(state='resolved',target_url='https://item.jd.com/123.html',reason='test')) as resolver, \
+                 patch('link_resolution.inspect_product_page',return_value=product_page) as probe:
+                self.assertEqual(run_cycle(urls=['https://u.jd.com/Abc']),{'resolved':1,'product_page_public_price':1})
                 self.assertEqual(run_cycle(urls=['https://u.jd.com/Abc']),{});self.assertEqual(resolver.call_count,1)
+                self.assertEqual(probe.call_count,1)
+                with db.connect() as c:
+                    saved=json.loads(c.execute('select product_page_json from link_resolutions').fetchone()[0])
+                self.assertEqual(saved['advertised_cents'],1234)
+
+    def test_worker_resolves_oldest_fresh_links_before_newer_links(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'queue.db'):
+            db.initialize()
+            now=datetime.now(timezone.utc).replace(tzinfo=None)
+            older='https://u.jd.com/Old001';newer='https://u.jd.com/New002'
+            with db.connect() as c:
+                source_id=c.execute('''INSERT INTO sources(platform,name,category,url,method,enabled)
+                    VALUES('京东','test','test','https://example.com/feed','rss',1)''').lastrowid
+                for suffix,title,url,published in (
+                    ('older','older item',older,now-timedelta(minutes=20)),
+                    ('newer','newer item',newer,now-timedelta(minutes=1)),
+                ):
+                    event_id=c.execute('''INSERT INTO events(source_id,external_key,title,url,metadata_json,fingerprint,published_at)
+                        VALUES(?,?,?,?,?,?,?)''',(source_id,suffix,title,url,json.dumps({'activity_links':[url]}),suffix,published.strftime('%Y-%m-%d %H:%M:%S'))).lastrowid
+                    c.execute('''INSERT INTO opportunities(event_id,source_id,title,category,url)
+                        VALUES(?,?,?,?,?)''',(event_id,source_id,title,'test',url))
+            calls=[]
+            def unresolved(url):
+                calls.append(url)
+                return dict(state='unresolved',target_url=None,reason='test')
+            with patch('link_resolution.resolve',side_effect=unresolved):
+                self.assertEqual(run_cycle(limit=1),{'unresolved':1})
+            self.assertEqual(calls,[older])
+
+    def test_additive_page_evidence_migration_preserves_existing_resolution_rows(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'legacy.db'):
+            with sqlite3.connect(db.DB_PATH) as c:
+                c.execute('''CREATE TABLE link_resolutions(
+                    url TEXT PRIMARY KEY,target_url TEXT,state TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',
+                    checked_at TEXT NOT NULL,next_check_at TEXT NOT NULL)''')
+                c.execute("INSERT INTO link_resolutions VALUES('https://u.jd.com/abc','https://item.jd.com/1.html','resolved','old','2026-10-06 00:00:00','2099-01-01 00:00:00')")
+            db.ensure_link_resolution_product_page_column()
+            with db.connect() as c:
+                row=c.execute('select url,target_url,state,reason,product_page_json from link_resolutions').fetchone()
+                self.assertEqual(tuple(row),('https://u.jd.com/abc','https://item.jd.com/1.html','resolved','old','{}'))
+
+    def test_probe_stores_public_price_as_separate_non_quote_evidence(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'probe.db'):
+            db.initialize()
+            source='https://u.jd.com/Abc'; target='https://item.jd.com/123.html'
+            now=datetime.now(timezone.utc); fmt=lambda value:value.strftime('%Y-%m-%d %H:%M:%S')
+            with db.connect() as c:
+                c.execute('''INSERT INTO link_resolutions(url,target_url,state,reason,checked_at,next_check_at)
+                    VALUES(?,?,'resolved','redirect ok',?,?)''',(source,target,fmt(now-timedelta(minutes=1)),fmt(now+timedelta(hours=12))))
+            page=dict(state='public_price',checked_at=fmt(now),next_check_at=fmt(now+timedelta(hours=6)),
+                      title='商品',product_identity='jd:123',advertised_cents=990,currency='CNY',
+                      specification='',price_evidence='Product/Offer',reason='公开标价')
+            with patch('link_resolution.inspect_product_page',return_value=page):
+                self.assertEqual(probe_resolved_pages(source_urls=[source]),{'public_price':1})
+            with db.connect() as c:
+                cache={row['url']:dict(row) for row in c.execute('select * from link_resolutions')}
+                self.assertEqual(c.execute('select count(*) from quotes').fetchone()[0],0)
+            row=enrich(dict(id=1,title='商品',metadata_json=json.dumps({'activity_links':[source]})),cache)
+            evidence=json.loads(row['metadata_json'])['resolved_link_evidence'][0]['product_page']
+            self.assertEqual(evidence['state'],'public_price')
+            self.assertTrue(evidence['current'])
+            self.assertEqual(evidence['advertised_cents'],990)

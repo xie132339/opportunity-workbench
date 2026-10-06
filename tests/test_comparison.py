@@ -9,6 +9,41 @@ from pricing import calculate_plan,promotion_mentions,discount_audit
 from autoreview import public_offer,structured_spec
 import scanner
 
+from scenario_groups import grouped_scenarios
+
+@grouped_scenarios({
+    'test_category_policy_resolution_boundaries': (
+        'category_policy_controls_minimum_comparable_offers',
+        'ambiguous_category_keyword_uses_broad_policy',
+    ),
+    'test_identity_and_specification_match_boundaries': (
+        'identity_policy_can_forbid_title_only_cross_platform_match',
+        'different_counts_and_qualifications_do_not_compete',
+        'variant_and_spec_not_fuzzy_matched',
+        'exact_title_and_explicit_variant_can_compare_across_marketplace_ids_as_candidate',
+    ),
+    'test_measure_conversion_and_ambiguity_boundaries': (
+        'configured_measure_normalizes_packages_and_keeps_variant_identity',
+        'ambiguous_or_incompatible_measure_is_blocked',
+        'unit_normalization_does_not_fuzz_unconfigured_attributes',
+    ),
+    'test_independent_source_and_snapshot_boundaries': (
+        'identical_cross_source_claims_do_not_satisfy_independent_sample_count',
+        'same_url_snapshots_not_two_independent_offers',
+    ),
+    'test_quote_freshness_and_source_health_boundaries': (
+        'old_failed_future_quotes_do_not_win',
+        'catalog_currentness_uses_recent_successful_observation',
+    ),
+    'test_comparison_messages_distinguish_equal_and_lower_claims': (
+        'identical_quotes_not_claimed_as_discount',
+        'lowest_source_claim_is_not_misreported_as_equal',
+    ),
+    'test_explicit_plan_and_coupon_parsing_across_sources': (
+        'generic_explicit_plan_across_sources',
+        'coupon_shorthand_and_original_threshold',
+    ),
+})
 class ComparisonTests(unittest.TestCase):
     def row(self,i,total='10',quantity=2,title='某品牌 抽纸 100抽3层6包 5元',tail='',**extra):
         now=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -25,7 +60,22 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(r[2]['best_id'],2)
         self.assertEqual(r[2]['saving_cents'],0)
 
-    def test_category_policy_controls_minimum_comparable_offers(self):
+    def _case_identical_cross_source_claims_do_not_satisfy_independent_sample_count(self):
+        first=self.row(1,'10',quantity=1)
+        second=self.row(2,'10',quantity=1)
+        first['source_id']=101
+        second['source_id']=102
+
+        result=comparison_index([first,second])
+
+        self.assertEqual(result[1]['peers'],1)
+        self.assertEqual(result[1]['related_peer_count'],1)
+        self.assertIsNone(result[1]['best_id'])
+        self.assertEqual(len(result[1]['items']),2)  # Both source records remain auditable.
+        self.assertEqual(next(item for item in result[1]['items'] if item['id']==1)['source_count'],2)
+        self.assertIn('不计作独立价格样本',result[1]['message'])
+
+    def _case_category_policy_controls_minimum_comparable_offers(self):
         leaf_policy=default_policy();leaf_policy['minimum_comparable_offers']=3
         categories=[dict(id=1,name='纸品',topic_key='home',enabled=1,
                          match_terms_json='["抽纸","卷纸"]',policy_json=encode_policy(leaf_policy))]
@@ -46,7 +96,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(result[1]['comparison_basis'],'source_claim')
         self.assertEqual((result[1]['resolved_category_name'],result[1]['policy_scope']),('纸品','category'))
 
-    def test_configured_measure_normalizes_packages_and_keeps_variant_identity(self):
+    def _case_configured_measure_normalizes_packages_and_keeps_variant_identity(self):
         rule=dict(default_rule(),unit_mode='count',count_unit='抽')
         first=self.row(1,'10',title='某品牌抽纸100抽3层6包 10元',selected_spec='100抽 × 3层 × 6包',quantity=1,
                         metadata_json='{"activity_links":["https://item.jd.com/123.html"]}')
@@ -61,7 +111,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn('按每抽归一',result[1]['message'])
         self.assertEqual(result[1]['quantity_options']['count'],0)
 
-    def test_ambiguous_or_incompatible_measure_is_blocked(self):
+    def _case_ambiguous_or_incompatible_measure_is_blocked(self):
         rule=dict(default_rule(),unit_mode='mass')
         first=self.row(1,'10',title='某品牌米200克 10元',selected_spec='200克',
                         metadata_json='{"activity_links":["https://item.jd.com/123.html"]}')
@@ -87,7 +137,7 @@ class ComparisonTests(unittest.TestCase):
         conflict=normalized_spec('某牌奶粉400g','800克',rule)
         self.assertIn('标题计价规格与选中报价规格冲突',conflict[3])
 
-    def test_identity_policy_can_forbid_title_only_cross_platform_match(self):
+    def _case_identity_policy_can_forbid_title_only_cross_platform_match(self):
         rule=dict(default_rule(),identity_mode='merchant_id_only')
         title='某品牌抽纸100抽3层6包 5元'
         rows=[self.row(1,'10',title=title),self.row(2,'8',title=title)]
@@ -97,7 +147,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(result[1]['best_id'])
         self.assertEqual(result[1]['peers'],1)  # includes the current offer; no second candidate
 
-    def test_unit_normalization_does_not_fuzz_unconfigured_attributes(self):
+    def _case_unit_normalization_does_not_fuzz_unconfigured_attributes(self):
         rule=dict(default_rule(),unit_mode='mass')
         a=normalized_spec('某牌奶粉 400g 2罐','奶粉段数3段 400g 2罐',rule)
         b=normalized_spec('某牌奶粉 800g','奶粉段数2段 800g 1罐',rule)
@@ -105,7 +155,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertNotEqual(a[1],b[1])
         self.assertEqual((str(a[2]),a[3]),('800',None))
 
-    def test_ambiguous_category_keyword_uses_broad_policy(self):
+    def _case_ambiguous_category_keyword_uses_broad_policy(self):
         categories=[
             dict(id=1,name='抽纸',topic_key='home',enabled=1,match_terms_json='["抽纸"]',policy_json='{}'),
             dict(id=2,name='纸巾套装',topic_key='home',enabled=1,match_terms_json='["抽纸"]',policy_json='{}'),
@@ -116,21 +166,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(policy,default_policy())
 
-    def test_different_counts_and_qualifications_do_not_compete(self):
+    def _case_different_counts_and_qualifications_do_not_compete(self):
         for changed in [self.row(2,'8',quantity=3),self.row(2,'8',tail='限新客首单'),self.row(2,'8',tail='仅限北京地区')]:
             r=comparison_index([self.row(1),changed]);self.assertIsNone(r[1]['best_id'])
 
-    def test_variant_and_spec_not_fuzzy_matched(self):
+    def _case_variant_and_spec_not_fuzzy_matched(self):
         r=comparison_index([self.row(1),self.row(2,title='某品牌 抽纸 80抽3层6包 4元')])
         self.assertEqual(len(r[1]['items']),1)
         self.assertNotEqual(product_key('型号A1 6GB 100元'),product_key('型号A1 8GB 90元'))
 
-    def test_old_failed_future_quotes_do_not_win(self):
+    def _case_old_failed_future_quotes_do_not_win(self):
         for extra in [dict(published_at='2020-01-01 00:00:00'),dict(source_status='failed'),dict(auto_state='conflict'),dict(published_at='2099-01-01 00:00:00')]:
             r=comparison_index([self.row(1),self.row(2,'1',**extra)])
             self.assertIsNone(r[1]['best_id']);self.assertTrue(next(i for i in r[1]['items'] if i['id']==2)['problems'])
 
-    def test_catalog_currentness_uses_recent_successful_observation(self):
+    def _case_catalog_currentness_uses_recent_successful_observation(self):
         now=datetime.now(timezone.utc).replace(tzinfo=None)
         title='米家冰箱 对开636L 1899元'
         row=self.row(1,title=title,url='https://www.mi.com/shop/buy?product_id=22504',
@@ -142,20 +192,23 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(item['source_current'])
         self.assertIsNone(result[1]['best_id'])
 
-    def test_same_url_snapshots_not_two_independent_offers(self):
+    def _case_same_url_snapshots_not_two_independent_offers(self):
         r=comparison_index([self.row(1),self.row(2,'8',url='https://guangdiu.com/detail.php?id=1')])
-        self.assertEqual(len(r[2]['items']),1);self.assertIsNone(r[2]['best_id'])
+        self.assertEqual(len(r[2]['items']),2)
+        self.assertEqual(r[2]['related_peer_count'],1)
+        self.assertEqual(r[2]['peers'],1)
+        self.assertIsNone(r[2]['best_id'])
 
     def test_unknown_shipping_stays_unknown(self):
         r=comparison_index([self.row(1),self.row(2,'8')]);self.assertIsNone(r[1]['items'][0]['shipping_cents'])
 
-    def test_generic_explicit_plan_across_sources(self):
+    def _case_generic_explicit_plan_across_sources(self):
         for u in ['https://www.smzdm.com/p/123/','https://another.example/item/1']:
             r=public_offer(u,'下单2件，实付10元，实付单件5元')
             self.assertEqual((r['total_cents'],r['quantity']),(1000,2))
         self.assertEqual(public_offer('https://another.example/item/1','实付单件5元'),{})
 
-    def test_coupon_shorthand_and_original_threshold(self):
+    def _case_coupon_shorthand_and_original_threshold(self):
         p=calculate_plan('活动售价5.97元，下单领取29-10优惠券，满1件，打7.9折，下单5件，实付13.58元')
         self.assertEqual(p['state'],'conditional_match');self.assertNotIn('verified',p)
         self.assertIn('满1件打7.9折',promotion_mentions('满1件，打7.9折'))
@@ -175,11 +228,11 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(r[5]['activity_links'],['https://coupon.m.jd.com/coupons/show.action?key=public','https://guangdiu.com/go.php?id=1'])
         self.assertFalse(r[5]['content_truncated'])
 
-    def test_identical_quotes_not_claimed_as_discount(self):
+    def _case_identical_quotes_not_claimed_as_discount(self):
         r=comparison_index([self.row(1),self.row(2)])
         self.assertEqual(r[1]['saving_cents'],0);self.assertIn('相同',r[1]['message'])
 
-    def test_lowest_source_claim_is_not_misreported_as_equal(self):
+    def _case_lowest_source_claim_is_not_misreported_as_equal(self):
         r=comparison_index([self.row(1,'10'),self.row(2,'8')])
         self.assertIn('价为候选中最低',r[2]['message'])
         self.assertIn('价高2.00元',r[2]['message'])
@@ -193,7 +246,7 @@ class ComparisonTests(unittest.TestCase):
         self.assertIsNone(r[1]['best_id'])
         self.assertIn('同一商家商品ID',r[1]['message'])
 
-    def test_exact_title_and_explicit_variant_can_compare_across_marketplace_ids_as_candidate(self):
+    def _case_exact_title_and_explicit_variant_can_compare_across_marketplace_ids_as_candidate(self):
         title='某品牌抽纸100抽3层6包 5元'
         jd='{"activity_links":["https://item.jd.com/123.html"]}'
         tm='{"activity_links":["https://detail.tmall.com/item.htm?id=456"]}'

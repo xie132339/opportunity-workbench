@@ -679,3 +679,147 @@ git diff --check
 - 正式库只读快照（UTC 2026-10-05 16:14）：events/opportunities/auto_reviews/quotes `13,896/13,896/13,895/0`；带原文时间事件12,006；金额及原文时间线索7,759。跨采集路由相同标题/正文1,074组/2,178条；不同平台标签112组/248条；有价候选103组/229条，103组事件条目域名同为`guangdiu.com`。数据随本机worker滚动，此数字仅代表该只读事务。
 - 验证：`.venv/bin/python -m unittest discover -s tests -p 'test_price_benchmarks.py' -v` 定向10项通过；`.venv/bin/python -m unittest discover -s tests` 全量213项通过；`PYTHONPYCACHEPREFIX=/private/tmp/opportunity-provenance-pycache .venv/bin/python -m py_compile services/source_provenance.py routes/price_benchmarks.py` 通过；`git diff --check -- services/source_provenance.py routes/price_benchmarks.py templates/price_benchmarks.html tests/test_price_benchmarks.py` 通过。用正式库连接执行 `PRAGMA query_only=ON`，Flask test client 渲染页面HTTP 200；Obsidian CLI提示Obsidian未运行，后续笔记按既有路径维护。
 - 未完成：实际Chrome未视觉验收；现有自动核验未保存解析规则ID/版本及字段精确命中范围；外部 `quotes=0`，同文候选不等于转载证明，原文页面及跳转链接也不自动证明商家/SKU/公开价。总目标仍`PARTIAL`。
+
+
+## D44：多渠道源码环境恢复与最新验收（2026-10-06）
+
+这次首页数据少的直接运行时根因，是16个已启用来源访问的本地RSSHub服务没有启动（`127.0.0.1:1200` connection refused）。现有解析器和渠道配置不是唯一问题：当前商品搜索另要求商品类型、原文发布时间、来源健康等证据；成功抓到原始条目不自动升级为在售商品报价。
+
+RSSHub源码工作区在`/Applications/work/gitRepo/rsshub-source`，分支`feature/opportunity-workbench`；保留已有两个未提交的逛丢路由改动。本次没有改RSSHub文件，也没有用Docker。`pnpm dev`尝试运行时，pnpm因无TTY不允许清理重装依赖而自行中止；未执行安装/清理。改用已存在的TSX依赖直接启动并仅绑定回环地址：
+
+```sh
+cd /Applications/work/gitRepo/rsshub-source
+PORT=1200 LISTEN_INADDR_ANY=false NODE_ENV=dev NODE_OPTIONS='--max-http-header-size=32768' node_modules/.bin/tsx lib/index.ts
+```
+
+工作台网页继续由源码直接运行，不执行`initialize()`、迁移或重置：
+
+```sh
+cd /Applications/work/gitRepo/opportunity-workbench
+.venv/bin/flask --app app:app run --host 127.0.0.1 --port 5002 --no-reload
+```
+
+页面入口：`http://127.0.0.1:5002/`。渠道页“检查全部已启用来源”调用现有公开采集器，执行后显示本批成功数与新增条数。真实验证先在RSSHub未启动时全扫34源，18成功/81新增；RSSHub源码进程启动后两条公开路由HTTP 200，再全扫34/34成功/155新增。没有清除、重建或删改历史记录。
+
+第二轮实扫后的即时快照：首页385条新鲜商品线索；随后最终页面复核为384条（两小时新鲜窗口滚动）。17个启用入口当前产出商品线索、9个入口有明确报价；报价视图141条明确来源声称价。0条进入同口径价格比较，独立行情记录仍为0，因此没有证据判定哪条是省钱或捡漏。手动触发现有自动核验一轮：审查14,268条，最多实际探测6条详情，95条继续排队；不代表全量详情已完成。自动核验不要求人工逐条点商家核实。
+
+浏览器实际详情导航单次96ms；桌面操作列与来源状态列没有几何重叠；460px窄屏没有横向溢出。`view=offers`总数141，页面中“金额口径待确认/金额未提取”不作为数值报价。全量215项unittest通过。总体捡漏目标仍`PARTIAL`。
+后台安全采集循环继续运行后，due 扫描检查6个来源、6个健康、新增15条；后台采集中间快照401条；随后最终工作台复核395条（两小时新鲜窗口滚动），18/34个启用入口命中当前商品搜索，10个入口有明确报价。`view=offers`当前153条，首屏100条分页；实测报价页不出现“金额口径待确认”“金额未提取”或“未形成可用报价”。新一轮自动复查探测6条详情，排队数95降至89；未调用消息发送。当前仍无同口径可比价或独立行情报价，不能据此宣称捡漏达标。
+
+## 2026-10-06 D49：默认报价页与无价线索分流实测
+
+- 当前仓库 `/Applications/work/gitRepo/opportunity-workbench`，分支`feature/bootstrap`。全量290项`unittest`通过；搜索与价格准入模块编译、`git diff --check`通过。
+- 为加载新的首页默认视图，仅重启HTTP网页进程（未调用`initialize()`，未启动scanner/worker，未执行迁移）。启动命令：
+
+  ```sh
+  cd /Applications/work/gitRepo/opportunity-workbench
+  PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -c 'import app; app.app.run(host="127.0.0.1", port=5002, debug=False, use_reloader=False)'
+  ```
+
+- 浏览器实际打开`http://127.0.0.1:5002/?q=纸&layout=list`，默认页为明确报价视图：42条可展示报价；漏斗当前线索49条、其中42条有明确报价、7条无唯一金额。另打开`http://127.0.0.1:5002/?q=纸&view=current&layout=list`，49条线索仍完整可见，缺价记录保留缺项解释。
+- 以上为实际本地数据库读取及页面呈现，统计取决于两小时新鲜窗口；本轮未修改/删除正式数据行，未运行采集扫描、后台worker或数据库迁移。列表中来源声称价/目录标价仍不能冒充结算价或证明捡漏。
+
+## 2026-10-06 D50：测试套件去重验证
+
+- 基线为19个测试模块、290项 `unittest`。重复审查发现一个品类分类测试的函数体与相邻测试完全一致，另有单件报价测试重复执行同一文本断言；移除重复测试和断言，净删10行。
+- 定向命令：`.venv/bin/python -m unittest discover -s tests -p 'test_public_profit_and_sync.py'`（19项）及 `.venv/bin/python -m unittest discover -s tests -p 'test_price_admission.py'`（15项），均通过。完整命令 `.venv/bin/python -m unittest discover -s tests`：289项通过，约1.6秒。
+- `PYTHONPYCACHEPREFIX=/private/tmp/opportunity-pycache .venv/bin/python -m py_compile tests/test_public_profit_and_sync.py tests/test_price_admission.py` 与 `git diff --check`通过。无运行服务、数据库或产品代码改动；未提交。
+
+
+## 2026-10-06 D45续：优惠候选解析器与源码服务
+
+网页服务以源码命令 .venv/bin/python app.py serve 重新启动在 127.0.0.1:5002，加载优惠候选解析器 v3；真实 /benefits 页面已复核未识别状态、5.9-5/199-100金额候选和同条原文重复命中合并。回归结果：32项优惠定向、225项全量 unittest、模块 py_compile 和 git diff --check通过。本轮未运行 app.py scan、未启动第二个 worker、未同步活动页面或向消息渠道发送内容；后台目标页下次自动读取是否使用当前代码取决于既有 worker 的运行版本，尚未验收。
+
+## 2026-10-06 D45续：优惠数据复查与本地服务状态
+
+- 工作树：`/Applications/work/gitRepo/opportunity-workbench`，分支 `feature/bootstrap`。网页服务使用 `.venv/bin/python app.py serve`，监听 `127.0.0.1:5002`；`app.py serve` 入口会先调用 `initialize()`。本次服务重新启动以加载新代码。
+- 本轮用单次调用 `benefits.run_cycle(limit=7)` 做公开优惠入口检查，不启动长期 `app.py worker`。调用会先执行资源 `sync()` 和 `reclassify()`，随后处理最先到期的7条用户提供链接；结果为5个动态无可读规则、1个页面可读但无优惠金额/门槛、1个跳转登录。检查后仍有8,204条一般任务到期；不得把这一轮描述成全库全部核实。
+- 执行前 `active_channels()` 为0；调用路径没有执行 `dispatch_verified_alerts()`。本轮无消息发送、登录、领券或下单。网页服务保持运行；没有后台 worker 继续更新数据库。
+- 真实 `/benefits?q=10点` 刷新确认界面显示当前优惠页检查时间，以及“商品适用证明0、原文同条关联14,736”的全局漏斗计数。实际页面已区分动态未读、已读未识别和要求登录。
+- 数据验证：43个配置源中34个健康启用，近窗34个均有来源记录；10个渠道有公开金额/条件候选；6个目录适配源233条，其中35唯一公开标价、8条件价、190缺唯一价。正式库 `quotes=0`、确认商品关系0。当前数据不足以证明任何可买优惠或捡漏。
+- 全量测试 `.venv/bin/python -m unittest discover -s tests`：226项通过；相关模块 `py_compile` 通过。收尾后 `git diff --check` 通过。当前不应声称所有8,204条任务已核验，也不应把公开目录价当成交价。
+
+## 2026-10-06 D46：真实短写优惠回放与页面核验
+
+本轮围绕正式内容机会 #14214 处理“商品优惠都显示未识别/金额没有说清”的一条实际反例。页面原文与记录包含京东来源声称秒杀 ¥7.10、优惠券短写“5.1-5”、首购短写“-1”、来源声称低至 ¥1.10、入口“详情页弹/加购砸蛋”。
+
+代码改动是解析器级规则，不为纸品或 #14214 写死：增加满减券与首购礼金简写候选；券模式限定在同一行，防止把下一行来源块或“满件折 1-0.85”误吃成优惠；保留原文命中位置、币种证据和来源声称状态；识别指定页面弹券与加购砸蛋入口，并在详情 UI 显示其资格与概率风险。单位省略时按人民币元只作为条件试算假设，页面会明示。
+
+浏览器实页 /opportunities/14214 验收：
+- 抽取 2 条优惠提及：“满5.1减5”“首购-1”；3 条资格/入口提示：“首购”“详情页弹”“加购砸蛋”。
+- 来源声称 1 件、¥7.10 秒杀价、¥1.10 低价。券先用及首购抵扣先用，两种算术排列均与来源声称相符。
+- 页面明确指出砸蛋是概率优惠，不保证领取；首购资格、人民币单位、商品/SKU适用、叠加次序与平台规则没有商家依据；运费原文未说明，不能按0元算。
+- 京东商品ID已提取，但标题规格尚未和实际选中变体确认；本商品确认适用优惠0；独立同口径价格样本0；公开行情 quotes=0。因此没有形成可执行到手价或捡漏结论。
+
+验证：全量 unittest 248 项通过；改动 Python 文件编译通过，git diff 检查通过；真实浏览器页面显示上述公式与缺项提示。本轮未手动触发采集扫描、优惠页面同步、worker、迁移、登录、领券、下单或消息发送；页面浏览不能证明商家端实际结算。
+
+后续顺序：将同一通用字段处理覆盖当前来源中其他满减/新人/首单/礼金/概率入口原文；逐个记录目标页是否可匿名读取及字段是否完整；把活动与明确商品/SKU绑定候选，与确认适用严格分开；继续寻找可复现的当前公开商品价和独立同口径样本。入口记录量或匹配算式都不能替代最终证据。整体目标仍 PARTIAL。
+
+## 2026-10-06 D47：优惠金额语义回归与只读数据盘点
+
+- 正式库 `data/workbench.sqlite3` 用 immutable 只读快照盘点；没有扫描、同步、迁移、清理或写库。北京时间06:51快照为来源43（启用36、健康35）、事件/机会/自动核验15,048/15,048/15,048，外部行情`quotes=0`。
+- 近两小时1,187条事件来自36个来源配置；解析到优惠/奖励声称242条，明确原文整单金额+件数250条。后者核验状态含 stale 167、conditional 46、observed 25等，均不能直接当商家结算或低价证明。标题搜索“纸”匹配51条，横跨逛丢、GUANGDIU、什么值得买、苏宁、线报酷；计数随采集滚动。
+- 商城详情检查为1,964 `page_read_no_price`、23 `retry`；8个行情提供方全部not_connected、样本0；14,910条商品优惠关系全部`source_linked`。入口数量和摘要金额都不代表商品优惠适用。
+- 代码修复对返现后金额单独保存，不把它用于应付总价/低价；显式“超补39-6”提取为带跨度的来源候选；抽奖奖励不计商品现金折价。真实机会复放在隔离库：#14985返后¥29.98不生成购买报价；#14984超补候选不越过过期状态；#15004仅标来源声称价。
+- 验收：全量286项unittest通过；py_compile和`git diff --check`通过。Flask test client对只读数据库副本执行详情与优惠页面回放。**5002运行进程是否加载本轮源码未验证**；没有重启服务或触发生产同步。详见 `docs/core-acceptance.md` D47。
+- 近窗高信号候选只作待核验：#14970洗衣皂原文10.93−5−1声称4.93，需首购/券/PLUS与运费条件；白猫洗洁精#15003/#15033共用同一逛丢详情URL，#14960转载指向同一京东短链，不能算3份独立行情。当前匿名网页抓取工具打不开所试京东短链/商品页；不代表源端失效，价格和资格仍not_proven。
+- 搜索路由隔离回放：`q=纸` 当前视图14条，报价视图8条，历史视图按100条分页；近两小时51条标题匹配中35条为stale、1条source_unavailable，另有缺价/条件/观测状态。准入与发布时间过滤后只有14条。这个门槛是防止旧帖子刷新采集时间后冒充新优惠；不应通过放宽TTL制造更多“当前机会”。隔离回放数据库行数前后不变。
+
+## 2026-10-06 D53：跨平台在线回放与源码服务
+
+- 工作树`/Applications/work/gitRepo/opportunity-workbench`，分支`feature/bootstrap`。没有提交；保留工作区已有改动。
+- 公开GET验证命令通过当前源码`.venv/bin/python`调用`scanner._fetch`、`scanner.extract_html`与指定站点解析器；页面仅限HTTPS、无Cookie/账号，scanner拒绝自动跟随跳转。实测小米目录80条候选（解析器上限80）、荣耀商品详情、苏宁已下架详情、联想未发布详情及逛丢文章#29832200。字段与结果详见`docs/core-acceptance.md` D53。
+- 对#15087从逛丢读取到主文标题金额730分与正文凑单/满减内容；只读回放仍按原发布时间判`stale`，`listing_quote=None`。正式数据库中该行保持`advertised_cents=730, detail_checked_at=NULL`；本轮未写库、未运行`scan`、`worker`、优惠同步、迁移或通知。
+- 5002原进程确认工作目录即本项目但加载的是旧源码，已只对该Flask网页进程执行SIGTERM，随后以当前源码直接导入`app`运行。运行命令为`WORKBENCH_DB=/Applications/work/gitRepo/opportunity-workbench/data/workbench.sqlite3 .venv/bin/python -c 'from app import app; app.run(host="127.0.0.1", port=5002, debug=False, use_reloader=False)'`。这没有调用`initialize()`，仅监听回环地址；`/health`、`/opportunities/15087`返回200。浏览器页显示¥7.30线索金额及不参与低价排序。
+- 全量205项unittest、目标Python模块编译与`git diff --check`通过。真实历史搜索GET HTTP 200，渲染约11.4秒；该性能没有优化，应与来源兼容分开跟进。36个启用配置不等于36家独立零售来源；本轮只实测五个页面，其余入口、动态JS、登录/账号价与结算没有被验证。
+
+## 2026-10-06 D48：核心搜索漏斗与多源比较隔离回放
+
+- 工作树`/Applications/work/gitRepo/opportunity-workbench`，分支`feature/bootstrap`；保留已有改动，本轮未提交。
+- 搜索增加来源关联候选与查询准入漏斗；比较器保留重复来源原行，仅在独立样本计数阶段排除重复。历史行不删，TTL不放宽。
+- 验证：`.venv/bin/python -m unittest discover -s tests` 290项通过；指定模块`py_compile`通过；`git diff --check`通过。
+- 只读SQLite快照副本经Flask test client回放`q=纸`：HTTP 200，匹配1,143、当前30、来源声称价24、无报价6、stale872、source_unavailable138、retry0、excluded83、其他20。命中渠道：逛丢20/18有价，GUANGDIU6/6有价，苏宁目录4/0有价。
+- 苏宁目录#317/#325/#326/#339均缺价格元数据并为`missing_price`。源码显示只有Apple列表卡片价签解析，苏宁商品详情页未进入自动读取适配；这是能力缺口，不是排序漏项。
+- 白猫比较保留#15033/#15003/#14960，独立peer=0、best为空；隔离副本`events/opportunities/auto_reviews/quotes`前后均为`15,154/15,154/15,154/0`。
+- 未写正式数据库、未运行采集/优惠同步/迁移。5002服务是否加载本轮代码未验证，也未重启。
+- 总体仍PARTIAL：搜索诊断与来源独立性防误判通过；直接目录公开价覆盖和独立行情`quotes=0`仍阻塞捡漏判断。下步逐平台建立可审计商品页价签提取与下架/动态/登录墙反例。
+
+
+## 2026-10-06 D51：测试场景分组与回归
+
+- 在D50后267个unittest入口的基础上，把8个无共享外部副作用的测试类中99个相关场景函数归入35个具名`subTest`分组；报告的独立unittest项从267降为203，减少64项。映射审计确认无缺失、孤立或重复场景。
+- 这是测试报告项归并，99个场景断言仍全部执行；不声称运行成本下降。全量`.venv/bin/python -m unittest discover -s tests`：203项通过，1.15秒。测试归并不改变产品逻辑或数据库。
+- 定向模块和全量`git diff --check`通过；工作区仍有其他已有业务改动，本轮不提交。核心业务的价格证据、跨渠道覆盖与捡漏验收仍按`docs/core-acceptance.md`判断，不能由测试数量代替。
+
+## 2026-10-06 D52：金额提取修复与隔离回放
+
+- 只读正式库记录#15087：来源标题和自动核验记录已保存¥7.30，但直接详情检查为空；本地浏览器可访问性内容显示正文含商品价7.3元、凑单0.01元及满14减5。实际问题是自动详情队列不支持逛丢页面，且搜索详情误把“已识别的标题金额线索”隐藏在“未形成报价”后面。
+- 逛丢详情适配限定 `guangdiu.com/detail.php?id=<数字>`，只解析主文案，不读取推荐区；来源金额仍不是可用整单报价。商品页解析对既有目录站点读取 Product/Offer、Microdata、Open Graph Product metadata，匹配当前商品URL，只录唯一人民币公开价。
+- 自动复查队列和页面以隔离 SQLite 集成回放：标题价¥7.30可见但不进入默认报价/预算筛选；推荐卡片¥99.90未串入；苏宁测试商品的结构化公开价¥7.30进入目录公开标价展示。正式数据库只读，没有运行扫描、迁移或清理。
+- 全量`.venv/bin/python -m unittest discover -s tests` 205项通过；模块`py_compile`和`git diff --check`通过。源码网页服务已在5002重启（直接导入Flask app运行，没有执行`initialize()`或启动worker）；`/health`、`/opportunities/15087`、当前搜索和预算筛选均HTTP 200。真实HTML显示标题金额线索¥7.30及“不参与低价排序”；该机会可从当前搜索结果进入，但预算≤8筛选不包含它。正式库行重启前后仍为`(advertised_cents=730, detail_checked_at=NULL)`。
+- 未通过真实HTTP抓取各零售网站，因此动态JS价签与页面权限边界仍待后续线上验收；不绕过登录、验证码或反爬，也不将公开标价称为账号到手价。
+
+
+## 2026-10-06 D55：把后台worker更新到当前源码
+
+- 旧后台PID 14991是启动早于商品页适配的`.venv/bin/python -`内联进程。用户要求按当前代码验证后，以SIGINT结束旧进程；`127.0.0.1:5002`源码网页服务保持运行。
+- 使用仓库标准入口`.venv/bin/python app.py worker`启动单一新worker。该入口会先执行`initialize()`，再执行到期来源扫描、自动复核、公开短链/商品页核验和优惠页读取，每轮间隔60秒。消息通道配置检查为空，因此本次worker没有外发通知。
+- 首两轮实际回执：source_id 30–35均healthy，seen各66、新线索15和11；自动复核probed各6；商品短链结果分别为`resolved=3/activity=3/product_page_unreadable=2`及`resolved=2/unresolved=4/product_page_unreadable=2`。优惠页分别`dynamic=2/read=2`及`login_required=1/dynamic=2/read=1`。这是线报酷六个栏目，不是六个独立零售平台。
+- 10:56北京时区实时查看`/sources`：43条配置，36条“采集有返回”、7条暂停。价格基准页显示9,236条带原文时间金额线索、41条无条件歧义的来源报价解析、82条带资格/优惠条件报价；均不能当作商家结算价。实时执行`/?q=纸&view=current&layout=list` HTTP 200，28条当前线索、商品搜索准入0、同口径比较0、来源相对低价0。
+- `/health`及京东#16335、拼多多#15923详情均HTTP 200；页面对不可读商品页显示无价，不升格为报价。207项unittest、改动模块编译和`git diff --check`通过。
+
+## 2026-10-06 D56：短链队列调度与当前worker
+
+正式branch为`feature/bootstrap`。最新`link_resolution.run_cycle()`从近两小时有效链接中按发布时间升序取待处理项；每轮上限10、循环时间预算45秒。此前按机会ID新到旧、最多6条的调度会让持续流入的新链接挤压仍新鲜的较早链接。03:04 UTC只读快照：958条支持的唯一链接、727条到期/未核；#16215原链在旧顺序第256位。
+
+旧worker已停止，唯一常驻worker由`.venv/bin/python app.py worker`启动，首轮短链结果数合计10、另探测2个商品页。#16215定向公开复核将逛丢短链映射为`https://item.jd.com/100059524888.html`，京东匿名页未取得标题/价格；页面HTTP 200，标示“商品页当前不可机读”。`q=纸&view=current`当前显示43条新鲜线索、商品搜索准入0、同口径比较0。此轮证明当前代码加载并修复队列优先级，不证明全部渠道覆盖或存在可买低价。全量208项测试、编译和`git diff --check`通过。
+
+## 2026-10-06 D57：当前进程与即时搜索快照（06:20 UTC）
+
+- 网页服务由旧启动时间10:38的PID 49719优雅停止，再用`.venv/bin/python app.py serve`启动当前工作树；后台单一采集器由`.venv/bin/python app.py worker`运行。当前网页健康检查HTTP 200/SQLite ok。
+- 失败源重试上限改为15分钟；健康源仍按各自间隔。重启后曾失败的source ID 2/3（Apple/小米域名解析）及18/41（RSSHub 503）自动复试均返回healthy。最新快照36个启用源healthy、0个失败，另有7个暂停。
+- 最新`q=纸&view=current&layout=list`真实HTTP 200：当前24条线索、14条有来源金额、10条无报价；5/36入口命中、2个入口显示金额；准入0、同口径可比0。详情#15087 HTTP 200继续显示¥7.30“标题金额线索”，明确不进报价、排序、预算、比较。
+- 自动复核曾因中断留下租约；`autoreview.run_cycle`现于`finally`仅释放自己持有的租约。运行回执06:16:16和06:19:01 UTC均正常结束，最近一次reviewed=17,499、probed=6。短链核验为每分钟独立调度；商品页不可机读仍作为失败结果保留，不猜价。
+- 全量213项unittest、相关模块语法编译和`git diff --check`通过。搜索结果是带时间戳的滚动窗口快照；入口healthy不等同价格核实，省钱/捡漏核心验收仍未通过。
+- 06:29 UTC补查#15087：数据库原文时间为前一日23:57:49 UTC、最近看到时间00:06:49 UTC，最新时效函数返回`source_stale`；用户浏览器刷新后显示过期并自动留档。此前“原文近2小时”来自重启前旧DOM，不能把页面缓存当服务端现态。
+- 06:30 UTC终验快照：36/36启用源healthy；最近复核06:28:13–06:28:53完成（reviewed=17,589、probed=6）；纸品当前28条，15条来源金额、13条未成报价，5/36入口命中、3个入口提供金额，准入/可比/相对低价均0。

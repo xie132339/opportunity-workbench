@@ -4,38 +4,68 @@ from comparison import merchant_identity,comparison_index,quantity_options,asses
 from offer import paper_package_prices
 import test_comparison as fixtures
 
+from scenario_groups import grouped_scenarios
+
+@grouped_scenarios({
+    'test_merchant_identity_resolution_and_ambiguity': (
+        'identity_rejects_shop_coupon_fake_hosts',
+        'same_sku_different_title_can_be_grouped',
+        'same_title_different_sku_never_merged',
+        'multiple_skus_are_ambiguous',
+        'explicit_product_ids_from_domestic_markets',
+    ),
+    'test_quantity_choice_compares_package_unit_and_shipping_costs': (
+        'paper_unit_price_does_not_default_missing_order_quantity_to_one',
+        'pareto_does_not_confuse_low_total_with_low_unit',
+        'known_shipping_changes_winner',
+    ),
+    'test_quantity_options_reject_ineligible_and_mismatched_candidates': (
+        'ineligible_stale_or_missing_rules_cannot_win',
+        'real_addon_example_is_not_quantity_recommendation',
+        'aggregator_posts_for_one_merchant_sku_are_not_independent_savings_options',
+        'variants_on_one_merchant_page_are_not_quantity_options_for_each_other',
+        'small_pack_count_separates_otherwise_similar_same_sku_claims',
+        'selected_variant_labels_are_preserved_in_comparison_partition',
+    ),
+    'test_search_readiness_requires_explicit_product_and_reproducible_price': (
+        'search_admission_requires_complete_product_and_reproducible_discount',
+        'missing_selected_specification_cannot_enter_quantity_options',
+        'title_specification_alone_does_not_prove_the_priced_variant',
+        'unrecalculated_optimization_gap_cannot_be_a_comparison_peer',
+    ),
+})
 class MarketMethodsTests(unittest.TestCase):
     def row(self,i,sku=None,**kw):
         row=fixtures.ComparisonTests().row(i,**kw)
         if sku:row['metadata_json']=json.dumps({'activity_links':['https://item.jd.com/'+sku+'.html']})
         return row
 
-    def test_identity_rejects_shop_coupon_fake_hosts(self):
+    def _case_identity_rejects_shop_coupon_fake_hosts(self):
         row=self.row(1);row['metadata_json']=json.dumps({'activity_links':['https://item.jd.com.evil.example/123.html','https://coupon.m.jd.com/?skuId=123','https://shop.m.jd.com/?venderid=123','https://evil.example/?u=https://item.jd.com/123.html']})
         self.assertTrue(merchant_identity(row)['key'].startswith('catalog:'))
         row['metadata_json']=json.dumps({'activity_links':['https://item.m.jd.com/ware/view.action?wareId=12345']})
         self.assertEqual(merchant_identity(row)['key'],'jd:12345')
 
-    def test_paper_unit_price_does_not_default_missing_order_quantity_to_one(self):
+    def _case_paper_unit_price_does_not_default_missing_order_quantity_to_one(self):
         self.assertIsNone(paper_package_prices('抽纸100抽3层6包',500,None))
         self.assertIsNone(paper_package_prices('抽纸100抽3层6包',500))
 
-    def test_same_sku_different_title_can_be_grouped(self):
+    def _case_same_sku_different_title_can_be_grouped(self):
         rows=[self.row(1,'12345'),self.row(2,'12345',title='另一写法同一商品 4元',total='8')]
         r=comparison_index(rows);self.assertIsNone(r[1]['best_id'])
         self.assertEqual(r[1]['peers'],1)
         self.assertIn('同一商家商品ID',r[1]['message'])
         self.assertIn('12345',r[1]['identity_label'])
 
-    def test_same_title_different_sku_never_merged(self):
+    def _case_same_title_different_sku_never_merged(self):
         r=comparison_index([self.row(1,'12345'),self.row(2,'67890',total='8')])
         self.assertIsNone(r[1]['best_id']);self.assertEqual(len(r[1]['items']),1)
 
-    def test_multiple_skus_are_ambiguous(self):
+    def _case_multiple_skus_are_ambiguous(self):
         row=self.row(1);row['metadata_json']=json.dumps({'activity_links':['https://item.jd.com/12345.html','https://item.jd.com/67890.html']})
         r=comparison_index([row]);self.assertTrue(r[1]['items'][0]['problems']);self.assertIsNone(r[1]['best_id'])
 
-    def test_explicit_product_ids_from_domestic_markets(self):
+    def _case_explicit_product_ids_from_domestic_markets(self):
         cases={
             'https://item.taobao.com/item.htm?id=123':'taobao:123',
             'https://detail.tmall.com/item.htm?id=456':'taobao:456',
@@ -50,27 +80,27 @@ class MarketMethodsTests(unittest.TestCase):
     def item(self,i,total,q,shipping=None,**kw):
         d=dict(id=i,total_cents=total,quantity=q,shipping_cents=shipping,problems=[],optimization_gaps=[],partition=('',(),q));d.update(kw);return d
 
-    def test_pareto_does_not_confuse_low_total_with_low_unit(self):
+    def _case_pareto_does_not_confuse_low_total_with_low_unit(self):
         a=self.item(1,1000,1);b=self.item(2,1500,2);c=self.item(3,1800,2)
         r=quantity_options([a,b,c],a)
         self.assertEqual(r['lowest_total'],1);self.assertEqual(r['lowest_unit'],2)
         self.assertEqual(set(r['frontier']),{1,2});self.assertIn('运费不全',r['reason'])
 
-    def test_known_shipping_changes_winner(self):
+    def _case_known_shipping_changes_winner(self):
         a=self.item(1,1000,1,600);b=self.item(2,1200,1,0)
         self.assertEqual(quantity_options([a,b],a)['lowest_total'],2)
 
-    def test_ineligible_stale_or_missing_rules_cannot_win(self):
+    def _case_ineligible_stale_or_missing_rules_cannot_win(self):
         a=self.item(1,1000,1);b=self.item(2,100,5,problems=['过期']);c=self.item(3,100,5,optimization_gaps=['凑单总额未知'])
         d=self.item(4,100,5,partition=('',('新客',),5))
         r=quantity_options([a,b,c,d],a);self.assertEqual(r['count'],1);self.assertEqual(r['lowest_unit'],1)
 
-    def test_real_addon_example_is_not_quantity_recommendation(self):
+    def _case_real_addon_example_is_not_quantity_recommendation(self):
         row=self.row(1,title='AXE洗洁精1.01kg*3瓶 22.44元',total='112.2',quantity=5,tail='黑五补贴200-20，需凑单儿童尤克里里')
         r=comparison_index([row]);self.assertEqual(r[1]['quantity_options']['count'],0)
         self.assertTrue(r[1]['items'][0]['optimization_gaps'])
 
-    def test_search_admission_requires_complete_product_and_reproducible_discount(self):
+    def _case_search_admission_requires_complete_product_and_reproducible_discount(self):
         direct=self.row(1,title='某品牌抽纸100抽3层6包 5元',total='5',quantity=1,auto_state='observed')
         comparisons=comparison_index([direct])
         assessment=assess_readiness(direct,comparisons[1])
@@ -94,7 +124,7 @@ class MarketMethodsTests(unittest.TestCase):
         bound_assessment=assess_readiness(bound,comparison_index([bound])[5])
         self.assertTrue(bound_assessment['search_ready']);self.assertFalse(bound_assessment['comparable'])
 
-    def test_aggregator_posts_for_one_merchant_sku_are_not_independent_savings_options(self):
+    def _case_aggregator_posts_for_one_merchant_sku_are_not_independent_savings_options(self):
         rows=[self.row(1,'12345',total='4.37'),self.row(2,'12345',total='4.45')]
         result=comparison_index(rows)
         self.assertEqual(result[1]['peers'],1)
@@ -102,7 +132,7 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['saving_cents'],0)
         self.assertIn('不能判断省钱或捡漏',result[1]['message'])
 
-    def test_variants_on_one_merchant_page_are_not_quantity_options_for_each_other(self):
+    def _case_variants_on_one_merchant_page_are_not_quantity_options_for_each_other(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
             self.row(1,'12345',title='某品牌抽纸100抽6包 10元',snippet='该价格商品规格：100抽6包 京东商城。下单1件，实付10元',metadata_json=sku),
@@ -112,7 +142,7 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['quantity_options']['count'],1)
         self.assertEqual(result[2]['quantity_options']['count'],1)
 
-    def test_small_pack_count_separates_otherwise_similar_same_sku_claims(self):
+    def _case_small_pack_count_separates_otherwise_similar_same_sku_claims(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
             self.row(1,'12345',title='得宝迷你手帕纸5片*54小包 20元',metadata_json=sku),
@@ -124,14 +154,14 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertEqual(result[1]['quantity_options']['count'],1)
         self.assertEqual(result[2]['quantity_options']['count'],1)
 
-    def test_missing_selected_specification_cannot_enter_quantity_options(self):
+    def _case_missing_selected_specification_cannot_enter_quantity_options(self):
         row=self.row(1,'12345',title='纸巾 10元',snippet='购买1件 实付10元',
                      metadata_json=json.dumps({'activity_links':['https://item.jd.com/12345.html']}))
         result=comparison_index([row])
         self.assertEqual(result[1]['quantity_options']['count'],0)
         self.assertTrue(any('缺明确选中规格' in reason for reason in result[1]['items'][0]['problems']))
 
-    def test_title_specification_alone_does_not_prove_the_priced_variant(self):
+    def _case_title_specification_alone_does_not_prove_the_priced_variant(self):
         row=self.row(1,'12345',title='某品牌抽纸100抽3层6包 5元',
                      selected_spec='',total='5',quantity=1,auto_state='observed')
         comparisons=comparison_index([row])
@@ -142,7 +172,7 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertFalse(assessment['search_ready'])
         self.assertEqual(assess_readiness(row,comparisons[1])['checks']['identity'],True)
 
-    def test_selected_variant_labels_are_preserved_in_comparison_partition(self):
+    def _case_selected_variant_labels_are_preserved_in_comparison_partition(self):
         sku=json.dumps({'activity_links':['https://item.jd.com/12345.html']})
         rows=[
             self.row(1,'12345',title='某品牌抽纸红色100抽6包 10元',snippet='该价格商品规格：颜色分类：红色 100抽6包 京东商城。下单2件，实付20元',metadata_json=sku),
@@ -161,7 +191,7 @@ class MarketMethodsTests(unittest.TestCase):
         self.assertNotIn('rank',result)
         self.assertNotIn('source_claim_delta_cents',result)
 
-    def test_unrecalculated_optimization_gap_cannot_be_a_comparison_peer(self):
+    def _case_unrecalculated_optimization_gap_cannot_be_a_comparison_peer(self):
         a=self.row(1,total='4.37')
         b=self.row(2,total='4.00',tail='需凑单其他商品')
         result=comparison_index([a,b])
