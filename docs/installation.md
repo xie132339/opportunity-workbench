@@ -22,7 +22,7 @@ macOS/Linux：
 
 ```bash
 bash setup.sh
-.venv/bin/python app.py serve
+bash scripts/workbench.sh restart
 ```
 
 Windows PowerShell：
@@ -35,15 +35,21 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 安装脚本只在 `.env` 不存在时从 `.env.example` 生成本机配置，并生成本机随机 `WORKBENCH_SECRET`；不会覆盖既有设置。脚本不会复制开发电脑上的 `data/` 数据库或任何登录凭据。
 
-访问 <http://127.0.0.1:5002/>。仅本机回环地址可访问。按 `Control+C` 停止服务。
+访问 <http://127.0.0.1:5002/>。仅本机回环地址可访问。运行管理脚本会安全替换本项目的网页与淘宝 worker，并检查健康接口；它不会为争抢 5002 端口而停止其它应用。查看状态或停止本项目运行实例：
+
+```bash
+bash scripts/workbench.sh status
+bash scripts/workbench.sh stop
+```
 
 ## 3. 后台采集
 
 页面服务与采集 worker 是两个独立进程。只有来源配置已启用且其数据入口实际可访问时，worker 才会采集；新克隆后数据库是空的，先在“渠道管理”查看来源状态。
 
-macOS/Linux：
+macOS/Linux：如果使用默认的淘宝官方来源，运行管理脚本已经启动 `taobao-worker`。需要全渠道 worker 时，先停止管理脚本，再手动运行：
 
 ```bash
+bash scripts/workbench.sh stop
 .venv/bin/python app.py worker
 ```
 

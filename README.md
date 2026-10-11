@@ -19,11 +19,17 @@
 bash setup.sh
 ```
 
-在本机 `.env` 配置淘宝联盟凭据和推广位（不提交 Git），然后分别启动网页和 worker：
+在本机 `.env` 配置淘宝联盟凭据和推广位（不提交 Git），然后由运行管理脚本启动网页和 worker：
 
 ```bash
-.venv/bin/python -B app.py serve
-.venv/bin/python -B app.py taobao-worker
+bash scripts/workbench.sh restart
+```
+
+脚本只会停止工作目录属于本项目、且命令为 `app.py serve` 或 `app.py taobao-worker` 的进程；不会因 5002 端口被其它应用占用而终止该应用。每次 `restart` 都从当前工作树加载代码，并自动检查 `/health`。查看状态或停止本项目进程：
+
+```bash
+bash scripts/workbench.sh status
+bash scripts/workbench.sh stop
 ```
 
 打开 <http://127.0.0.1:5002/>。不需要 Docker。数据库在本机 `data/workbench.sqlite3`；克隆项目不会带走账号、密钥或采集记录。

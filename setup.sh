@@ -18,4 +18,4 @@ if [[ ! -f .env ]]; then
   chmod 600 .env
 fi
 
-printf '\n%s\n' '安装完成。运行：.venv/bin/python app.py serve'
+printf '\n%s\n' '安装完成。运行：bash scripts/workbench.sh restart'

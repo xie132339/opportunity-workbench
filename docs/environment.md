@@ -13,11 +13,15 @@
 ## 启动
 
 ```bash
-.venv/bin/python -B app.py serve
-.venv/bin/python -B app.py taobao-worker
+bash scripts/workbench.sh restart
 ```
 
-网页入口：<http://127.0.0.1:5002/>。worker 只扫描到期来源；来源扫描状态以 `/sources` 页面和数据库中的最近 `source_scan_runs` 为准。
+网页入口：<http://127.0.0.1:5002/>。脚本先安全停止本工作区自身的网页和淘宝 worker，再以当前工作树启动两者，并检查 `/health`。它只会处理命令和工作目录均匹配本项目的进程，不会为了夺取端口停止别的应用。worker 只扫描到期来源；来源扫描状态以 `/sources` 页面和数据库中的最近 `source_scan_runs` 为准。
+
+```bash
+bash scripts/workbench.sh status
+bash scripts/workbench.sh stop
+```
 
 ## 验证命令
 
