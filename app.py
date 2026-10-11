@@ -28,7 +28,7 @@ from autoreview import LABELS as REVIEW_LABELS, run_cycle, offer_summary
 from benefits import KINDS as BENEFIT_KINDS, run_cycle as refresh_benefits, import_authorized_record
 from channel_discovery import refresh as refresh_channel_candidates, validate_many as validate_channel_candidates
 from notifier import active_channels, deliver
-from scanner import scan_all, scan_source, strategy_matches
+from scanner import review_taobao_backlog, scan_all, scan_source, strategy_matches
 from services.link_resolution_worker import run_periodically as run_link_resolution_worker
 from services.taobao_sync_validation import detail_batch_limit, validate_taobao_syncs
 from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
@@ -93,12 +93,13 @@ def complete_taobao_syncs(source_results):
 def run_taobao_cycle():
     """Collect official Taobao material and audit every synchronized record."""
     sources = scan_all(due_only=True, method="taobao_alliance")
-    if not sources:
+    backlog = review_taobao_backlog()
+    if not sources and not backlog["selected"]:
         return {}
-    return {
-        "sources": sources,
-        "post_sync_validation": complete_taobao_syncs(sources),
-    }
+    result = {"sources": sources, "review_backlog": backlog}
+    if sources:
+        result["post_sync_validation"] = complete_taobao_syncs(sources)
+    return result
 
 
 def main():

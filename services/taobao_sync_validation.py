@@ -41,9 +41,10 @@ def _positive_ids(values):
     return tuple(sorted(normalized))
 
 
-def _batches(values, size):
-    for start in range(0, len(values), size):
-        yield values[start:start + size]
+def _prioritized_ids(new_ids, all_ids):
+    """Prefer newly inserted material while retaining a stable fallback order."""
+    new_set = set(new_ids)
+    return tuple(new_ids) + tuple(item_id for item_id in all_ids if item_id not in new_set)
 
 
 def _missing_evidence(metadata, detail):
@@ -152,15 +153,31 @@ def validate_taobao_syncs(source_results, *, run_detail_cycle, batch_size):
     retry cooling period, but their already-recorded state is reported instead
     of being silently treated as fresh verification.
     """
-    receipts = []
+    prepared = []
     for source in source_results:
-        if source.get("collection_status") not in ("complete", "partial"):
-            continue
-        if not source.get("run_id"):
-            continue
+        if source.get("collection_status") in ("complete", "partial") and source.get("run_id"):
+            all_ids = _positive_ids(source.get("opportunity_ids"))
+            new_ids = _positive_ids(source.get("new_opportunity_ids"))
+            prepared.append({"source": source, "all_ids": all_ids, "new_ids": new_ids,
+                             "detail_ids": ()})
+
+    # SKU detail is an enhancement. Divide one cycle's total network budget
+    # across sources; a large material page must not starve later topics.
+    remaining = batch_size
+    with_records = [entry for entry in prepared if entry["all_ids"]]
+    for index, entry in enumerate(with_records):
+        sources_left = len(with_records) - index
+        prioritized = _prioritized_ids(entry["new_ids"], entry["all_ids"])
+        quota = min(len(prioritized), (remaining + sources_left - 1) // sources_left) if remaining else 0
+        entry["detail_ids"] = prioritized[:quota]
+        remaining -= len(entry["detail_ids"])
+
+    receipts = []
+    for entry in prepared:
+        source = entry["source"]
         source_id = source["source_id"]
-        all_ids = _positive_ids(source.get("opportunity_ids"))
-        new_ids = _positive_ids(source.get("new_opportunity_ids"))
+        all_ids = entry["all_ids"]
+        new_ids = entry["new_ids"]
         if not all_ids:
             receipt = {
                 "schema": "taobao_post_sync_validation_v1",
@@ -180,15 +197,13 @@ def validate_taobao_syncs(source_results, *, run_detail_cycle, batch_size):
 
         runs = []
         busy = False
-        for batch in _batches(all_ids, batch_size):
-            result = run_detail_cycle(limit=len(batch), source_method="taobao_alliance",
-                                      opportunity_ids=batch)
+        if entry["detail_ids"]:
+            result = run_detail_cycle(limit=len(entry["detail_ids"]), source_method="taobao_alliance",
+                                      opportunity_ids=entry["detail_ids"])
             runs.append(result)
-            if result.get("busy"):
-                busy = True
-                break
+            busy = bool(result.get("busy"))
         records = _load_records(source_id, all_ids)
-        accounted_ids = {record["opportunity_id"] for record in records}
+        accounted_ids = {record["opportunity_id"] for record in records if record["state"] != "not_reviewed"}
         attempted_count = sum(int(result.get("probed", 0)) for result in runs)
         receipt = {
             "schema": "taobao_post_sync_validation_v1",
@@ -198,6 +213,7 @@ def validate_taobao_syncs(source_results, *, run_detail_cycle, batch_size):
             "new_count": len(new_ids),
             "attempted_count": attempted_count,
             "deferred_count": max(0, len(all_ids) - attempted_count),
+            "detail_budget": len(entry["detail_ids"]),
             "accounted_count": len(accounted_ids),
             "unaccounted_opportunity_ids": [item_id for item_id in all_ids if item_id not in accounted_ids],
             "sku_evidence_complete_count": sum(record["sku_evidence_complete"] for record in records),

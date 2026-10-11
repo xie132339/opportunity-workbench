@@ -5,7 +5,7 @@ import unittest
 import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import db
 import scanner
@@ -945,10 +945,65 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
 
     def test_scheduled_taobao_cycle_skips_detail_when_no_source_is_due(self):
         with patch.object(application_module, "scan_all", return_value=[]) as scan, \
+             patch.object(application_module, "review_taobao_backlog", return_value={"selected": 0, "counts": {}}), \
              patch.object(application_module, "run_cycle") as detail:
             self.assertEqual(application_module.run_taobao_cycle(), {})
         scan.assert_called_once_with(due_only=True, method="taobao_alliance")
         detail.assert_not_called()
+
+    def test_scheduled_taobao_cycle_continues_bounded_unreviewed_backlog(self):
+        backlog = {"selected": 2, "counts": {"observed": 2}}
+        with patch.object(application_module, "scan_all", return_value=[]) as scan, \
+             patch.object(application_module, "review_taobao_backlog", return_value=backlog) as review, \
+             patch.object(application_module, "run_cycle") as detail:
+            result = application_module.run_taobao_cycle()
+        self.assertEqual(result, {"sources": [], "review_backlog": backlog})
+        scan.assert_called_once_with(due_only=True, method="taobao_alliance")
+        review.assert_called_once_with()
+        detail.assert_not_called()
+
+    def test_taobao_scan_reviews_only_current_ids_in_bounded_batches(self):
+        records = tuple(range(1, scanner.TAOBAO_REVIEW_BATCH_SIZE + 2))
+        scan_result = {"source_id": self.source_id, "status": "healthy", "seen": len(records),
+                       "opportunity_ids": records, "new_opportunity_ids": list(records)}
+        with patch("scanner.scan_source", return_value=scan_result) as scan, \
+                patch("scanner._taobao_review_scope", side_effect=lambda ids: tuple(ids)), \
+                patch("autoreview.review_all", side_effect=[{"observed": scanner.TAOBAO_REVIEW_BATCH_SIZE},
+                                                              {"conditional": 1}]) as review:
+            results = scanner.scan_all(method="taobao_alliance")
+        self.assertEqual(results, [scan_result])
+        scan.assert_called_once_with(self.source_id, review=False)
+        self.assertEqual(review.call_args_list, [
+            call(source_method="taobao_alliance", opportunity_ids=records[:-1]),
+            call(source_method="taobao_alliance", opportunity_ids=records[-1:]),
+        ])
+
+    def test_sync_detail_budget_is_shared_across_sources_after_admission(self):
+        from services import taobao_sync_validation as validation
+
+        source_results = [
+            {"source_id": 101, "run_id": 201, "collection_status": "complete",
+             "opportunity_ids": [1, 2, 3], "new_opportunity_ids": [3]},
+            {"source_id": 102, "run_id": 202, "collection_status": "complete",
+             "opportunity_ids": [4, 5, 6], "new_opportunity_ids": [6]},
+        ]
+        calls = []
+
+        def detail_cycle(**kwargs):
+            calls.append(kwargs)
+            return {"probed": kwargs["limit"]}
+
+        def records(source_id, ids):
+            return [{"opportunity_id": item_id, "state": "observed", "sku_evidence_complete": False}
+                    for item_id in ids]
+
+        with patch.object(validation, "_load_records", side_effect=records), \
+                patch.object(validation, "persist_scan_validation"):
+            receipts = validation.validate_taobao_syncs(source_results, run_detail_cycle=detail_cycle, batch_size=3)
+        self.assertEqual(sum(call["limit"] for call in calls), 3)
+        self.assertEqual([call["opportunity_ids"] for call in calls], [(3, 1), (6,)])
+        self.assertTrue(all(receipt["complete"] for receipt in receipts))
+        self.assertEqual([receipt["accounted_count"] for receipt in receipts], [3, 3])
 
     def test_scan_result_tracks_new_and_reused_opportunities_for_post_sync_audit(self):
         now = datetime.now(CHINA)

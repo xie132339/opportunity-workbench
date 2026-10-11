@@ -24,6 +24,87 @@ from services.taobao_alliance import (
 
 USER_AGENT = "OpportunityWorkbench/0.1 (personal low-frequency public-source research)"
 FAILED_SOURCE_RETRY_MINUTES = 15
+TAOBAO_REVIEW_BATCH_SIZE = 200
+
+
+def _positive_ids(values):
+    """Keep only distinct persisted opportunity ids in their first-seen order."""
+    result = []
+    seen = set()
+    for value in values or ():
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0 and number not in seen:
+            result.append(number)
+            seen.add(number)
+    return tuple(result)
+
+
+def _taobao_review_scope(opportunity_ids):
+    """Include older snapshots of the same official material identity.
+
+    A promotion-link refresh creates a new event fingerprint.  The preceding
+    snapshot must be reclassified as replaced, but unrelated feed history must
+    not expand the review transaction.
+    """
+    ids = _positive_ids(opportunity_ids)
+    if not ids:
+        return ()
+    placeholders = ",".join("?" for _ in ids)
+    with connect() as db:
+        rows = db.execute(f'''WITH selected_rows AS (
+                SELECT selected.id, selected.source_id, selected_event.external_key
+                FROM opportunities selected
+                JOIN events selected_event ON selected_event.id=selected.event_id
+                JOIN sources source ON source.id=selected.source_id
+                WHERE selected.id IN ({placeholders})
+                  AND source.method='taobao_alliance'
+            )
+            SELECT id FROM selected_rows
+            UNION
+            SELECT related.id
+            FROM selected_rows selected
+            JOIN opportunities related ON related.source_id=selected.source_id
+            JOIN events related_event ON related_event.id=related.event_id
+            WHERE selected.external_key IS NOT NULL
+              AND related_event.external_key=selected.external_key
+            ORDER BY id''', ids).fetchall()
+    return tuple(row["id"] for row in rows)
+
+
+def review_taobao_opportunities(opportunity_ids, *, batch_size=TAOBAO_REVIEW_BATCH_SIZE):
+    """Create durable admission states without one large SQLite transaction."""
+    ids = _positive_ids(opportunity_ids)
+    if not ids:
+        return {}
+    counts = {}
+    reviewed = set()
+    from autoreview import review_all
+    for start in range(0, len(ids), batch_size):
+        scope = tuple(item_id for item_id in _taobao_review_scope(ids[start:start + batch_size])
+                      if item_id not in reviewed)
+        reviewed.update(scope)
+        if not scope:
+            continue
+        result = review_all(source_method="taobao_alliance", opportunity_ids=scope)
+        for state, count in result.items():
+            counts[state] = counts.get(state, 0) + count
+    return counts
+
+
+def review_taobao_backlog(*, limit=TAOBAO_REVIEW_BATCH_SIZE):
+    """Resume a previously interrupted official-material review in a bounded pass."""
+    with connect() as db:
+        rows = db.execute("""SELECT o.id
+            FROM opportunities o
+            JOIN sources s ON s.id=o.source_id
+            LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+            WHERE s.method='taobao_alliance' AND s.enabled=1 AND a.opportunity_id IS NULL
+            ORDER BY o.id LIMIT ?""", (limit,)).fetchall()
+    ids = tuple(row["id"] for row in rows)
+    return {"selected": len(ids), "counts": review_taobao_opportunities(ids, batch_size=limit)}
 
 
 def _public_url(url):
@@ -475,10 +556,10 @@ def scan_source(source_id, *, review=True):
                        ("采集数据保存失败（" + type(exc).__name__ + "）", source_id))
         raise
     if review:
-        from autoreview import review_all
         if source["method"] == "taobao_alliance":
-            review_all(source_method="taobao_alliance")
+            review_taobao_opportunities(opportunity_ids)
         else:
+            from autoreview import review_all
             review_all()
     return {"source_id": source_id, "status": "healthy", "new": added,
             "baseline": prior == 0, "seen": len(records),
@@ -504,9 +585,13 @@ def scan_all(due_only=False, method=None):
         ids = [r[0] for r in db.execute(sql, params)]
     results = [scan_source(source_id, review=False) for source_id in ids]
     if results:
-        from autoreview import review_all
         if method == "taobao_alliance":
-            review_all(source_method="taobao_alliance")
+            review_taobao_opportunities(
+                opportunity_id
+                for result in results
+                for opportunity_id in result.get("opportunity_ids", ())
+            )
         else:
+            from autoreview import review_all
             review_all()
     return results
