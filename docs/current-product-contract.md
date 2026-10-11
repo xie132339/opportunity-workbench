@@ -14,6 +14,8 @@
 
 现有大类不能归档新商品时，可在“价格基准 → 新增品类”添加主题和归类关键词；新增品类不改采集代码。具体品牌、规格、单位和价格仍必须单独建立维护基准。
 
+“价格基准 → 当前官方优惠中的维护候选”只帮助运营从当前官方观察选择维护对象：候选必须有明确官方降幅或可安全复算的单券试算，且标题中有数量或容量单位。候选可创建一个**未保存草稿**，只带入标题、唯一匹配品类和官方证据说明；系统不从候选猜测标题必要词、规格单位或四档金额。候选没有匹配叶子品类时，页面明确要求先配置品类，不能默认选取第一项。
+
 当前已启用并已实测的发现来源：
 
 - API：`taobao.tbk.dg.material.optional.upgrade`。
@@ -98,6 +100,7 @@ worker 每分钟检查到期且启用的淘宝联盟主题；每个主题按自�
 | 生活品主题目录、URL 规范和幂等初始化 | `services/taobao_living_topics.py` |
 | 扫描、入库与审计 | `scanner.py`、`db.py` |
 | 本地价格带校验、匹配、单位归一与判定 | `services/maintained_price_baselines.py` |
+| 当前官方候选筛选和未保存草稿 | `services/maintained_price_candidates.py` |
 | 维护价格带数据库和版本审计 | `db.py`：`maintained_price_baselines`、`maintained_price_baseline_audit` |
 | 管理、列表、详情展示 | `routes/price_benchmarks.py`、`routes/search.py`、`routes/opportunities.py`、`templates/` |
 

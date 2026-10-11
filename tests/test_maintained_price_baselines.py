@@ -226,6 +226,15 @@ class MaintainedPriceBaselineRouteTests(unittest.TestCase):
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 
+    def test_missing_category_is_rejected_without_choosing_the_first_category(self):
+        response = self.client.post("/price-benchmarks/maintained", data=self.form_data(
+            category_id=""
+        ), follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("请选择所属品类", response.get_data(as_text=True))
+        with db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
+
     def test_list_renders_a_matched_official_taobao_promotion(self):
         now = datetime.now(CHINA)
         item = {

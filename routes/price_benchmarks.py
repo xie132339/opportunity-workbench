@@ -11,7 +11,8 @@ from services.category_policy import encode_policy, validate_policy, decode_poli
 from services.category_comparison_rules import default_rule, encode_rule, decode_rule
 from services.maintained_price_baselines import (decode_terms, parse_terms, unit_label,
                                                   validate_baseline)
-from services.maintained_price_candidates import load_maintained_price_candidates
+from services.maintained_price_candidates import (load_maintained_price_candidates,
+                                                   maintenance_draft)
 from services.money import cents
 from offer import TOPIC_LABELS
 
@@ -77,13 +78,18 @@ def price_benchmarks():
         baseline_summary = dict(total=len(baselines), enabled=sum(bool(row["enabled"]) for row in baselines),
                                 ready=sum(bool(row["enabled"]) for row in baselines))
         maintained_candidates = load_maintained_price_candidates(db, categories)
+        baseline_draft = maintenance_draft(maintained_candidates, request.args.get("candidate"))
     return render_template("price_benchmarks.html", categories=categories, baselines=baselines,
-                           baseline_summary=baseline_summary, maintained_candidates=maintained_candidates)
+                           baseline_summary=baseline_summary, maintained_candidates=maintained_candidates,
+                           baseline_draft=baseline_draft)
 
 
 def _baseline_payload(form):
+    category_raw = form.get("category_id", "").strip()
+    if not category_raw:
+        raise ValueError("请选择所属品类")
     return validate_baseline(dict(
-        category_id=int(form.get("category_id", "")),
+        category_id=int(category_raw),
         name=form.get("name", ""),
         match_terms=parse_terms(form.get("match_terms", "")),
         unit_mode=form.get("unit_mode", ""),

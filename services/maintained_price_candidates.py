@@ -93,3 +93,31 @@ def load_maintained_price_candidates(db, categories, *, limit=12):
         if len(result) == limit:
             break
     return result
+
+
+def maintenance_draft(candidates, raw_candidate_id):
+    """Return an unsaved baseline draft for one current official candidate.
+
+    Candidate data can identify an auditable starting item, but cannot safely
+    infer necessary identity terms, a comparison unit, or price thresholds.
+    This helper therefore copies only the title, a uniquely matched category,
+    and provenance into a form draft.
+    """
+    try:
+        candidate_id = int(raw_candidate_id)
+    except (TypeError, ValueError):
+        return None
+    candidate = next((row for row in candidates
+                      if row["opportunity_id"] == candidate_id), None)
+    if candidate is None:
+        return None
+    return {
+        "candidate_id": candidate_id,
+        "name": (candidate["title"] or "")[:120],
+        "category_id": candidate["category_id"],
+        "category_name": candidate["category_name"],
+        "notes": (
+            f"维护起点：淘宝联盟官方候选 #{candidate_id}。"
+            "已回链官方推广价与条件；匹配词、规格单位和四档价格带须由运营核实填写。"
+        ),
+    }

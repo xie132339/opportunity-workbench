@@ -97,6 +97,12 @@ class PriceBenchmarkPageTests(unittest.TestCase):
         self.assertIn("测试抽纸", page)
         self.assertIn("官方推广价比接口参考价低", page)
         self.assertIn(f'/opportunities/{opportunity_id}', page)
+        self.assertIn(f'/price-benchmarks?candidate={opportunity_id}#new-baseline', page)
+        draft_page = self.client.get(f"/price-benchmarks?candidate={opportunity_id}").get_data(as_text=True)
+        self.assertIn('正在使用官方候选', draft_page)
+        self.assertIn('value="可配置抽纸 3层 100抽10包"', draft_page)
+        self.assertIn(f'value="{category_id}" selected', draft_page)
+        self.assertIn(f'淘宝联盟官方候选 #{opportunity_id}', draft_page)
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 

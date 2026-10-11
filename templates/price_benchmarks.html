@@ -25,19 +25,20 @@
       <td>{{ money(row.price_cents) }}{% if row.reference_cents %}<br><small>接口参考价 {{ money(row.reference_cents) }}</small>{% endif %}</td>
       <td>{{ row.reason }}</td>
       <td>{{ row.condition }}</td>
-      <td><a href="{{ url_for('opportunity', opportunity_id=row.opportunity_id) }}">查看证据</a></td>
+      <td><a href="{{ url_for('opportunity', opportunity_id=row.opportunity_id) }}">查看证据</a><br><a href="{{ url_for('price_benchmarks', candidate=row.opportunity_id) }}#new-baseline">创建维护草稿</a></td>
     </tr>{% endfor %}</tbody>
   </table></div>
   {% else %}<p>当前没有同时满足官方降价和明确单位的候选；这不会影响官方优惠正常展示。</p>{% endif %}
 </section>
 
-<section class="card">
+<section class="card" id="new-baseline">
   <h2>新建维护基准</h2>
   <p class="muted">匹配词填写商品身份的必要部分，例如“清风，原木，3层”。计数、质量和容量会从标题中的明确数字换算；按件比较则须填写固定规格。所有金额都按下方所选基准单位填写。</p>
+  {% if baseline_draft %}<p class="muted"><strong>正在使用官方候选 #{{ baseline_draft.candidate_id }} 创建草稿。</strong> 已带入商品标题{% if baseline_draft.category_name %}和已匹配品类{% else %}；它尚未匹配具体品类，请先在下方品类配置中建立叶子品类后再保存{% endif %}。系统没有带入匹配词、规格单位或价格带。</p>{% endif %}
   <form method="post" action="{{ url_for('save_maintained_price_baseline') }}" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>所属品类<select name="category_id" required>{% for category in categories if category.enabled %}<option value="{{ category.id }}">{{ category.name }} · {{ topic_labels.get(category.topic_key,category.topic_key) }}</option>{% endfor %}</select></label>
-    <label>基准名称<input name="name" maxlength="120" placeholder="例如：清风原木抽纸 100抽" required></label>
+    <label>所属品类<select name="category_id" required><option value="" disabled {% if not baseline_draft or not baseline_draft.category_id %}selected{% endif %}>请选择已维护品类</option>{% for category in categories if category.enabled %}<option value="{{ category.id }}" {% if baseline_draft and baseline_draft.category_id == category.id %}selected{% endif %}>{{ category.name }} · {{ topic_labels.get(category.topic_key,category.topic_key) }}</option>{% endfor %}</select></label>
+    <label>基准名称<input name="name" maxlength="120" value="{{ baseline_draft.name if baseline_draft else '' }}" placeholder="例如：清风原木抽纸 100抽" required></label>
     <label>标题必要词（逗号分隔）<textarea name="match_terms" maxlength="700" placeholder="例如：清风，原木，3层" required></textarea></label>
     <label>计价模式<select name="unit_mode"><option value="count">按计数单位</option><option value="mass">按质量（克）</option><option value="volume">按容量（毫升）</option><option value="exact_spec">固定规格按件</option></select></label>
     <label>计数单位（计数模式必填）<select name="count_unit"><option value="">不使用</option>{% for unit in ['抽','卷','片','个','件','包','瓶','盒','袋','张','支','罐','提','箱'] %}<option value="{{ unit }}">{{ unit }}</option>{% endfor %}</select></label>
@@ -48,7 +49,7 @@
     <label>常规中位（元）<input name="typical_amount" type="number" min="0.01" step="0.01" required></label>
     <label>常规高位（元）<input name="high_amount" type="number" min="0.01" step="0.01" required></label>
     <label>生效日期<input name="effective_from" type="date" required></label>
-    <label>维护说明<input name="notes" maxlength="500" placeholder="记录这套价格带的维护依据或适用边界"></label>
+    <label>维护说明<input name="notes" maxlength="500" value="{{ baseline_draft.notes if baseline_draft else '' }}" placeholder="记录这套价格带的维护依据或适用边界"></label>
     <label>立即启用 <input name="enabled" type="checkbox" value="1" checked></label>
     <div><button>保存维护基准</button></div>
   </form>
