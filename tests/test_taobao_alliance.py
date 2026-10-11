@@ -632,6 +632,50 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertEqual(report['stop_reason'],'repeated_page')
         self.assertIsNone(report['next_page'])
 
+    def test_auto_paging_uses_official_total_results_before_the_local_ceiling(self):
+        env={'TAOBAO_ALLIANCE_APP_KEY':'123','TAOBAO_ALLIANCE_APP_SECRET':'secret','TAOBAO_ALLIANCE_ADZONE_ID':'456'}
+        calls=[]
+        class Response:
+            status_code=200
+            def __init__(self,payload): self.payload=payload
+            def iter_content(self,size): yield json.dumps(self.payload).encode()
+            def close(self): pass
+        def get(url,**kw):
+            page=int(kw['params']['page_no']); calls.append(page)
+            items=[sample_item(self.now,item_id=f'{page}{index}') for index in range(2)]
+            return Response({'tbk_dg_material_optional_response': {
+                'total_results': 4, 'result_list': {'map_data': items},
+            }})
+        report={}
+        rows=fetch_rows(API_ENDPOINT+'?q=饮用水&page_size=2&max_pages=all',http_get=get,env=env,now=self.now,report=report)
+        self.assertEqual(calls,[1,2])
+        self.assertEqual(len(rows),4)
+        self.assertEqual(report['official_total_results'],4)
+        self.assertEqual(report['stop_reason'],'official_total_exhausted')
+        self.assertIsNone(report['next_page'])
+
+    def test_short_page_stops_even_when_official_total_is_larger(self):
+        env={'TAOBAO_ALLIANCE_APP_KEY':'123','TAOBAO_ALLIANCE_APP_SECRET':'secret','TAOBAO_ALLIANCE_ADZONE_ID':'456'}
+        calls=[]
+        class Response:
+            status_code=200
+            def __init__(self,payload): self.payload=payload
+            def iter_content(self,size): yield json.dumps(self.payload).encode()
+            def close(self): pass
+        def get(url,**kw):
+            page=int(kw['params']['page_no']); calls.append(page)
+            count=2 if page == 1 else 1
+            items=[sample_item(self.now,item_id=f'{page}{index}') for index in range(count)]
+            return Response({'tbk_dg_material_optional_response': {
+                'total_results': 12_749, 'result_list': {'map_data': items},
+            }})
+        report={}
+        rows=fetch_rows(API_ENDPOINT+'?q=%E9%A5%AE%E7%94%A8%E6%B0%B4&page_size=2&max_pages=all',http_get=get,env=env,now=self.now,report=report)
+        self.assertEqual(calls,[1,2])
+        self.assertEqual(len(rows),3)
+        self.assertEqual(report['official_total_results'],12_749)
+        self.assertEqual(report['stop_reason'],'page_exhausted')
+
 
 
 class TaobaoAlliancePipelineTests(unittest.TestCase):

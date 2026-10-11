@@ -4,15 +4,15 @@
 
 ## I1：官方优惠物料入库
 
-**实现：** `services/taobao_alliance.py` 读取联盟官方物料，每页 100 条自动翻页到官方结果耗尽；`scanner.py` 保存每次扫描回执。
+**实现：** `services/taobao_living_topics.py` 把每个生活品关键词保存为独立的官方来源；`services/taobao_alliance.py` 读取联盟官方物料，每页 100 条自动翻页到实际结果耗尽；`scanner.py` 保存每次扫描回执并只复审本轮淘宝来源。
 
 1. 仅接受官方返回的商品身份和推广入口。
 2. 只接受正数、可解释的推广价。
 3. 需要参考价降幅、当前有效券或当前活动路径之一。
 4. 没有优惠信号的普通商品价写入 `conditional` 审计，不成为默认列表行。
-5. 重复整页和 1000 页安全上限必须停止并写入扫描回执，不能静默漏页或无限循环。
+5. 短页、重复整页、官方结果页数上界和 1000 页安全上限必须停止并写入扫描回执，不能静默漏页或无限循环；官方 `total_results` 是审计上界，不覆盖短页结果。
 
-**验证：** 真实 API 回放与 `tests/test_taobao_alliance.py` 同时通过；`source_scan_runs` 的页数、停止原因和计数可复查。
+**验证：** 真实 API 回放与 `tests/test_taobao_alliance.py`、`tests/test_taobao_living_topics.py` 同时通过；`source_scan_runs` 的主题、页数、停止原因和计数可复查。
 
 ## I2：价格展示
 

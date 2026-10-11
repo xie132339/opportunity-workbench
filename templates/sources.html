@@ -7,6 +7,31 @@
   <p>“采集有返回”只表示入口返回了标题/链接，不代表拿到商品报价。分阶段计数统计最近成功采集周期内仍能看到的线索；原文发布时间单独核对，绝不拿采集时间代替。“公开金额已提取”包含“条件待拆”，这些阶段数不能直接相加。报价已提取也不代表商家结算价、优惠适用或全网最低；时间缺失/过期/未来、优惠条件不清、活动权益和冲突均分开列出，不计作已验证捡漏。</p>
   <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
 </section>
+<section class="card">
+  <h2>淘宝生活品主题配置 <span class="pill">{{ living_topics|length }} 个</span></h2>
+  <p>每个主题是一条独立的淘宝联盟官方来源：独立关键词、启停、频率和采集回执。初始化会沿用已有“抽纸”来源，不会重复采集；新增主题由系统生成官方 TOP 地址，不允许把查询词改写到已有来源，以免混淆历史证据。主题扩大的是发现范围，默认列表仍只接纳有当前优惠信号的官方物料。</p>
+  <div class="source-actions"><form method="post" action="{{ url_for('source_topics_bootstrap') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>初始化 / 补齐核心生活品主题</button></form></div>
+  <div class="table-wrap"><table class="source-table">
+    <thead><tr><th>分组 / 主题</th><th>官方搜索关键词</th><th>来源与采集状态</th><th>频率 / 最近成功</th><th>操作</th></tr></thead>
+    <tbody>{% for topic in living_topics %}<tr>
+      <td data-label="分组 / 主题"><strong>{{ topic.group }} · {{ topic.name }}</strong>{% if topic.default %}<br><small>核心预置</small>{% else %}<br><small>自定义</small>{% endif %}</td>
+      <td data-label="官方搜索关键词"><code>{{ topic.keyword }}</code></td>
+      <td data-label="来源与采集状态">{% if topic.source %}<strong>#{{ topic.source.id }} {{ topic.source.name }}</strong><br><span class="pill {{ topic.source.status if topic.source.enabled else 'manual' }}">{{ '已暂停' if not topic.source.enabled else {'healthy':'采集有返回','empty':'本轮无可用商品','partial':'分页中断，结果不完整','failed':'暂时失败','not_configured':'未配置凭据','pending':'待验证'}.get(topic.source.status,topic.source.status) }}</span>{% if topic.duplicate_source_ids %}<br><small class="error-text">另有相同关键词来源 #{{ topic.duplicate_source_ids|join('、#') }}，未自动合并历史</small>{% endif %}{% else %}<span class="pill pending">尚未初始化</span>{% endif %}</td>
+      <td data-label="频率 / 最近成功">{% if topic.source %}{{ topic.source.interval_minutes }} 分钟<br><small>{{ topic.source.last_success|cn_time if topic.source.last_success else '尚未成功' }}</small>{% else %}—{% endif %}</td>
+      <td data-label="操作">{% if topic.source %}<div class="source-actions"><form method="post" action="{{ url_for('source_toggle',source_id=topic.source.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">{{ '暂停' if topic.source.enabled else '启用' }}</button></form>{% if topic.source.enabled %}<form method="post" action="{{ url_for('scan_one',source_id=topic.source.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>现在检查</button></form>{% endif %}</div><form method="post" action="{{ url_for('source_interval',source_id=topic.source.id) }}" class="source-inline-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="interval_minutes" type="number" min="15" max="1440" value="{{ topic.source.interval_minutes }}" aria-label="{{ topic.name }}检查间隔" required><button class="secondary">保存频率</button></form>{% else %}先初始化{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  <details><summary>新增自定义生活品主题</summary>
+    <p class="muted">例如“垃圾袋 / 垃圾袋”。保存后会新建一条独立官方来源并自动纳入到期同步；如果关键词已经存在，请维护既有来源，不能改写历史来源的查询词。</p>
+    <form method="post" action="{{ url_for('source_topic_add') }}" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>主题名称<input name="topic_name" maxlength="32" placeholder="如：垃圾袋" required></label>
+      <label>官方搜索关键词<input name="keyword" maxlength="100" placeholder="如：垃圾袋" required></label>
+      <label>检查间隔（分钟）<input name="interval_minutes" type="number" min="15" max="1440" value="60" required></label>
+      <div><button>新增并启用官方主题</button></div>
+    </form>
+  </details>
+</section>
 <details class="card"><summary>新增来源</summary><div class="source-add">
   <p class="muted">公开网页解析只支持下列已适配站点，并在“现在检查”成功提取商品链接后才算可用；网页监控仅记录页面变化，不会自动拆成商品。淘宝联盟走官方 TOP API，入口填 <code>https://eco.taobao.com/router/rest?q=纸巾</code>；默认从第 1 页开始、每页最多 100 条，并自动连续翻页直到官方返回短页；可用 <code>max_pages=all</code> 明确表示自动全量分页，或填 1–1000 限制单轮页数。可配置 <code>has_coupon=true</code> 筛选有券。先在项目根目录的本地 <code>.env</code> 配置 <code>TAOBAO_ALLIANCE_APP_KEY</code>、<code>TAOBAO_ALLIANCE_APP_SECRET</code>、<code>TAOBAO_ALLIANCE_ADZONE_ID</code> 并重启服务。缺配置会显示“未配置”，不会假装采集成功。它覆盖联盟推广商品，不是淘宝全站；推广价和券试算都不等于结算价。RSSHub 填本机 127.0.0.1:1200 的订阅 URL；闲鱼账号、任务和结果请在本站“闲鱼任务”操作；人工线索在机会中心录入。</p>
   <form method="post" action="{{ url_for('source_add') }}" class="form-grid">

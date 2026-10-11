@@ -13,6 +13,10 @@ from routes.common import go
 from services.source_metrics import current_source_yield
 from services.taobao_alliance import configuration_error as taobao_alliance_configuration_error
 from services.taobao_alliance import search_config as validate_taobao_alliance_url
+from services.taobao_living_topics import (
+    add_custom_topic, configurations as living_topic_configurations,
+    ensure_core_topics,
+)
 from services.taobao_sync_validation import detail_batch_limit, validate_taobao_syncs
 
 
@@ -57,7 +61,55 @@ def sources():
             ORDER BY CASE state WHEN 'validated' THEN 0 WHEN 'discovered' THEN 1
                        WHEN 'failed' THEN 2 WHEN 'rejected' THEN 3 ELSE 4 END,
                      updated_at DESC,id DESC""").fetchall()
-    return render_template("sources.html", rows=rows, candidates=candidates, metrics=metrics, scan_runs=scan_runs)
+    return render_template("sources.html", rows=rows, candidates=candidates, metrics=metrics,
+                           scan_runs=scan_runs,
+                           living_topics=living_topic_configurations(rows))
+
+
+def source_topics_bootstrap():
+    """Install the maintainable core household topic set without duplicate URLs."""
+    try:
+        with connect() as db:
+            result = ensure_core_topics(db, env=os.environ)
+        created = result["created"]
+        adopted = result["adopted"]
+        if taobao_alliance_configuration_error():
+            flash("生活品主题已保存，但尚未连接：" + taobao_alliance_configuration_error(), "error")
+        else:
+            created_names = "、".join(item["topic"].name for item in created)
+            adopted_names = "、".join(item["topic"].name for item in adopted)
+            parts = []
+            if created_names:
+                parts.append("新建 " + created_names)
+            if adopted_names:
+                parts.append("沿用 " + adopted_names)
+            flash("淘宝生活品主题已配置：" + "；".join(parts) +
+                  "。每个主题已启用，后台会在下一轮到期检查时分别全量同步。", "ok")
+    except Exception as exc:
+        flash("生活品主题配置失败：" + str(exc)[:240], "error")
+    return go("sources")
+
+
+def source_topic_add():
+    """Create an auditable new official query rather than mutating source history."""
+    try:
+        interval = int(request.form.get("interval_minutes", str(60)))
+        with connect() as db:
+            source_id = add_custom_topic(
+                db,
+                name=request.form.get("topic_name", ""),
+                keyword=request.form.get("keyword", ""),
+                interval_minutes=interval,
+                env=os.environ,
+            )
+        if taobao_alliance_configuration_error():
+            flash(f"生活品主题来源 #{source_id} 已保存，但尚未连接：" +
+                  taobao_alliance_configuration_error(), "error")
+        else:
+            flash(f"生活品主题来源 #{source_id} 已启用；后台将在下一轮到期检查时自动同步。", "ok")
+    except (TypeError, ValueError) as exc:
+        flash("生活品主题保存失败：" + str(exc)[:240], "error")
+    return go("sources")
 
 def source_candidates_refresh():
     try:
@@ -247,6 +299,10 @@ def scan_everything():
 
 def register(app):
     app.add_url_rule('/sources', endpoint='sources', view_func=sources, methods=['GET'])
+    app.add_url_rule('/sources/taobao-topics/bootstrap', endpoint='source_topics_bootstrap',
+                     view_func=source_topics_bootstrap, methods=['POST'])
+    app.add_url_rule('/sources/taobao-topics', endpoint='source_topic_add',
+                     view_func=source_topic_add, methods=['POST'])
     app.add_url_rule('/sources/candidates/refresh', endpoint='source_candidates_refresh', view_func=source_candidates_refresh, methods=['POST'])
     app.add_url_rule('/sources/candidates/bulk', endpoint='source_candidates_bulk', view_func=source_candidates_bulk, methods=['POST'])
     app.add_url_rule('/sources', endpoint='source_add', view_func=source_add, methods=['POST'])

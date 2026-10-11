@@ -11,7 +11,7 @@
     <br>报价不等于优惠，优惠候选不等于捡漏。
     {% if run.error_code %}<br>错误：{{ run.error_code }}{% endif %}
     {% if run.report %}
-      <br>停止原因：{{ {'page_limit':'达到本轮页数上限','page_exhausted':'上游返回不足一页','partial':'后续页读取失败','failed':'读取失败'}.get(run.report.stop_reason or run.report.status, '读取处理中') }}
+      <br>停止原因：{{ {'page_limit':'达到本轮页数上限','page_exhausted':'上游返回不足一页','official_total_exhausted':'已达到官方返回的结果总数','repeated_page':'上游重复返回同一页，已停止','api_page_ceiling':'达到本地安全页数上限','partial':'后续页读取失败','failed':'读取失败'}.get(run.report.stop_reason or run.report.status, '读取处理中') }}{% if run.report.official_total_results is not none %} · 官方结果总数 {{ run.report.official_total_results }}{% endif %}
       {% if run.report.next_page %} · 可从第 {{ run.report.next_page }} 页继续{% endif %}
       {% for page in run.report.pages %}
         <br>第 {{ page.page_no }} 页：原始 {{ page.raw_items|length }} 条，拒绝 {{ page.rejections|length }} 条

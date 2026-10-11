@@ -698,9 +698,25 @@ def classify_catalog_observation(row, now, duplicate=False):
     return classify(source_row, now, duplicate)
 
 
-def review_all():
+def review_all(source_method=None, opportunity_ids=None):
+    """Reclassify a bounded collector's records without touching other sources.
+
+    A dedicated collector must not turn a new official-source batch into a
+    full historical review of unrelated connectors.  The unfiltered call keeps
+    the existing behavior for the all-source worker and explicit operator run.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    target_ids = tuple(sorted({int(value) for value in (opportunity_ids or ())
+                               if str(value).isdigit() and int(value) > 0}))
     with connect() as db:
+        conditions = ["(s.enabled=1 OR s.method='manual')"]
+        params = []
+        if source_method is not None:
+            conditions.append("s.method=?")
+            params.append(source_method)
+        if target_ids:
+            conditions.append("o.id IN (" + ",".join("?" for _ in target_ids) + ")")
+            params.extend(target_ids)
         rows = db.execute('''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
             s.parser AS source_parser,s.method AS source_method,
             s.status AS source_status,s.interval_minutes,s.last_success,s.url AS source_url,
@@ -718,7 +734,7 @@ def review_all():
                   ) AS duplicate
             FROM opportunities o JOIN events e ON e.id=o.event_id
             JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
-            WHERE s.enabled=1 OR s.method='manual' ''').fetchall()
+            WHERE ''' + " AND ".join(conditions), params).fetchall()
         counts = {}
         for item in rows:
             row = dict(item)
@@ -784,7 +800,7 @@ def run_cycle(limit=6, opportunity_id=None, source_method=None, opportunity_ids=
     counts = {}
     queue = []
     try:
-        counts = review_all()
+        counts = review_all(source_method=source_method, opportunity_ids=target_ids)
         with connect() as db:
             conditions = ['''(a.state IN ('queued','retry')
                        OR (a.state='conditional' AND (
@@ -901,7 +917,7 @@ def run_cycle(limit=6, opportunity_id=None, source_method=None, opportunity_ids=
                     db.execute('''UPDATE auto_reviews SET detail_error=?,attempts=attempts+1,
                         detail_checked_at=CURRENT_TIMESTAMP,next_check_at=datetime('now',?) WHERE opportunity_id=?''',
                         (str(exc)[:250], f'+{delay} minutes',row['opportunity_id']))
-        counts = review_all()
+        counts = review_all(source_method=source_method, opportunity_ids=target_ids)
         result = dict(counts=counts, probed=len(queue))
         if target_ids:
             result.update(target_opportunity_ids=list(target_ids),

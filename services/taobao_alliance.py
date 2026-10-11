@@ -624,6 +624,20 @@ def _fetch_page(source_url, *, http_get=None, env=None, now=None, report=None):
                 report["top_sub_code"] = sub_code
             reason = "api_package_unavailable" if sub_code == "isv.permission-api-package-limit" else "api_error"
             raise TaobaoAllianceAPIError(f"淘宝联盟 API 返回错误（code={code}, sub_code={sub_code}）", reason)
+        response_body = (payload.get("tbk_dg_material_optional_upgrade_response")
+                         if isinstance(payload, dict) else None)
+        if not isinstance(response_body, dict) and isinstance(payload, dict):
+            response_body = payload.get("tbk_dg_material_optional_response")
+        if isinstance(response_body, dict) and report is not None:
+            try:
+                total_results = int(response_body.get("total_results"))
+            except (TypeError, ValueError):
+                total_results = None
+            if total_results is not None and 0 <= total_results <= 1_000_000:
+                # This is a response-scoped count.  It is retained in the raw
+                # page audit and used only to avoid probing pages which TOP has
+                # already declared outside this result set.
+                report["official_total_results"] = total_results
         return _rows_from_payload(payload, now=now, report=report)
     except requests.RequestException as exc:
         raise TaobaoAllianceAPIError(f"淘宝联盟 API 读取失败（{type(exc).__name__}）", "network_error") from exc
@@ -639,6 +653,8 @@ def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
     start = int(query["page_no"])
     last_page = 1000 if max_pages == "all" else min(start + int(max_pages) - 1, 1000)
     pages, rows, seen, raw_item_keys = [], [], set(), set()
+    official_total_results = None
+    official_last_page = None
     if report is not None:
         report.update(pages=pages, status="running", raw_count=None, parsed_count=None,
                       promotion_count=None, duplicate_count=0, rejected_count=None,
@@ -658,6 +674,15 @@ def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
                 return rows
             raise
         pages.append(page)
+        page_total = page.get("official_total_results")
+        if isinstance(page_total, int) and page_total >= 0:
+            official_total_results = max(official_total_results or 0, page_total)
+            official_last_page = min(1000, max(start, (official_total_results + int(query["page_size"]) - 1)
+                                                // int(query["page_size"])))
+            if report is not None:
+                # The official count is diagnostic only. A short page remains
+                # the stronger completion signal for this application's access.
+                report["official_total_results"] = official_total_results
         page_raw_keys = {
             str(item.get("item_id") or item.get("num_iid") or "").strip()
             for item in page["raw_items"] if isinstance(item, dict)
@@ -677,7 +702,9 @@ def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
                           promotion_count=sum(bool(r[5]["taobao_alliance_offer"]["price_drop_candidate"] or
                                                    r[5]["taobao_alliance_offer"]["coupon_candidate"] or
                                                    r[5]["taobao_alliance_offer"]["promotion_path_candidate"]) for r in rows))
-        if len(page["raw_items"]) < int(query["page_size"]) or repeated_page:
+        if (len(page["raw_items"]) < int(query["page_size"])
+                or repeated_page
+                or (official_last_page is not None and page_no >= official_last_page)):
             break
     if report is not None:
         report["status"] = "complete"
@@ -686,6 +713,10 @@ def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
             report["next_page"] = None
         elif len(page["raw_items"]) < int(query["page_size"]):
             report["stop_reason"] = "page_exhausted"
+            report["next_page"] = None
+        elif official_last_page is not None and page_no >= official_last_page:
+            report["stop_reason"] = "official_total_exhausted"
+            report["official_total_results"] = official_total_results
             report["next_page"] = None
         elif max_pages == "all":
             report["stop_reason"] = "api_page_ceiling"

@@ -411,7 +411,10 @@ def scan_source(source_id, *, review=True):
                        (status, str(exc)[:400], source_id))
         if review:
             from autoreview import review_all
-            review_all()
+            if source["method"] == "taobao_alliance":
+                review_all(source_method="taobao_alliance")
+            else:
+                review_all()
         return {"source_id": source_id, "status": status, "new": 0,
                 "opportunity_ids": [], "new_opportunity_ids": [], "error": str(exc)[:400]}
 
@@ -473,7 +476,10 @@ def scan_source(source_id, *, review=True):
         raise
     if review:
         from autoreview import review_all
-        review_all()
+        if source["method"] == "taobao_alliance":
+            review_all(source_method="taobao_alliance")
+        else:
+            review_all()
     return {"source_id": source_id, "status": "healthy", "new": added,
             "baseline": prior == 0, "seen": len(records),
             "run_id": run_id,
@@ -499,5 +505,8 @@ def scan_all(due_only=False, method=None):
     results = [scan_source(source_id, review=False) for source_id in ids]
     if results:
         from autoreview import review_all
-        review_all()
+        if method == "taobao_alliance":
+            review_all(source_method="taobao_alliance")
+        else:
+            review_all()
     return results
