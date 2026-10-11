@@ -5,7 +5,7 @@ import unicodedata
 from decimal import Decimal
 from services.taobao_alliance import (
     has_current_promotion_signal as taobao_has_current_promotion_signal,
-    validated_offer as validated_taobao_alliance_offer,
+    validated_offer_for_row as validated_taobao_alliance_offer,
 )
 
 
@@ -61,7 +61,7 @@ def listing_quote(row, brief):
                     label=f'众筹公开档位价 · {phase}',
                     note=row.get('auto_reason') or '来源公开活动价；不是本人结算价或已核实捡漏。')
     if row.get('source_method') == 'taobao_alliance':
-        evidence = validated_taobao_alliance_offer(row.get('metadata_json'))
+        evidence = validated_taobao_alliance_offer(row)
         if not evidence or row.get('auto_state') not in {'observed', 'conditional'}:
             return None
         detail = row.get('detail_json') or {}
@@ -163,7 +163,7 @@ def is_promotional_price_candidate(row, brief=None):
         return False
 
     if row.get('source_method') == 'taobao_alliance':
-        evidence = validated_taobao_alliance_offer(row.get('metadata_json'))
+        evidence = validated_taobao_alliance_offer(row)
         return bool(quote.get('kind') in {'official_promotion_observation', 'source_claim'}
                     and taobao_has_current_promotion_signal(evidence))
 
@@ -226,7 +226,7 @@ def promotion_admission(row, assessment):
     if not row.get('promotional_candidate'):
         return dict(eligible=False, tier='clue', reason='未形成可核对的优惠证据')
     if row.get('source_method') == 'taobao_alliance':
-        evidence = validated_taobao_alliance_offer(row.get('metadata_json'))
+        evidence = validated_taobao_alliance_offer(row)
         quote = row.get('display_quote') or {}
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)

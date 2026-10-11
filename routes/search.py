@@ -19,9 +19,11 @@ from services.marketplace_identity import (
     FILTER_OPTIONS, attach_product_marketplace, marketplace_matches_filter,
 )
 from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
+from services.taobao_alliance import validated_offer_for_row
 
 
-def attach_offer_data(row):
+def attach_offer_data(row, include_diagnostics=True):
+    """Attach admission fields, deferring render-only diagnostics when safe."""
     row['display_topic']=resource_topic(row.get('title',''),row.get('source_category',''))
     row['catalog_listing']=row.get('source_parser') in CATALOG_LISTING_PARSERS
     row['campaign_window']=None
@@ -32,12 +34,17 @@ def attach_offer_data(row):
         if row['campaign_window']:
             row['campaign_start_at']=row['campaign_window']['start_at'].isoformat(sep=' ')
             row['campaign_end_at']=row['campaign_window']['end_at'].isoformat(sep=' ')
+    taobao_offer = (validated_offer_for_row(row)
+                    if row.get('source_method') == 'taobao_alliance' else None)
     brief=offer_summary(row['title'],row['url'],row.get('snippet'),row.get('auto_conditions'),
                         row.get('metadata_json'),row.get('detail_json'),
                         dict(checked_at=row.get('review_checked_at'),
                              detail_checked_at=row.get('detail_checked_at'),
-                             detail_error=row.get('detail_error')))
+                             detail_error=row.get('detail_error')),
+                        taobao_offer=taobao_offer,
+                        include_diagnostics=include_diagnostics)
     row['offer_brief']=brief
+    row['_offer_diagnostics_deferred'] = bool(taobao_offer and not include_diagnostics)
     row['display_quote']=listing_quote(row,brief)
     row['catalog_reference']=bool(row['catalog_listing'] and row['display_quote']
                                   and row['display_quote'].get('kind')=='catalog_public')
@@ -273,8 +280,13 @@ def index():
             else:
                 for row in all_rows:
                     row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
+            # Source comparison is intentionally deferred for broad result
+            # sets.  In that mode official structured evidence still decides
+            # admission, while textual diagnostics are created only after the
+            # final page is known.
+            source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
             for row in all_rows:
-                attach_offer_data(row)
+                attach_offer_data(row, include_diagnostics=not source_comparison_deferred)
                 row['maintained_baseline'] = assess_maintained_baseline(
                     row, row['offer_brief'], row.get('display_quote'), maintained_baselines)
             source_match_counts = {}
@@ -292,7 +304,6 @@ def index():
             # input to the operator-maintained price bands. Avoid expanding a
             # broad result set into one comparison graph per row on ordinary
             # offer, current and archive browsing.
-            source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
             comparisons = ({} if source_comparison_deferred else
                            (load_comparisons(db) if show_archive else
                             load_comparisons(db, [row['id'] for row in all_rows])))
@@ -371,6 +382,14 @@ def index():
             rows=annotate_search_sources(rows, provenance_corpus)
             product_link_cache=resolution_cache(db,rows)
             rows=[enrich_links(row,product_link_cache) for row in rows]
+            # Hydrate only records that the user can see.  This restores the
+            # exact audit, promotion and sync text required by both list and
+            # card templates without paying that parsing cost for every row.
+            for row in rows:
+                if row.pop('_offer_diagnostics_deferred', False):
+                    attach_offer_data(row)
+                    search_assessments[row['id']] = assess_readiness(
+                        row, comparisons.get(row['id'], {}), row['offer_brief'])
         dedicated_taobao_source_count = db.execute(
             "SELECT COUNT(*) FROM sources WHERE enabled=1 AND (lower(parser)='taobao' OR method='taobao_alliance')"
         ).fetchone()[0]

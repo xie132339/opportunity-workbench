@@ -295,13 +295,67 @@ def _price_status(title, body, metadata, total_cents, detail=None):
                 source_hint_cents=source_hint, state=state, **page_claim)
 
 
-def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=None, sync_meta=None):
+_UNSET_TAOBAO_OFFER = object()
+
+
+def _deferred_offer_summary(title, detail, taobao_offer):
+    """Build the admission-only view for an official source record.
+
+    The list admission path already has structured official evidence.  Text
+    diagnostics (coupon wording, arithmetic and sync explanations) are only
+    rendered for the current page, so parsing every other result before
+    pagination is duplicate CPU work.  The returned shape remains compatible
+    with callers that need quote and readiness fields; the full summary is
+    rebuilt before a row reaches a template.
+    """
+    sku_bound = (detail.get('evidence_kind') == 'taobao_alliance_sku_detail'
+                 and detail.get('field_state') == 'bound')
+    official_quote_cents = taobao_offer.get('quote_price_cents')
+    quote_cents = detail.get('advertised_cents') if sku_bound else official_quote_cents
+    has_official_quote = isinstance(quote_cents, int) and quote_cents > 0
+    price_status = dict(
+        state='taobao_alliance_sku_promotion' if sku_bound else 'taobao_alliance_official_promotion',
+        label='淘宝联盟SKU预估优惠价' if sku_bound else '淘宝联盟官方推广价',
+        note=('官方详细接口已绑定具体SKU、规格、库存与优惠路径；账号资格、运费及结算结果仍需下单页确认。'
+              if sku_bound else
+              '淘宝联盟物料接口已返回商品身份、官方推广入口、参考价和当前推广价；'
+              'SKU规格、库存、账号资格、运费及结算结果尚未核实，因此不用于同款比较或捡漏结论。'))
+    name = re.sub(r'^(?:限移动端|88VIP会员)[：:]\s*', '', title)
+    name = re.sub(r'\s+(?:券后)?\d+(?:\.\d{1,2})?元(?:[/／]件)?(?:[（(].*[）)])?$', '', name)
+    return dict(
+        total_cents=quote_cents, unit_cents=quote_cents,
+        quantity=1 if has_official_quote else None,
+        selected_spec=detail.get('specification', '') if sku_bound else '',
+        source_spec='', net_after_rebate_cents=None,
+        error='' if has_official_quote else '淘宝联盟未返回可显示的官方推广价',
+        store=taobao_offer.get('shop_title') or '淘宝联盟推广商品',
+        title=name, display_unit_cents=quote_cents, platforms='淘宝',
+        price_status=price_status, kind='purchase', source_category='',
+        resolved_links=[], activity_links=[], origin_url='', external_checks=[],
+        # These placeholders keep the ordinary readiness code structurally
+        # safe while comparison diagnostics are deferred for the whole corpus.
+        audit=dict(plan=dict(state='diagnostics_deferred', cases=[]), risks=[]),
+        promotions=[], qualifications=[],
+        previous_cents=taobao_offer.get('reserve_price_cents'),
+        promotion_sync=dict(state='diagnostics_deferred', label='当前页加载详情诊断',
+                            explanation='该说明会在记录进入当前页时生成。',
+                            source_checked_at='', detail_checked_at='', detail_error='',
+                            promotions=[], qualifications=[], coupon_face_claims=[],
+                            noncash_credit_claims=[], random_reward_claims=[]),
+    )
+
+
+def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=None, sync_meta=None,
+                  taobao_offer=_UNSET_TAOBAO_OFFER, include_diagnostics=True):
     """Readable excerpts, not a new price calculation or eligibility decision."""
     detail = json.loads(detail_json or '{}')
+    origin = json.loads(metadata or '{}')
+    if taobao_offer is _UNSET_TAOBAO_OFFER:
+        taobao_offer = validated_taobao_alliance_offer(origin)
+    if taobao_offer and not include_diagnostics:
+        return _deferred_offer_summary(title, detail, taobao_offer)
     body = detail.get('conditions') or body or ''
     text = title + '\n' + body + '\n' + (conditions or '')
-    origin = json.loads(metadata or '{}')
-    taobao_offer = validated_taobao_alliance_offer(origin)
     offer = public_offer(url, body, title)
     offer.setdefault('selected_spec', '')
     offer.setdefault('net_after_rebate_cents', None)

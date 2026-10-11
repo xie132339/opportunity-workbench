@@ -457,6 +457,28 @@ def validated_offer(metadata, now=None):
     return row[5]["taobao_alliance_offer"] if row else None
 
 
+def validated_offer_for_row(row, now=None):
+    """Validate immutable source metadata once while one result row is rendered.
+
+    A list request uses the same preserved Alliance material for marketplace
+    attribution, quote construction, promotion detection and admission.  All
+    of those consumers must use the same current validation, but re-running
+    the parser for each consumer is pure duplicate CPU work.  The cache stays
+    on the transient row dictionary, is never persisted, and is discarded at
+    the end of the request.  An explicit ``now`` always revalidates so worker
+    and test callers can keep their chosen clock.
+    """
+    metadata = row.get("metadata_json") if isinstance(row, dict) else None
+    if not isinstance(row, dict) or now is not None:
+        return validated_offer(metadata, now=now)
+    cached = row.get("_taobao_alliance_offer_cache")
+    if isinstance(cached, tuple) and len(cached) == 2 and cached[0] == metadata:
+        return cached[1]
+    offer = validated_offer(metadata)
+    row["_taobao_alliance_offer_cache"] = (metadata, offer)
+    return offer
+
+
 def detail_item_identity(offer, product_url):
     """Return the official material item identity accepted by the detailed API.
 

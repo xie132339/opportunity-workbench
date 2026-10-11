@@ -94,8 +94,8 @@ def identify_product_marketplace(row):
         }
     if not platforms:
         if row.get("source_method") == "taobao_alliance":
-            from services.taobao_alliance import validated_offer
-            offer = validated_offer(row.get("metadata_json"))
+            from services.taobao_alliance import validated_offer_for_row
+            offer = validated_offer_for_row(row)
             if offer and offer.get("link_kind") == "official_promotion_link":
                 key = offer.get("marketplace_key")
                 if key not in ("taobao", "tmall"):

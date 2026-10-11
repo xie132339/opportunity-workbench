@@ -15,7 +15,7 @@ from app import app
 from services.product_search import is_promotional_price_candidate, listing_quote
 from services.taobao_alliance import (
     API_ENDPOINT, TaobaoAllianceAPIError, TaobaoAllianceConfigurationError, _signature, configuration_error,
-    fetch_rows, parse_item, search_config, validated_offer,
+    fetch_rows, parse_item, search_config, validated_offer, validated_offer_for_row,
 )
 from services.taobao_sku_detail import (
     DETAIL_METHOD, LEGACY_DETAIL_METHOD, SKU_DETAIL_METHODS,
@@ -66,6 +66,57 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 search_config(invalid)
+
+    def test_row_validation_cache_reuses_unchanged_metadata_and_invalidates_on_change(self):
+        row = {"metadata_json": "first"}
+        first = {"item_id": "first"}
+        second = {"item_id": "second"}
+        timed = {"item_id": "timed"}
+        with patch("services.taobao_alliance.validated_offer", side_effect=[first, second, timed]) as validate:
+            self.assertEqual(validated_offer_for_row(row), first)
+            self.assertEqual(validated_offer_for_row(row), first)
+            row["metadata_json"] = "second"
+            self.assertEqual(validated_offer_for_row(row), second)
+            self.assertEqual(validated_offer_for_row(row, now=self.now), timed)
+        self.assertEqual([call.args[0] for call in validate.call_args_list], ["first", "second", "second"])
+
+    def test_search_row_reuses_one_alliance_validation_across_matchers(self):
+        from routes.search import attach_offer_data
+        from services.marketplace_identity import attach_product_marketplace
+        from services.product_search import promotion_admission
+
+        now = datetime.now(CHINA)
+        parsed = parse_item(sample_item(now), now=now)
+        row = {
+            "source_method": "taobao_alliance", "metadata_json": json.dumps(parsed[5]),
+            "title": parsed[1], "url": parsed[2], "snippet": parsed[3],
+            "auto_conditions": "", "detail_json": None, "review_checked_at": None,
+            "detail_checked_at": None, "detail_error": None, "source_category": "零售优惠",
+            "source_parser": "taobao_alliance", "auto_state": "observed",
+        }
+        with patch("services.taobao_alliance.validated_offer", wraps=validated_offer) as validate:
+            row = attach_product_marketplace(row)
+            attach_offer_data(row, include_diagnostics=False)
+            admission = promotion_admission(row, {})
+            self.assertTrue(row["_offer_diagnostics_deferred"])
+            attach_offer_data(row)
+        self.assertTrue(admission["eligible"])
+        self.assertFalse(row["_offer_diagnostics_deferred"])
+        self.assertEqual(validate.call_count, 1)
+
+    def test_official_offer_can_defer_render_diagnostics_without_losing_quote(self):
+        now = datetime.now(CHINA)
+        parsed = parse_item(sample_item(now), now=now)
+        offer = validated_offer(parsed[5], now=now)
+        with patch("autoreview.discount_audit", side_effect=AssertionError), \
+                patch("autoreview.promotion_sync_status", side_effect=AssertionError):
+            brief = autoreview.offer_summary(
+                parsed[1], parsed[2], parsed[3], metadata=json.dumps(parsed[5]),
+                taobao_offer=offer, include_diagnostics=False)
+        self.assertEqual(brief["total_cents"], offer["quote_price_cents"])
+        self.assertEqual(brief["price_status"]["state"], "taobao_alliance_official_promotion")
+        self.assertEqual(brief["audit"]["plan"]["state"], "diagnostics_deferred")
+        self.assertEqual(brief["promotions"], [])
 
     def test_price_drop_is_a_direct_taobao_product_and_coupon_is_not_stacked(self):
         record = parse_item(sample_item(self.now), now=self.now)
