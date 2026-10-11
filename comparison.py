@@ -176,6 +176,9 @@ def quantity_options(items, target):
                 reason='按来源声称的含运费金额比较，资格仍未确认' if includes_shipping else '按商品金额比较；运费不全，不能确定最低到手价')
 
 
+MAX_TARGET_IDS_FOR_PEER_EXPANSION = 100
+
+
 def load_comparisons(db, opportunity_ids=None):
     """Build comparisons for the whole corpus or a bounded set of target rows.
 
@@ -189,13 +192,18 @@ def load_comparisons(db, opportunity_ids=None):
         FROM opportunities o JOIN events e ON e.id=o.event_id JOIN sources s ON s.id=o.source_id
         LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
         LEFT JOIN benchmark_topic_rules br ON br.topic_key=o.topic"""
-    if opportunity_ids is None:
+    target_ids = None if opportunity_ids is None else sorted({int(value) for value in opportunity_ids})
+    if target_ids is not None and not target_ids:
+        return {}
+    if target_ids is None or len(target_ids) > MAX_TARGET_IDS_FOR_PEER_EXPANSION:
+        # A broad search can contain thousands of targets. Building one SQL
+        # predicate for every candidate and every identity hint exceeds SQLite's
+        # expression-depth limit and turns optional source comparison into a
+        # page-wide failure. The active corpus is already the complete peer
+        # pool for this view, so load it once and group it in comparison_index.
         rows=[dict(r) for r in db.execute(
             query+" WHERE s.enabled=1 OR s.method='manual' ORDER BY o.id DESC").fetchall()]
     else:
-        target_ids=sorted({int(value) for value in opportunity_ids})
-        if not target_ids:
-            return {}
         marks=','.join('?' for _ in target_ids)
         seeds=[dict(r) for r in db.execute(query+f' WHERE o.id IN ({marks})',target_ids).fetchall()]
         if not seeds:

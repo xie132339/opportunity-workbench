@@ -30,6 +30,8 @@ A maintained baseline contains: category, display name, all required title token
 - [x] (2026-10-11 16:xx CST) Added baseline/category management UI and integrated verdicts into list/detail display and default ordering.
 - [x] (2026-10-11 16:xx CST) Updated product contract, acceptance documentation and regression tests.
 - [x] (2026-10-11 16:xx CST) Ran 306 tests; migrated and restarted the local service; verified the real database integrity and management page.
+- [x] (2026-10-11 16:xx CST) Confirmed the maintained-band verdict is optional: a matching official promotion displays normally before any baseline exists, then receives a label only after the operator saves an exact rule. Added the regression check.
+- [x] (2026-10-11 16:xx CST) Fixed large-list source-comparison expansion: ordinary offer/current/archive browsing now skips the optional comparison diagnostic above 100 rows, preventing SQLite expression-depth failure without changing official-offer admission or maintained-band assessment.
 
 ## Plan of work
 
@@ -66,5 +68,7 @@ A maintained baseline contains: category, display name, all required title token
 ## Outcomes and retrospective
 
 Completed on 2026-10-11. `unittest discover -s tests` passed 306 tests, including 9 dedicated maintained-baseline tests. Real database initialization created both baseline tables without changing the 5,048 event or opportunity records; `PRAGMA quick_check` returned `ok`. The service and Taobao worker were restarted successfully and `/price-benchmarks` rendered the local-maintenance state.
+
+Follow-up completed on 2026-10-11. The product contract and R3 now make the distinction explicit: price bands are an optional local calibration label, never an admission filter. The unmatched-offer route test and large-list route test pass. With the real 5,048-row database, the former peer-comparison path first failed at SQLite's expression-depth limit; after the bounded/deferred path, default offers and current leads both returned HTTP 200 in the same fresh process (about 4.8 seconds rather than the prior 8.5 seconds). The remaining list enrichment cost is independent of price-band admission and must not be described as a benchmark failure.
 
 The live database intentionally has zero baseline rows after migration. No real brand threshold was guessed or seeded. The next operating action is to add a concrete baseline in the page and replay a matching official Taobao offer; that is an operational data-validation step, not a code blocker.

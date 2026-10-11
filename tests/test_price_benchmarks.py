@@ -290,6 +290,58 @@ class PriceBenchmarkPageTests(unittest.TestCase):
             self.assertTrue(all(error is None for _,error in rules))
             self.assertEqual(conn.execute('PRAGMA quick_check').fetchone()[0],'ok')
 
+    def test_large_target_set_uses_active_corpus_without_sql_expression_overflow(self):
+        from comparison import load_comparisons
+
+        with db.connect() as conn:
+            source_id = conn.execute("""INSERT INTO sources
+                (platform,name,category,url,method,status,enabled,interval_minutes,last_success)
+                VALUES('测试','大结果集','零售优惠','https://example.test/feed','rss','healthy',1,60,CURRENT_TIMESTAMP)""").lastrowid
+            event_id = conn.execute("""INSERT INTO events
+                (source_id,external_key,title,url,fingerprint,published_at,last_seen_at)
+                VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                (source_id, 'large-target', '大结果集测试商品', 'https://example.test/product',
+                 'large-target', '2026-10-11 10:00:00')).lastrowid
+            opportunity_id = conn.execute("""INSERT INTO opportunities
+                (event_id,source_id,title,category,topic,url,resource_kind)
+                VALUES(?,?,?,'零售优惠','home',?,'purchase')""",
+                (event_id, source_id, '大结果集测试商品', 'https://example.test/product')).lastrowid
+            conn.execute("INSERT INTO auto_reviews(opportunity_id,state,reason) VALUES(?,'observed','fixture')", (opportunity_id,))
+            result = load_comparisons(conn, range(1, 102))
+        self.assertIn(opportunity_id, result)
+
+    def test_large_current_list_skips_optional_source_comparison(self):
+        """A large ordinary list must not turn an optional diagnostic into a 500."""
+        with db.connect() as conn:
+            source_id = conn.execute("""INSERT INTO sources
+                (platform,name,category,url,method,status,enabled,interval_minutes,last_success)
+                VALUES('测试','大结果集页面','零售优惠','https://example.test/feed','rss','healthy',1,60,CURRENT_TIMESTAMP)""").lastrowid
+            for index in range(101):
+                title = f"大结果集商品 {index}"
+                event_id = conn.execute("""INSERT INTO events
+                    (source_id,external_key,title,url,fingerprint,published_at,last_seen_at)
+                    VALUES(?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+                    (source_id, f'page-{index}', title, f'https://example.test/product/{index}',
+                     f'page-{index}')).lastrowid
+                opportunity_id = conn.execute("""INSERT INTO opportunities
+                    (event_id,source_id,title,category,topic,url,resource_kind)
+                    VALUES(?,?,?,'零售优惠','home',?,'purchase')""",
+                    (event_id, source_id, title, f'https://example.test/product/{index}')).lastrowid
+                conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason)
+                    VALUES(?,'observed','fixture')""", (opportunity_id,))
+
+        # Source comparison is a diagnostic only.  If the normal large list
+        # tries to call it, the mock makes the route fail immediately.
+        with patch("routes.search.load_comparisons", side_effect=AssertionError("unexpected comparison")):
+            response = self.client.get("/?view=current&buy_platform=all&layout=list")
+            offers_response = self.client.get("/?view=offers&buy_platform=all&layout=list")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(offers_response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn("大结果集商品 100", page)
+        self.assertIn("未运行来源之间的可选归并比较", page)
+        self.assertIn("未运行来源之间的可选归并比较", offers_response.get_data(as_text=True))
+
     def test_watch_toggle_does_not_claim_provider_connected(self):
         with db.connect() as conn:
             provider_id = conn.execute("SELECT id FROM benchmark_providers WHERE provider_key='smzdm_history'").fetchone()[0]

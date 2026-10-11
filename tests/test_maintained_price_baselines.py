@@ -227,7 +227,6 @@ class MaintainedPriceBaselineRouteTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 
     def test_list_renders_a_matched_official_taobao_promotion(self):
-        self.client.post("/price-benchmarks/maintained", data=self.form_data())
         now = datetime.now(CHINA)
         item = {
             "num_iid": "123456789", "title": "清风 原木 3层抽纸 100抽*6包",
@@ -258,6 +257,10 @@ class MaintainedPriceBaselineRouteTests(unittest.TestCase):
             ).lastrowid
             conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
                 VALUES(?,'observed','官方推广价',800)""", (opportunity_id,))
+        without_baseline = self.client.get("/?q=清风&buy_platform=taobao&layout=list").get_data(as_text=True)
+        self.assertIn("清风 原木 3层抽纸 100抽*6包", without_baseline)
+        self.assertNotIn("按维护基准：可捡漏", without_baseline)
+        self.client.post("/price-benchmarks/maintained", data=self.form_data())
         page = self.client.get("/?q=清风&buy_platform=taobao&layout=list").get_data(as_text=True)
         self.assertIn("清风 原木 3层抽纸 100抽*6包", page)
         self.assertIn("按维护基准：可捡漏", page)

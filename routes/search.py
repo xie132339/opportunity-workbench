@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from flask import render_template, request
 from db import connect
-from comparison import load_comparisons, assess_readiness
+from comparison import MAX_TARGET_IDS_FOR_PEER_EXPANSION, load_comparisons, assess_readiness
 from autoreview import classify_catalog_observation, offer_summary
 from benefits import linked_counts as linked_benefit_counts
 from offer import RESOURCE_LABELS, TOPIC_LABELS, paper_package_prices, resource_topic
@@ -162,6 +162,10 @@ def index():
     with connect() as db:
         maintained_baselines = load_baselines(db)
         search_funnel = {}
+        # This diagnostic is optional.  Keep the template context defined for
+        # the candidate branch too; candidate results are intentionally small
+        # and still run their explicit evidence comparison below.
+        source_comparison_deferred = False
         order_by = """ ORDER BY CASE o.category
             WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
             WHEN '供货与清仓' THEN 3 WHEN '新品与补货' THEN 4
@@ -283,7 +287,15 @@ def index():
             for matched_row in all_rows:
                 if matched_row.get('display_quote'):
                     source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
-            comparisons = load_comparisons(db) if show_archive else load_comparisons(db,[row['id'] for row in all_rows])
+            # Source-to-source comparison is an optional diagnostic. It is not
+            # an admission gate for official Taobao promotions and it is not an
+            # input to the operator-maintained price bands. Avoid expanding a
+            # broad result set into one comparison graph per row on ordinary
+            # offer, current and archive browsing.
+            source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
+            comparisons = ({} if source_comparison_deferred else
+                           (load_comparisons(db) if show_archive else
+                            load_comparisons(db, [row['id'] for row in all_rows])))
             for row in all_rows:
                 row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
             search_assessments={row['id']:assess_readiness(row,comparisons.get(row['id'],{}),row['offer_brief']) for row in all_rows}
@@ -419,6 +431,7 @@ def index():
                            search_funnel=search_funnel,
                            candidate_only=candidate_only, show_archive=show_archive, view_mode=view_mode,
                            ready_only=ready_only, priced_only=priced_only,
+                           source_comparison_deferred=source_comparison_deferred,
                            unpriced_current_count=unpriced_current_count)
 
 def register(app):
