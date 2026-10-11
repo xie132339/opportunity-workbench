@@ -167,3 +167,6 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 .metric-grid strong{font-size:27px;line-height:1.2}
 .metric-grid span{font-weight:600}
 .metric-grid small{color:var(--muted)}
+
+/* Locally maintained baseline verdicts are visible, but deliberately distinct from checkout proof. */
+.maintained-band{padding-top:5px;color:#315f4e}.maintained-band.maintained_bargain,.maintained-baseline-card.maintained_bargain{color:#086b54}.maintained-band.maintained_high,.maintained-baseline-card.maintained_high{color:#8c4d22}.maintained-baseline-card{display:grid;gap:3px;margin-top:8px;padding:10px;border-radius:8px;background:#edf7f3}.maintained-baseline-card b{font-size:19px}.maintained-baseline-card small{color:var(--muted)}

@@ -1,16 +1,17 @@
-"""Price benchmark category rules and external provider registry."""
+"""Operator-maintained product categories and fixed price-band rules."""
 import json
 import re
+import sqlite3
 import unicodedata
 from collections import Counter
 from flask import abort, flash, redirect, render_template, request, url_for
 
 from db import connect
-from services.price_benchmark_evidence import price_claim_evidence
-from services.source_provenance import source_provenance_evidence
 from services.category_policy import encode_policy, validate_policy, decode_policy, match_category
-from services.category_comparison_rules import (default_rule, encode_rule, decode_rule,
-                                                IDENTITY_MODES, UNIT_MODES, COUNT_UNITS)
+from services.category_comparison_rules import default_rule, encode_rule, decode_rule
+from services.maintained_price_baselines import (decode_terms, parse_terms, unit_label,
+                                                  validate_baseline)
+from services.money import cents
 from offer import TOPIC_LABELS
 
 
@@ -66,15 +67,85 @@ def price_benchmarks():
                 row["match_terms"]=terms if isinstance(terms,list) and all(isinstance(term,str) for term in terms) else []
             except (TypeError,ValueError):
                 row["match_terms"]=[]
-        evidence = price_claim_evidence(db)
-        provenance = source_provenance_evidence(db)
-        topic_rules = []
-        for row in db.execute("SELECT * FROM benchmark_topic_rules ORDER BY topic_key"):
-            policy, error = decode_policy(row["policy_json"])
-            topic_rules.append(dict(row, label=TOPIC_LABELS.get(row["topic_key"], row["topic_key"]),
-                                    policy=policy, policy_error=error))
-    return render_template("price_benchmarks.html", categories=categories, evidence=evidence,
-                           provenance=provenance, topic_rules=topic_rules)
+        baselines = [dict(row) for row in db.execute("""SELECT b.*,c.name AS category_name,c.topic_key
+            FROM maintained_price_baselines b JOIN benchmark_categories c ON c.id=b.category_id
+            ORDER BY c.name,b.name,b.id""")]
+        for row in baselines:
+            row["match_terms"] = decode_terms(row["match_terms_json"])
+            row["unit_label"] = unit_label(row)
+        baseline_summary = dict(total=len(baselines), enabled=sum(bool(row["enabled"]) for row in baselines),
+                                ready=sum(bool(row["enabled"]) for row in baselines))
+    return render_template("price_benchmarks.html", categories=categories, baselines=baselines,
+                           baseline_summary=baseline_summary)
+
+
+def _baseline_payload(form):
+    return validate_baseline(dict(
+        category_id=int(form.get("category_id", "")),
+        name=form.get("name", ""),
+        match_terms=parse_terms(form.get("match_terms", "")),
+        unit_mode=form.get("unit_mode", ""),
+        count_unit=form.get("count_unit", "").strip(),
+        base_quantity=int(form.get("base_quantity", "")),
+        exact_specification=form.get("exact_specification", ""),
+        bargain_cents=cents(form.get("bargain_amount"), required=True),
+        low_cents=cents(form.get("low_amount"), required=True),
+        typical_cents=cents(form.get("typical_amount"), required=True),
+        high_cents=cents(form.get("high_amount"), required=True),
+        effective_from=form.get("effective_from", ""),
+        enabled=form.get("enabled") == "1",
+        notes=form.get("notes", ""),
+    ))
+
+
+def save_maintained_price_baseline():
+    baseline_raw = request.form.get("baseline_id", "").strip()
+    try:
+        payload = _baseline_payload(request.form)
+        with connect() as db:
+            category = db.execute("SELECT id FROM benchmark_categories WHERE id=?", (payload["category_id"],)).fetchone()
+            if category is None:
+                raise ValueError("所选品类不存在")
+            encoded_terms = json.dumps(payload["match_terms"], ensure_ascii=False)
+            current = dict(payload, match_terms_json=encoded_terms)
+            if baseline_raw:
+                baseline_id = int(baseline_raw)
+                old = db.execute("SELECT * FROM maintained_price_baselines WHERE id=?", (baseline_id,)).fetchone()
+                if old is None:
+                    raise ValueError("要编辑的维护基准不存在")
+                previous = dict(old)
+                changed = any(previous.get(key) != current.get(key) for key in current if key != "match_terms")
+                version = previous["version"] + int(changed)
+                db.execute("""UPDATE maintained_price_baselines SET category_id=?,name=?,match_terms_json=?,unit_mode=?,
+                    count_unit=?,base_quantity=?,exact_specification=?,bargain_cents=?,low_cents=?,typical_cents=?,
+                    high_cents=?,effective_from=?,enabled=?,notes=?,version=?,updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                    (payload["category_id"],payload["name"],encoded_terms,payload["unit_mode"],payload["count_unit"],
+                     payload["base_quantity"],payload["exact_specification"],payload["bargain_cents"],payload["low_cents"],
+                     payload["typical_cents"],payload["high_cents"],payload["effective_from"],int(payload["enabled"]),
+                     payload["notes"],version,baseline_id))
+                if changed:
+                    db.execute("""INSERT INTO maintained_price_baseline_audit
+                        (baseline_id,version,previous_json,baseline_json) VALUES(?,?,?,?)""",
+                        (baseline_id,version,json.dumps(previous,ensure_ascii=False,sort_keys=True),
+                         json.dumps(current,ensure_ascii=False,sort_keys=True)))
+            else:
+                cursor = db.execute("""INSERT INTO maintained_price_baselines
+                    (category_id,name,match_terms_json,unit_mode,count_unit,base_quantity,exact_specification,
+                     bargain_cents,low_cents,typical_cents,high_cents,effective_from,enabled,notes)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (payload["category_id"],payload["name"],encoded_terms,payload["unit_mode"],payload["count_unit"],
+                     payload["base_quantity"],payload["exact_specification"],payload["bargain_cents"],payload["low_cents"],
+                     payload["typical_cents"],payload["high_cents"],payload["effective_from"],int(payload["enabled"]),
+                     payload["notes"]))
+                db.execute("""INSERT INTO maintained_price_baseline_audit
+                    (baseline_id,version,previous_json,baseline_json) VALUES(?,1,NULL,?)""",
+                    (cursor.lastrowid,json.dumps(current,ensure_ascii=False,sort_keys=True)))
+        flash("维护价格基准已保存；匹配到的官方优惠会按此版本计算", "ok")
+    except (ValueError, TypeError, OverflowError) as exc:
+        flash(str(exc) or "维护价格基准格式无效", "error")
+    except sqlite3.IntegrityError:
+        flash("保存失败：同一品类下的基准名称须唯一", "error")
+    return redirect(url_for("price_benchmarks"))
 
 
 def save_benchmark_category():
@@ -96,8 +167,9 @@ def save_benchmark_category():
     terms = list(dict.fromkeys(unicodedata.normalize("NFKC", term).strip()
                                for term in re.split(r"[,，\n]+", terms_raw)
                                if term.strip()))
-    if not name or len(name) > 80 or not unit or len(unit) > 240 or not identity or len(identity) > 500:
-        flash("品类名称、计价口径、商品匹配规则必填；请检查长度", "error")
+    if (not name or len(name) > 80 or not unit or len(unit) > 240
+            or not identity or len(identity) > 500 or not terms):
+        flash("品类名称、计价口径、商品匹配规则和至少一个归类关键词必填；请检查长度", "error")
         return redirect(url_for("price_benchmarks"))
     if topic_key not in TOPIC_LABELS or len(terms) > 40 or any(len(term) > 50 for term in terms):
         flash("所属大类无效，或匹配词超过数量/长度限制", "error")
@@ -224,6 +296,8 @@ def toggle_benchmark_provider(provider_id):
 def register(app):
     app.add_url_rule("/price-benchmarks", endpoint="price_benchmarks",
                      view_func=price_benchmarks, methods=["GET"])
+    app.add_url_rule("/price-benchmarks/maintained", endpoint="save_maintained_price_baseline",
+                     view_func=save_maintained_price_baseline, methods=["POST"])
     app.add_url_rule("/price-benchmarks/categories", endpoint="save_benchmark_category",
                      view_func=save_benchmark_category, methods=["POST"])
     app.add_url_rule("/price-benchmarks/rules/<topic_key>", endpoint="save_topic_rule",

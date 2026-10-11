@@ -29,6 +29,29 @@ def connect():
         db.close()
 
 
+MAINTAINED_PRICE_BASELINE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS maintained_price_baselines (
+ id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL REFERENCES benchmark_categories(id),
+ name TEXT NOT NULL, match_terms_json TEXT NOT NULL, unit_mode TEXT NOT NULL,
+ count_unit TEXT NOT NULL DEFAULT '', base_quantity INTEGER NOT NULL,
+ exact_specification TEXT NOT NULL DEFAULT '', bargain_cents INTEGER NOT NULL,
+ low_cents INTEGER NOT NULL, typical_cents INTEGER NOT NULL, high_cents INTEGER NOT NULL,
+ effective_from TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ notes TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(category_id,name),
+ CHECK(bargain_cents <= low_cents AND low_cents <= typical_cents AND typical_cents <= high_cents)
+);
+CREATE TABLE IF NOT EXISTS maintained_price_baseline_audit (
+ id INTEGER PRIMARY KEY, baseline_id INTEGER NOT NULL REFERENCES maintained_price_baselines(id),
+ version INTEGER NOT NULL, previous_json TEXT, baseline_json TEXT NOT NULL,
+ changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_maintained_price_baselines_category
+  ON maintained_price_baselines(category_id,enabled);
+"""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_scan_runs (
  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
@@ -224,7 +247,7 @@ CREATE TABLE IF NOT EXISTS source_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_source_candidates_state
  ON source_candidates(state, updated_at);
-"""
+""" + MAINTAINED_PRICE_BASELINE_SCHEMA
 
 
 SEEDS = [
@@ -309,6 +332,11 @@ def initialize_benchmark_rules(db):
                    (topic_key, policy_json))
 
 
+def initialize_maintained_price_baselines(db):
+    """Create operator-maintained baseline tables without touching source history."""
+    db.executescript(MAINTAINED_PRICE_BASELINE_SCHEMA)
+
+
 def ensure_link_resolution_product_page_column(db=None):
     """Add the current public-page result without rewriting existing link history."""
     if db is not None:
@@ -326,6 +354,7 @@ def initialize():
         db.executescript(SCHEMA)
         ensure_link_resolution_product_page_column(db)
         initialize_benchmark_rules(db)
+        initialize_maintained_price_baselines(db)
         provider_seeds = [
             ("smzdm_history", "什么值得买历史价格 API", "independent_index", "按商品URL的历史价格曲线；Price/FinalPrice字段", "需App Key与OAuth；历史索引不等于当前结算价", "https://openapi.zhidemai.com/pages/price/4.%E5%8E%86%E5%8F%B2%E4%BB%B7%E6%A0%BC%E6%9F%A5%E8%AF%A2API.html"),
             ("manmanbuy", "慢慢买", "independent_index", "历史价格与跨商城比价；当前可用 API 覆盖待合作核实", "公开介绍未提供本项目可直接调用的接口契约，需合作询价", "https://help.manmanbuy.com/"),

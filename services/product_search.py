@@ -86,7 +86,8 @@ def listing_quote(row, brief):
                 kind='official_promotion_observation',
                 label='淘宝联盟官方推广价',
                 note='官方物料接口已返回商品身份、推广入口、参考价与当前推广价。'
-                     'SKU规格、库存、账号资格、运费和结算结果未核实；此价不用于同款比较或捡漏结论。',
+                     'SKU规格、库存、账号资格、运费和结算结果未核实；此价不能作为账号结算价或全网最低价。'
+                     '只有标题规格命中本地维护基准时，才可产生“按维护基准”的比较结论。',
             )
         return None
     if row.get('catalog_listing'):
@@ -232,7 +233,7 @@ def promotion_admission(row, assessment):
                 and quote['amount_cents'] > 0 and evidence):
             return dict(eligible=True, tier='official_public_promotion',
                         reason='淘宝联盟官方物料已提供商品身份、推广入口、当前推广价及优惠信号；'
-                               'SKU规格、库存、账号资格、运费和结算价仍待增强核验，不称为捡漏。')
+                               'SKU规格、库存、账号资格、运费和结算价仍待增强核验，不称为账号结算价或全网最低价。')
         return dict(eligible=False, tier='promotion_clue',
                     reason='淘宝联盟物料缺少可显示的官方推广价或有效优惠信号')
     assessment = assessment or {}

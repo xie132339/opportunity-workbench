@@ -25,7 +25,8 @@ class CurrentProductContractDocumentationTests(unittest.TestCase):
         contract = (ROOT / "docs" / "current-product-contract.md").read_text(encoding="utf-8")
         self.assertIn("SKU 详情是增强证据，不是官方优惠展示的阻断条件", contract)
         self.assertIn("taobao.tbk.dg.material.optional.upgrade", contract)
-        self.assertIn("尚无同款基准", contract)
+        self.assertIn("按维护基准：可捡漏", contract)
+        self.assertIn("本工作台内维护的具体商品价格带", contract)
 
     def test_history_is_explicitly_excluded_from_current_decisions(self):
         archive_index = (ROOT / "docs" / "history" / "README.md").read_text(encoding="utf-8")

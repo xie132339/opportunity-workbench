@@ -15,6 +15,7 @@ from services.product_search import listing_quote, quote_note
 from services.public_campaign import parse_public_campaign
 from services.money import cents
 from services.opportunity_analysis import public_profit_estimate
+from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
 from routes.common import go
 
 def opportunity(opportunity_id):
@@ -58,6 +59,7 @@ def opportunity(opportunity_id):
                             sync_meta=dict(checked_at=review['checked_at'],detail_checked_at=review['detail_checked_at'],detail_error=review['detail_error']) if review else {})
         detail_quote=listing_quote(dict(opp,catalog_listing=opp.get('source_parser') in CATALOG_LISTING_PARSERS),brief)
         detail_quote_note=quote_note(brief)
+        maintained_baseline=assess_maintained_baseline(opp, brief, detail_quote, load_baselines(db))
         opp_for_merchant=dict(opp,detail_json=review['detail_json'] if review else '{}')
         product_identity=merchant_identity(opp_for_merchant)
         readiness=assess_readiness(opp,comparison,brief)
@@ -69,7 +71,8 @@ def opportunity(opportunity_id):
     public_estimate = public_profit_estimate(opp, quotes, brief, review, profit_mode)
     return render_template("opportunity.html", opp=opp, quotes=quotes, review=review, brief=brief,
                            source_paused=source_paused,
-                           display_quote=detail_quote,display_quote_note=detail_quote_note,comparison=comparison,
+                           display_quote=detail_quote,display_quote_note=detail_quote_note,
+                           maintained_baseline=maintained_baseline,comparison=comparison,
                            product_links=resolved.get('product_links',[]),
                            pending_purchase_links=resolved.get('pending_purchase_links',[]),
                            activity_targets=resolved.get('activity_targets',[]),

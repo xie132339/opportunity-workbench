@@ -24,63 +24,40 @@ class PriceBenchmarkPageTests(unittest.TestCase):
         self.db_patch.stop()
         self.temp.cleanup()
 
-    def test_page_uses_existing_public_claims_without_api_or_trade_data(self):
+    def test_page_starts_empty_and_uses_only_operator_maintained_price_bands(self):
         response = self.client.get("/price-benchmarks")
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
-        self.assertIn("不需要申请商业 API", page)
-        self.assertIn("不生成高、中、低价格带", page)
-        self.assertIn("个人买卖或交易", page)
+        self.assertIn("维护价格基准", page)
+        self.assertIn("不会调用第三方价格平台", page)
+        self.assertIn("还没有维护价格带", page)
         self.assertNotIn("什么值得买历史价格 API", page)
+        self.assertNotIn("历史线索覆盖", page)
         with db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM quotes").fetchone()[0], 0)
 
-    def test_page_reports_append_only_source_claim_coverage_and_excludes_bad_rows(self):
+    def test_page_read_does_not_mutate_existing_source_history(self):
         with db.connect() as conn:
-            source_ids = []
-            for platform, source_url in (("线报甲", "https://feed-a.example/rss"), ("线报乙", "https://feed-b.example/rss")):
-                source_ids.append(conn.execute("""INSERT INTO sources(platform,name,category,url,method,status,enabled)
-                    VALUES(?,?,'促销','%s','rss','healthy',1)""" % source_url,
-                    (platform, platform)).lastrowid)
-            conn.execute("""INSERT INTO sources(platform,name,category,url,method,status,enabled)
-                VALUES('平台无报价','无报价入口','促销','https://feed-empty.example/rss','rss','healthy',1)""")
-            fixtures = [
-                (source_ids[0], "observed", "2026-10-04 08:00:00", 1200, "A商品"),
-                (source_ids[0], "conditional", "2026-10-05 08:00:00", 900, "B商品"),
-                (source_ids[1], "stale", "2026-10-04 09:00:00", 1100, "A商品"),
-                (source_ids[1], "conflict", "2026-10-05 09:00:00", 100, "C商品"),
-                (source_ids[1], "observed", None, 300, "无原文时间"),
-                (source_ids[1], "stale", "2099-01-01 00:00:00", 500, "未来发布时间"),
-            ]
-            for index, (source_id, state, published, cents, title) in enumerate(fixtures):
-                event_id = conn.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,published_at)
-                    VALUES(?,?,?,?,?,?,?)""", (source_id, str(index), title, "https://feed.example/item/"+str(index),
-                    title, "fingerprint-"+str(index), published)).lastrowid
-                opportunity_id = conn.execute("""INSERT INTO opportunities(event_id,source_id,title,category,topic,url)
-                    VALUES(?,?,?,'零售优惠','home',?)""", (event_id, source_id, title,
-                    "https://feed.example/item/"+str(index))).lastrowid
-                conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
-                    VALUES(?,?,?,?)""", (opportunity_id, state, "fixture", cents))
+            source_id = conn.execute("""INSERT INTO sources(platform,name,category,url,method,status,enabled)
+                VALUES('测试入口','不会成为价格带','促销','https://feed-a.example/rss','rss','healthy',1)""").lastrowid
+            event_id = conn.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,published_at)
+                VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                (source_id, 'existing-event', '原始线索', 'https://feed.example/item', '原始内容', 'fixture')).lastrowid
+            conn.execute("""INSERT INTO opportunities(event_id,source_id,title,category,topic,url)
+                VALUES(?,?,?,'零售优惠','home',?)""",
+                (event_id, source_id, '原始线索', 'https://feed.example/item'))
+            before = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                      for table in ('events', 'opportunities', 'auto_reviews', 'quotes')}
         response = self.client.get("/price-benchmarks")
-        page = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("历史线索覆盖", page)
-        self.assertIn("按大类管理比较与行情规则", page)
-        self.assertIn("未来原文时间已排除", page)
-        self.assertIn("全部来源平台覆盖", page)
-        self.assertIn("平台无报价", page)
-        self.assertIn("历史金额线索</th>", page)
-        self.assertIn("家居日用（主题识别）", page)
+        page = response.get_data(as_text=True)
+        self.assertIn("这里由你维护具体品牌、商品、规格和单位的价格带", page)
+        self.assertNotIn("原始线索", page)
         with db.connect() as conn:
-            home = next(row for row in price_claim_evidence(conn)["topics"] if row["topic"] == "home")
-            evidence = price_claim_evidence(conn)
-            self.assertEqual((home["claim_rows"], home["observed"], home["conditional"], home["stale"],
-                              home["platform_count"], home["published_day_count"]), (3, 1, 1, 1, 2, 2))
-            self.assertEqual(evidence["future_excluded_rows"], 1)
-            empty_platform = next(row for row in evidence["platforms"] if row["platform"] == "平台无报价")
-            self.assertEqual((empty_platform["enabled_sources"], empty_platform["healthy_sources"],
-                              empty_platform["claim_rows"]), (1, 1, 0))
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM quotes").fetchone()[0], 0)
+            after = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                     for table in before}
+        self.assertEqual(before, after)
 
     def test_source_provenance_audit_separates_collector_publisher_and_product_links(self):
         with db.connect() as conn:
@@ -120,18 +97,11 @@ class PriceBenchmarkPageTests(unittest.TestCase):
             before = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                       for table in ("events", "opportunities", "auto_reviews", "quotes")}
             provenance = source_provenance_evidence(conn)
-        response = self.client.get("/price-benchmarks")
+        # Provenance remains an audit helper; the maintained-price page does
+        # not use collector or publisher claims as a price baseline.
         with db.connect() as conn:
             after = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                      for table in before}
-
-        self.assertEqual(response.status_code, 200)
-        page = response.get_data(as_text=True)
-        self.assertIn("采集入口、原文页面与重复线索", page)
-        self.assertIn("疑似同文", page)
-        self.assertIn("publisher-a.example", page)
-        self.assertIn("item.jd.com", page)
-        self.assertNotIn("javascript:alert", page)
         self.assertEqual(before, after)
         self.assertEqual(provenance["published_event_rows"], 3)
         self.assertEqual((provenance["cross_collector_text_groups"],

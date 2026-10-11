@@ -18,6 +18,7 @@ from services.public_campaign import parse_public_campaign
 from services.marketplace_identity import (
     FILTER_OPTIONS, attach_product_marketplace, marketplace_matches_filter,
 )
+from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
 
 
 def attach_offer_data(row):
@@ -159,6 +160,7 @@ def index():
     except ValueError:
         page = 1
     with connect() as db:
+        maintained_baselines = load_baselines(db)
         search_funnel = {}
         order_by = """ ORDER BY CASE o.category
             WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
@@ -199,6 +201,9 @@ def index():
                 if prepared['display_quote']:
                     source_quote_counts[prepared['source_id']]=source_quote_counts.get(prepared['source_id'],0)+1
                 prepared_candidates.append(prepared)
+            for prepared in prepared_candidates:
+                prepared['maintained_baseline'] = assess_maintained_baseline(
+                    prepared, prepared['offer_brief'], prepared.get('display_quote'), maintained_baselines)
             total=len(prepared_candidates)
             rows = prepared_candidates[(page - 1) * page_size:page * page_size]
             search_assessments={}
@@ -266,6 +271,8 @@ def index():
                     row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
             for row in all_rows:
                 attach_offer_data(row)
+                row['maintained_baseline'] = assess_maintained_baseline(
+                    row, row['offer_brief'], row.get('display_quote'), maintained_baselines)
             source_match_counts = {}
             for matched_row in all_rows:
                 source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
@@ -324,7 +331,8 @@ def index():
                     source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
             total=len(all_rows)
             if sort_mode == 'comparison':
-                all_rows.sort(key=lambda r: comparisons.get(r['id'],{}).get('rank',0),reverse=True)
+                all_rows.sort(key=lambda r: (r.get('maintained_baseline',{}).get('rank',0),
+                                              comparisons.get(r['id'],{}).get('rank',0),r['id']), reverse=True)
             elif sort_mode == 'latest':
                 all_rows.sort(key=lambda r: (r.get('published_at') or r.get('last_seen_at') or '', r['id']), reverse=True)
             elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
