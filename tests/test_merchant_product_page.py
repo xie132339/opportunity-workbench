@@ -147,6 +147,8 @@ class MerchantProductPageTests(unittest.TestCase):
         cases = (
             ('https://item.jd.com/123456.html', 'jd:123456'),
             ('https://item.taobao.com/item.htm?id=987654', 'taobao:987654'),
+            ('https://m.taobao.com/awp/core/detail.htm?id=987654', 'taobao:987654'),
+            ('https://h5.m.taobao.com/awp/core/detail.htm?id=987654', 'taobao:987654'),
             ('https://detail.tmall.com/item.htm?id=987654', 'taobao:987654'),
             ('https://mobile.yangkeduo.com/goods.html?goods_id=456789', 'pdd:456789'),
             ('https://detail.vip.com/detail-123-456.html', 'vip:123:456'),
@@ -166,6 +168,14 @@ class MerchantProductPageTests(unittest.TestCase):
                 self.assertEqual(result['advertised_cents'], 1234)
                 self.assertEqual(result['product_identity'], identity)
                 self.assertEqual(result['price_evidence'], 'schema.org Product/Offer')
+        alias_html='''<h1>当前商品</h1><script type="application/ld+json">{
+          "@type":"Product","url":"https://item.taobao.com/item.htm?id=987654",
+          "name":"当前商品","offers":{"@type":"Offer","price":"12.34",
+          "priceCurrency":"CNY","availability":"https://schema.org/InStock"}}</script>'''
+        alias_result=parse_product_page('https://h5.m.taobao.com/awp/core/detail.htm?id=987654',alias_html)
+        self.assertEqual(alias_result['advertised_cents'],1234)
+        wrong_id=alias_html.replace('id=987654','id=987655')
+        self.assertIsNone(parse_product_page('https://h5.m.taobao.com/awp/core/detail.htm?id=987654',wrong_id)['advertised_cents'])
         meta_url='https://mobile.yangkeduo.com/goods.html?goods_id=42'
         meta_page='''<head><meta property="og:url" content="https://mobile.yangkeduo.com/goods.html?goods_id=42">
           <meta property="og:title" content="纸巾 4包"><meta property="product:price:amount" content="8.80">

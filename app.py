@@ -30,6 +30,7 @@ from channel_discovery import refresh as refresh_channel_candidates, validate_ma
 from notifier import active_channels, deliver
 from scanner import scan_all, scan_source, strategy_matches
 from services.link_resolution_worker import run_periodically as run_link_resolution_worker
+from services.taobao_sync_validation import detail_batch_limit, validate_taobao_syncs
 from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
 from offer import RESOURCE_LABELS, TOPIC_LABELS, product_subcategory, paper_package_prices
 from services.money import COST_FIELDS, cents, money
@@ -78,6 +79,28 @@ def create_app():
 app = create_app()
 
 
+def taobao_detail_batch_limit():
+    """Compatibility wrapper for configuration shown in current documentation."""
+    return detail_batch_limit(os.environ)
+
+
+def complete_taobao_syncs(source_results):
+    """Attach an exact per-run verification receipt after official collection."""
+    return validate_taobao_syncs(source_results, run_detail_cycle=run_cycle,
+                                 batch_size=taobao_detail_batch_limit())
+
+
+def run_taobao_cycle():
+    """Collect official Taobao material and audit every synchronized record."""
+    sources = scan_all(due_only=True, method="taobao_alliance")
+    if not sources:
+        return {}
+    return {
+        "sources": sources,
+        "post_sync_validation": complete_taobao_syncs(sources),
+    }
+
+
 def main():
     initialize()
     command = sys.argv[1] if len(sys.argv) > 1 else "serve"
@@ -100,8 +123,16 @@ def main():
     if command == "serve":
         app.run(host="127.0.0.1", port=5002, debug=False)
     elif command == "scan":
-        print(scan_all())
+        results = scan_all()
+        print(results)
+        print({"taobao_post_sync_validation": complete_taobao_syncs(results)})
         print(run_cycle())
+    elif command == "taobao-worker":
+        while True:
+            result = run_taobao_cycle()
+            if result:
+                print(result, flush=True)
+            time.sleep(60)
     elif command == "review":
         print(run_cycle())
     elif command == "channels-refresh":
@@ -132,7 +163,7 @@ def main():
             link_stop.set()
             link_worker.join(timeout=2)
     else:
-        raise SystemExit("Usage: python app.py [serve|scan|review|worker|channels-refresh|channels-validate|benefits-import <normalized-records.jsonl>]")
+        raise SystemExit("Usage: python app.py [serve|scan|review|worker|taobao-worker|channels-refresh|channels-validate|benefits-import <normalized-records.jsonl>]")
 
 
 if __name__ == "__main__":

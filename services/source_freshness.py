@@ -9,6 +9,10 @@ def is_catalog_listing(row):
     return row.get("source_parser") in CATALOG_LISTING_PARSERS
 
 
+def is_taobao_alliance_feed(row):
+    return row.get("source_method") == "taobao_alliance"
+
+
 def moment(value):
     try:
         parsed = datetime.fromisoformat(value or "")
@@ -23,7 +27,7 @@ def source_snapshot_is_current(row, now=None):
     ttl = timedelta(minutes=min(2 * (row.get("interval_minutes") or 60) + 15, 120))
     seen, success = moment(row.get("last_seen_at")), moment(row.get("last_success"))
     return bool(
-        is_catalog_listing(row)
+        (is_catalog_listing(row) or is_taobao_alliance_feed(row))
         and row.get("enabled")
         and row.get("source_status") == "healthy"
         and seen and success

@@ -1,5 +1,6 @@
 """Opportunity detail and manual public-evidence routes."""
 import hashlib
+import json
 from datetime import date
 from flask import abort, flash, render_template, request
 from db import connect
@@ -11,6 +12,7 @@ from scanner import _public_url
 from link_resolution import enrich as enrich_links, resolution_cache
 from services.source_freshness import CATALOG_LISTING_PARSERS
 from services.product_search import listing_quote, quote_note
+from services.public_campaign import parse_public_campaign
 from services.money import cents
 from services.opportunity_analysis import public_profit_estimate
 from routes.common import go
@@ -28,14 +30,29 @@ def opportunity(opportunity_id):
                              WHERE o.id=?""", (opportunity_id,)).fetchone()
         if not opp:
             abort(404)
+        source_paused=bool(opp['source_id'] and not opp['source_enabled']
+                           and opp['source_method']!='manual')
         quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=? AND kind!='historical_buy' ORDER BY observed_at DESC,id DESC",
                             (opportunity_id,)).fetchall()
         review = db.execute("SELECT * FROM auto_reviews WHERE opportunity_id=?", (opportunity_id,)).fetchone()
-        comparison = load_comparisons(db,[opportunity_id]).get(opportunity_id,{})
+        try:
+            detail_evidence = json.loads(review['detail_json'] or '{}') if review else {}
+        except (TypeError, ValueError):
+            detail_evidence = {}
+        comparison = {} if source_paused else load_comparisons(db,[opportunity_id]).get(opportunity_id,{})
         identity_row=dict(opp,detail_json=review['detail_json'] if review else '{}')
         resolved= enrich_links(identity_row,resolution_cache(db,[identity_row]))
         display_topic=resource_topic(opp['title'],opp['source_category'] or '')
         opp=dict(opp,metadata_json=resolved['metadata_json'],topic=display_topic,display_topic=display_topic)
+        if opp.get('auto_state') in ('campaign_upcoming','campaign_active'):
+            campaign_text='\n'.join(str(value or '') for value in
+                                     (opp.get('title'),opp.get('snippet'),
+                                      review['conditions'] if review else '',
+                                      review['detail_json'] if review else ''))
+            campaign=parse_public_campaign(campaign_text)
+            if campaign:
+                opp['campaign_start_at']=campaign['start_at'].isoformat(sep=' ')
+                opp['campaign_end_at']=campaign['end_at'].isoformat(sep=' ')
         brief=offer_summary(opp['title'],opp['url'],opp['snippet'],review['conditions'] if review else '',
                             metadata=opp['metadata_json'],detail_json=review['detail_json'] if review else None,
                             sync_meta=dict(checked_at=review['checked_at'],detail_checked_at=review['detail_checked_at'],detail_error=review['detail_error']) if review else {})
@@ -51,12 +68,17 @@ def opportunity(opportunity_id):
     profit_mode = request.args.get('profit_mode','sold')
     public_estimate = public_profit_estimate(opp, quotes, brief, review, profit_mode)
     return render_template("opportunity.html", opp=opp, quotes=quotes, review=review, brief=brief,
+                           source_paused=source_paused,
                            display_quote=detail_quote,display_quote_note=detail_quote_note,comparison=comparison,
+                           product_links=resolved.get('product_links',[]),
+                           pending_purchase_links=resolved.get('pending_purchase_links',[]),
+                           activity_targets=resolved.get('activity_targets',[]),
+                           unclassified_links=resolved.get('unclassified_links',[]),
                            readiness=readiness,confirmed_benefits=confirmed_benefits,source_linked_benefits=source_linked_benefits,
                            product_benefit_candidates=product_benefit_candidates,
                            product_benefit_searchable=product_identity['key'].startswith(MERCHANT_PRODUCT_PREFIXES) and not product_identity['conflict'],
                            public_estimate=public_estimate,
-                           profit_mode=public_estimate['mode'])
+                           profit_mode=public_estimate['mode'], detail_evidence=detail_evidence)
 
 def add_quote(opportunity_id):
     kind = request.form.get("kind", "")

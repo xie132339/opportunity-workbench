@@ -227,6 +227,38 @@ class PriceBenchmarkPageTests(unittest.TestCase):
             self.assertEqual(result["items"][0]["normalized_unit_price"], __import__("fractions").Fraction(199, 40))
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM benchmark_categories WHERE id=?", (category_id,)).fetchone()[0], 1)
 
+    def test_paused_source_peer_is_excluded_from_current_product_comparison(self):
+        import json
+        from comparison import load_comparisons
+
+        with db.connect() as conn:
+            source_ids=[]
+            for platform, enabled in (("在用来源",1),("已暂停聚合源",0)):
+                source_ids.append(conn.execute("""INSERT INTO sources
+                    (platform,name,category,url,method,status,enabled,interval_minutes,last_success)
+                    VALUES(?,?,'零售优惠',?,'rss','healthy',?,10,CURRENT_TIMESTAMP)""",
+                    (platform,platform,f'https://{platform}.example/feed',enabled)).lastrowid)
+            opportunity_ids=[]
+            for index,source_id in enumerate(source_ids,1):
+                metadata=json.dumps({'activity_links':['https://item.jd.com/987654321.html']})
+                event_id=conn.execute("""INSERT INTO events
+                    (source_id,external_key,title,url,snippet,metadata_json,fingerprint,published_at,last_seen_at)
+                    VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                    (source_id,f'peer-{index}','同款抽纸 100抽3层6包','https://feed.example/post/'+str(index),
+                     '活动售价9.90元，下单1件，实付9.90元，该价格商品规格：100抽3层6包。',metadata,
+                     f'peer-fingerprint-{index}', '2026-10-06 12:00:00')).lastrowid
+                opportunity_ids.append(conn.execute("""INSERT INTO opportunities
+                    (event_id,source_id,title,category,topic,url,resource_kind)
+                    VALUES(?,?,?,'零售优惠','home',?,'purchase')""",
+                    (event_id,source_id,'同款抽纸 100抽3层6包','https://feed.example/post/'+str(index))).lastrowid)
+                conn.execute("""INSERT INTO auto_reviews
+                    (opportunity_id,state,reason,advertised_cents,specification,detail_json)
+                    VALUES(?,'observed','fixture',990,'100抽3层6包',?)""",
+                    (opportunity_ids[-1],json.dumps({'conditions':'下单1件，实付9.90元，商品规格：100抽3层6包。'})))
+
+            current=load_comparisons(conn,[opportunity_ids[0]])[opportunity_ids[0]]
+            self.assertEqual([item['id'] for item in current['items']],[opportunity_ids[0]])
+
     def test_topic_policy_is_validated_versioned_and_audited(self):
         response = self.client.post("/price-benchmarks/rules/home", data={
             "csrf": "test-csrf", "max_source_age_minutes": "45",

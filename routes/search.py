@@ -10,14 +10,27 @@ from link_resolution import enrich as enrich_links, resolution_cache
 from services.money import cents
 from services.opportunity_analysis import is_current_notice, is_evidence_candidate, notice_rows
 from services.source_freshness import CATALOG_LISTING_PARSERS
-from services.product_search import listing_quote, quote_note
+from services.product_search import (listing_quote, quote_note,
+                                     is_promotional_price_candidate, promotion_admission)
 from services.source_provenance import annotate_search_sources
 from services.search_diagnostics import summarize_search_funnel
+from services.public_campaign import parse_public_campaign
+from services.marketplace_identity import (
+    FILTER_OPTIONS, attach_product_marketplace, marketplace_matches_filter,
+)
 
 
 def attach_offer_data(row):
     row['display_topic']=resource_topic(row.get('title',''),row.get('source_category',''))
     row['catalog_listing']=row.get('source_parser') in CATALOG_LISTING_PARSERS
+    row['campaign_window']=None
+    if row.get('auto_state') in ('campaign_upcoming','campaign_active'):
+        campaign_text='\n'.join(str(row.get(key) or '') for key in
+                                 ('title','snippet','auto_conditions','detail_json'))
+        row['campaign_window']=parse_public_campaign(campaign_text)
+        if row['campaign_window']:
+            row['campaign_start_at']=row['campaign_window']['start_at'].isoformat(sep=' ')
+            row['campaign_end_at']=row['campaign_window']['end_at'].isoformat(sep=' ')
     brief=offer_summary(row['title'],row['url'],row.get('snippet'),row.get('auto_conditions'),
                         row.get('metadata_json'),row.get('detail_json'),
                         dict(checked_at=row.get('review_checked_at'),
@@ -25,6 +38,9 @@ def attach_offer_data(row):
                              detail_error=row.get('detail_error')))
     row['offer_brief']=brief
     row['display_quote']=listing_quote(row,brief)
+    row['catalog_reference']=bool(row['catalog_listing'] and row['display_quote']
+                                  and row['display_quote'].get('kind')=='catalog_public')
+    row['promotional_candidate']=is_promotional_price_candidate(row,brief)
     row['display_quote_note']=quote_note(brief)
     return row
 
@@ -34,6 +50,11 @@ def index():
     category = request.args.get("category", "").strip()
     status = request.args.get("status", "").strip()
     platform = request.args.get("platform", "").strip()
+    buy_platform = request.args.get("buy_platform", "taobao").strip().lower()
+    valid_marketplaces = {key for key, _ in FILTER_OPTIONS}
+    if buy_platform not in valid_marketplaces:
+        buy_platform = "taobao"
+    buy_platform_label = dict(FILTER_OPTIONS).get(buy_platform, "淘宝系官方商品")
     offer_filter = request.args.get("offer", "").strip()
     topic = request.args.get('topic','')
     resource = request.args.get('resource','')
@@ -46,10 +67,9 @@ def index():
         layout_mode = "list"
     page_size = 100 if layout_mode == "list" else 36
     candidate_only = request.args.get("candidate") == "1"
-    # The product-search landing page is an offer list: every visible row must
-    # have an explicit amount bound to a purchase plan (or a tagged public
-    # catalogue price). Keep unpriced source records in the separate current
-    # clue inbox; do not discard or mutate their evidence.
+    # The default product-search page is a promotional-price lead list. Plain
+    # merchant catalogue prices remain reference evidence in the clue pool;
+    # they are not presented as bargains just because a number was extracted.
     view_mode = request.args.get("view") or "offers"
     if view_mode not in ("offers", "ready", "current", "all"):
         view_mode = "offers"
@@ -109,6 +129,11 @@ def index():
     else:
         sql += " AND o.status!='ignored'"
     if not show_archive:
+        # Paused sources remain available in the explicit archive only. Their old
+        # opportunities must not look like current products or influence this
+        # search's funnel; manually entered records retain their own lifecycle.
+        sql += " AND (s.id IS NULL OR s.enabled=1 OR s.method='manual')"
+    if not show_archive:
         if not candidate_only:
             # Product search and the current lead inbox start from fresh purchase-like
             # records. The explicit ready view applies the shared evidence gate below.
@@ -125,7 +150,9 @@ def index():
                          AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
                          AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
                          AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
-                              OR (s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
+                              OR a.state IN ('campaign_upcoming','campaign_active')
+                              OR ((s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
+                                   OR s.method='taobao_alliance')
                                   AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))) )"""
     try:
         page = max(1, int(request.args.get("page", "1")))
@@ -141,7 +168,20 @@ def index():
         if candidate_only:
             rules = db.execute("SELECT * FROM strategies WHERE enabled=1").fetchall()
             candidates = []
-            for row in db.execute(sql + " AND o.status='verified'" + order_by, args):
+            raw_candidates = [dict(row) for row in db.execute(sql + " AND o.status='verified'" + order_by, args)]
+            candidate_link_cache = resolution_cache(db, raw_candidates)
+            candidate_rows = [attach_product_marketplace(enrich_links(row, candidate_link_cache))
+                              for row in raw_candidates]
+            marketplace_population_count = len(candidate_rows)
+            marketplace_unidentified_count = sum(row['marketplace_key'] == 'unknown' for row in candidate_rows)
+            marketplace_selected_count = sum(
+                marketplace_matches_filter(row['marketplace_key'], buy_platform)
+                for row in candidate_rows
+            )
+            if buy_platform != 'all':
+                candidate_rows = [row for row in candidate_rows
+                                  if marketplace_matches_filter(row['marketplace_key'], buy_platform)]
+            for row in candidate_rows:
                 if topic in TOPIC_LABELS and resource_topic(row['title'],row['source_category'] or '') != topic:
                     continue
                 quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (row["id"],)).fetchall()
@@ -163,7 +203,13 @@ def index():
             rows = prepared_candidates[(page - 1) * page_size:page * page_size]
             search_assessments={}
             quality_counts=dict(search_ready=0,comparable=0,source_claim_low=0,excluded=0,
-                                displayable_quote=sum(source_quote_counts.values()))
+                                displayable_quote=sum(bool(row.get('display_quote')) for row in prepared_candidates),
+                                promotional_candidate=sum(bool(row.get('promotional_candidate')) for row in prepared_candidates),
+                                catalog_reference=sum(bool(row.get('catalog_reference')) for row in prepared_candidates),
+                                plain_price_reference=sum(bool(row.get('display_quote')) and not row.get('promotional_candidate')
+                                                          and not row.get('catalog_reference') for row in prepared_candidates),
+                                unpriced=sum(not row.get('display_quote') for row in prepared_candidates))
+            unpriced_current_count=quality_counts['unpriced']
             candidate_pool_count=total
             source_offer_count=total
             comparisons=load_comparisons(db,[row['id'] for row in rows])
@@ -173,13 +219,32 @@ def index():
                 query_scope_rows = [dict(row) for row in db.execute(search_scope_sql, search_scope_args)]
             raw_rows=[dict(row) for row in db.execute(sql + order_by,args)]
             link_cache=resolution_cache(db,raw_rows)
-            all_rows = [enrich_links(row,link_cache) for row in raw_rows]
+            all_rows = [attach_product_marketplace(enrich_links(row,link_cache)) for row in raw_rows]
             for row in all_rows:
                 row['display_topic']=resource_topic(row.get('title',''),row.get('source_category',''))
             if topic in TOPIC_LABELS:
                 all_rows=[row for row in all_rows if row['display_topic']==topic]
                 query_scope_rows=[row for row in query_scope_rows
                                   if resource_topic(row.get('title',''),row.get('source_category',''))==topic]
+            marketplace_population_count = len(all_rows)
+            marketplace_unidentified_count = sum(row['marketplace_key'] == 'unknown' for row in all_rows)
+            marketplace_selected_count = sum(
+                marketplace_matches_filter(row['marketplace_key'], buy_platform)
+                for row in all_rows
+            )
+            if buy_platform != 'all':
+                all_rows = [row for row in all_rows
+                            if marketplace_matches_filter(row['marketplace_key'], buy_platform)]
+                if query_scope_rows:
+                    scope_link_cache = resolution_cache(db, query_scope_rows)
+                    query_scope_rows = [
+                        attach_product_marketplace(enrich_links(row, scope_link_cache))
+                        for row in query_scope_rows
+                    ]
+                    query_scope_rows = [
+                        row for row in query_scope_rows
+                        if marketplace_matches_filter(row['marketplace_key'], buy_platform)
+                    ]
             if not show_archive:
                 # A live catalogue row may have an old saved ``missing_time``
                 # result from the former post-only rule. Re-evaluate that row
@@ -209,18 +274,29 @@ def index():
             source_offer_count = candidate_pool_count = len(all_rows)
             source_quote_counts={}
             for matched_row in all_rows:
-                if matched_row['display_quote']:
+                if matched_row.get('display_quote'):
                     source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
             comparisons = load_comparisons(db) if show_archive else load_comparisons(db,[row['id'] for row in all_rows])
             for row in all_rows:
                 row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
             search_assessments={row['id']:assess_readiness(row,comparisons.get(row['id'],{}),row['offer_brief']) for row in all_rows}
+            for row in all_rows:
+                row['promotion_admission'] = promotion_admission(
+                    row, search_assessments.get(row['id']))
+                row['public_offer_eligible'] = row['promotion_admission']['eligible']
             quality_counts=dict(
                 search_ready=sum(bool(value['search_ready']) for value in search_assessments.values()),
                 comparable=sum(bool(value['comparable']) for value in search_assessments.values()),
                 source_claim_low=sum(bool(value['source_claim_low']) for value in search_assessments.values()))
             quality_counts['displayable_quote']=sum(bool(row['display_quote']) for row in all_rows)
+            quality_counts['promotional_candidate']=sum(bool(row.get('promotional_candidate')) for row in all_rows)
+            quality_counts['public_offer_eligible']=sum(bool(row.get('public_offer_eligible')) for row in all_rows)
+            quality_counts['catalog_reference']=sum(bool(row.get('catalog_reference')) for row in all_rows)
+            quality_counts['plain_price_reference']=sum(bool(row.get('display_quote'))
+                and not row.get('promotional_candidate') and not row.get('catalog_reference') for row in all_rows)
+            quality_counts['unpriced']=sum(not row.get('display_quote') for row in all_rows)
             quality_counts['excluded']=candidate_pool_count-quality_counts['search_ready']
+            unpriced_current_count=quality_counts['unpriced']
             if query and not show_archive and not candidate_only and not budget_text and view_mode in ("current", "offers"):
                 search_funnel=summarize_search_funnel(query_scope_rows,all_rows)
             provenance_corpus = all_rows
@@ -233,12 +309,14 @@ def index():
                     if matched_row['display_quote']:
                         source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
             elif priced_only:
-                all_rows=[row for row in all_rows if row['display_quote']]
+                all_rows=[row for row in all_rows if row.get('public_offer_eligible')]
             if budget is not None:
-                # Never apply a budget against a parser's isolated amount hint;
-                # require the same complete quote admitted for display/sorting.
+                # A catalog/reference amount or unpromoted price claim is not a
+                # proven purchase opportunity and must not satisfy buy budget.
                 all_rows=[row for row in all_rows
-                          if row['display_quote'] and row['display_quote']['amount_cents']<=budget]
+                          if row.get('display_quote') and row['display_quote'].get('kind') in {
+                              'source_claim', 'official_promotion_observation'}
+                          and row['display_quote']['amount_cents']<=budget]
                 source_match_counts={}
                 source_quote_counts={}
                 for matched_row in all_rows:
@@ -256,8 +334,8 @@ def index():
                     quote = row.get('display_quote')
                     value = quote.get('amount_cents') if quote else None
                     if sort_mode == 'paper_unit_low':
-                        title = brief.get('title') or row['title']
-                        paper = paper_package_prices(title, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind']=='source_claim' else None
+                        selected_spec = brief.get('selected_spec')
+                        paper = paper_package_prices(selected_spec, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind']=='source_claim' and selected_spec else None
                         value = paper.get('per_pack_cents') if paper else None
                     if value is None:
                         unpriced.append(row)
@@ -271,7 +349,17 @@ def index():
                 all_rows = priced + unpriced
             rows=all_rows[(page-1)*page_size:page*page_size]
             rows=annotate_search_sources(rows, provenance_corpus)
-        sources = [dict(row) for row in db.execute("SELECT * FROM sources ORDER BY id").fetchall()]
+            product_link_cache=resolution_cache(db,rows)
+            rows=[enrich_links(row,product_link_cache) for row in rows]
+        dedicated_taobao_source_count = db.execute(
+            "SELECT COUNT(*) FROM sources WHERE enabled=1 AND (lower(parser)='taobao' OR method='taobao_alliance')"
+        ).fetchone()[0]
+        all_sources = [dict(row) for row in db.execute("SELECT * FROM sources ORDER BY id").fetchall()]
+        # Current search offers only active sources; the explicit archive keeps the
+        # full catalog so paused-source history remains discoverable.
+        sources = all_sources if show_archive else [
+            source for source in all_sources if source['enabled'] or source['method'] == 'manual'
+        ]
         fresh_events={r['source_id']:r['count'] for r in db.execute("SELECT source_id,COUNT(*) AS count FROM events WHERE last_seen_at>=datetime('now','-2 hours') GROUP BY source_id")}
         fresh_opportunities={r['source_id']:r['count'] for r in db.execute('''SELECT o.source_id,COUNT(*) AS count
             FROM opportunities o
@@ -286,7 +374,9 @@ def index():
                     AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
                     AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
                     AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
-                      OR (s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
+                      OR a.state IN ('campaign_upcoming','campaign_active')
+                      OR ((s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
+                           OR s.method='taobao_alliance')
                           AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))))
             GROUP BY o.source_id''')}
         source_coverage = [dict(source, match_count=source_match_counts.get(source['id'], 0),
@@ -305,7 +395,13 @@ def index():
                            search_assessments=search_assessments,quality_counts=quality_counts,
                            candidate_pool_count=candidate_pool_count, source_offer_count=source_offer_count,
                            alerts=alerts, query=query, category=category, status=status,
-                           platform=platform, budget_text=budget_text,
+                           platform=platform, buy_platform=buy_platform,
+                           buy_platform_label=buy_platform_label, marketplace_options=FILTER_OPTIONS,
+                           marketplace_population_count=marketplace_population_count,
+                           marketplace_selected_count=marketplace_selected_count,
+                           marketplace_unidentified_count=marketplace_unidentified_count,
+                           dedicated_taobao_source_count=dedicated_taobao_source_count,
+                           budget_text=budget_text,
                            offer_filter=offer_filter,topic=topic,resource=resource,
                            total=total, page=page, has_next=page * page_size < total,
                            page_size=page_size, layout_mode=layout_mode,
@@ -315,7 +411,7 @@ def index():
                            search_funnel=search_funnel,
                            candidate_only=candidate_only, show_archive=show_archive, view_mode=view_mode,
                            ready_only=ready_only, priced_only=priced_only,
-                           unpriced_current_count=max(0,candidate_pool_count-quality_counts.get('displayable_quote',0)))
+                           unpriced_current_count=unpriced_current_count)
 
 def register(app):
     app.add_url_rule('/', endpoint='index', view_func=index, methods=['GET'])

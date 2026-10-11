@@ -47,6 +47,14 @@ macOS/Linux：
 .venv/bin/python app.py worker
 ```
 
+如果目前只采集淘宝联盟，在本机 `.env` 配置你自己的 `TAOBAO_ALLIANCE_APP_KEY`、`TAOBAO_ALLIANCE_APP_SECRET` 和 `TAOBAO_ALLIANCE_ADZONE_ID`，确认应用已获得升级物料搜索接口权限，然后在“渠道管理”添加方法为“淘宝联盟”的关键词搜索来源。只运行该来源的定时采集：
+
+```bash
+.venv/bin/python app.py taobao-worker
+```
+
+`taobao-worker` 只处理已启用的淘宝联盟来源：每个到期扫描完成后，对**本次同步的每一条**官方物料生成核验回执。官方物料会按每页 100 条自动翻页到结果耗尽；之后才按 `TAOBAO_DETAIL_BATCH_LIMIT`（默认 20，范围 1—100）分批请求 SKU 详情。回执保存到“渠道管理 → 最近采集”的本次运行中，逐条显示 SKU 详情状态、缺失字段和下次重试时间。已处于官方权限冷却期的旧记录不会被重复请求，但会在回执中列明上次核验状态和下次复查时间，不能被误报为本轮已验证。不要同时启动它和全渠道 `worker` 对同一数据库采集。联盟推广价是来源报价，推广短链的最终商品页、账号优惠和结算价仍需另行核验。
+
 Windows PowerShell：
 
 ```powershell

@@ -211,15 +211,14 @@ class DetailPipelineTests(unittest.TestCase):
             self.assertEqual(saved['topic'],'home')
         with app.test_client() as client:
             detail=client.get('/opportunities/1').get_data(as_text=True)
-            card=client.get('/?q=全棉时代&topic=home&layout=cards&view=current').get_data(as_text=True)
+            card=client.get('/?buy_platform=all&q=全棉时代&topic=home&layout=cards&view=current').get_data(as_text=True)
         self.assertIn('来源声称金额的算术可复算',detail)
         self.assertIn('本人资格',detail)
         self.assertIn('运费金额或适用地区未明确',detail)
         self.assertIn('清洁巾与棉柔巾',detail)
         self.assertIn('¥0.90',card)
-        self.assertIn('/包',card)
-        self.assertIn('¥4.50',card)
-        self.assertIn('/百抽',card)
+        self.assertNotIn('¥4.50/百抽',card)
+        self.assertIn('报价对应规格未核实或数量不完整，暂不能算单位价',card)
         self.assertIn('金额可复算 · 叠加/资格/运费待核',card)
 
     def test_old_saved_other_topic_is_still_found_by_current_home_filter(self):
@@ -236,9 +235,9 @@ class DetailPipelineTests(unittest.TestCase):
             c.execute("UPDATE opportunities SET topic='other' WHERE id=1")
         with app.test_client() as client:
             detail=client.get('/opportunities/1').get_data(as_text=True)
-            listing=client.get('/?q=全棉时代&topic=home&layout=list&view=current').get_data(as_text=True)
-            cards=client.get('/?q=全棉时代&topic=home&layout=cards&view=current').get_data(as_text=True)
-            excluded=client.get('/?q=全棉时代&topic=food&layout=list&view=current').get_data(as_text=True)
+            listing=client.get('/?buy_platform=all&q=全棉时代&topic=home&layout=list&view=current').get_data(as_text=True)
+            cards=client.get('/?buy_platform=all&q=全棉时代&topic=home&layout=cards&view=current').get_data(as_text=True)
+            excluded=client.get('/?buy_platform=all&q=全棉时代&topic=food&layout=list&view=current').get_data(as_text=True)
         self.assertIn('家用日用品',detail)
         self.assertIn('/opportunities/1',listing)
         self.assertIn('来源声称金额的算术可复算',detail)

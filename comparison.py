@@ -190,7 +190,8 @@ def load_comparisons(db, opportunity_ids=None):
         LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
         LEFT JOIN benchmark_topic_rules br ON br.topic_key=o.topic"""
     if opportunity_ids is None:
-        rows=[dict(r) for r in db.execute(query+' ORDER BY o.id DESC').fetchall()]
+        rows=[dict(r) for r in db.execute(
+            query+" WHERE s.enabled=1 OR s.method='manual' ORDER BY o.id DESC").fetchall()]
     else:
         target_ids=sorted({int(value) for value in opportunity_ids})
         if not target_ids:
@@ -233,7 +234,12 @@ def load_comparisons(db, opportunity_ids=None):
         for title in sorted(exact_titles):
             predicates.append('(o.title=? OR e.title=?)')
             params.extend([title,title])
-        rows=[dict(r) for r in db.execute(query+' WHERE ('+' OR '.join(predicates)+') ORDER BY o.id DESC',params).fetchall()]
+        # Keep a paused target visible for archival detail, but never let other
+        # paused-source rows influence its current comparison or active peers.
+        scope='(o.id IN ('+','.join('?' for _ in seed_ids)+") OR s.enabled=1 OR s.method='manual')"
+        rows=[dict(r) for r in db.execute(
+            query+' WHERE '+scope+' AND ('+' OR '.join(predicates)+') ORDER BY o.id DESC',
+            [*sorted(seed_ids),*params]).fetchall()]
         if not seed_ids.issubset({row['id'] for row in rows}):
             found={row['id'] for row in rows}
             rows.extend(row for row in seeds if row['id'] not in found)

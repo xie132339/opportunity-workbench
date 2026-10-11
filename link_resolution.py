@@ -52,9 +52,9 @@ def canonical_target(url):
     if u.hostname in ('item.taobao.com','detail.tmall.com','chaoshi.detail.tmall.com') and u.path=='/item.htm':
         values=query.get('id',[])
         if len(values)==1 and re.fullmatch(r'\d+',values[0]):return 'https://'+u.hostname+'/item.htm?id='+values[0]
-    if u.hostname=='m.taobao.com' and u.path in ('/awp/core/detail.htm','/item.htm'):
+    if u.hostname in ('m.taobao.com','h5.m.taobao.com') and u.path in ('/awp/core/detail.htm','/item.htm'):
         values=query.get('id',[])
-        if len(values)==1 and re.fullmatch(r'\d+',values[0]):return 'https://m.taobao.com'+u.path+'?id='+values[0]
+        if len(values)==1 and re.fullmatch(r'\d+',values[0]):return 'https://'+u.hostname+u.path+'?id='+values[0]
     if u.hostname=='mobile.yangkeduo.com' and u.path in ('/goods.html','/goods2.html','/duo_coupon_landing.html'):
         values=query.get('goods_id',[])
         if len(values)==1 and re.fullmatch(r'\d+',values[0]):return 'https://mobile.yangkeduo.com/goods.html?goods_id='+values[0]
@@ -103,6 +103,10 @@ def activity_target(url):
 
 
 def resolve(url):
+    direct_target=canonical_target(url)
+    if direct_target:
+        return dict(state='resolved',target_url=direct_target,
+                    reason='原文直接提供商品页地址；仅识别地址格式，不代表商品内容、价格或库存已核实')
     if not supported(url):return dict(state='unsupported',target_url=None,reason='不是受支持的公开商品短链')
     current=url
     for _ in range(5):
@@ -142,6 +146,108 @@ def resolve(url):
     return dict(state='unresolved',target_url=None,reason='有限跳转内未取得商品地址')
 
 
+def source_link_urls(row):
+    """Return embedded links plus a direct product/short-link opportunity URL."""
+    links=[]
+    for field in ('metadata_json','detail_json'):
+        try:
+            value=json.loads(row.get(field) or '{}')
+        except (TypeError,ValueError):
+            value={}
+        candidates=value.get('activity_links',[])
+        if isinstance(candidates,list):
+            links.extend(url for url in candidates if isinstance(url,str) and url)
+    opportunity_url=row.get('url')
+    if isinstance(opportunity_url,str) and (canonical_target(opportunity_url)
+            or supported(opportunity_url) or activity_target(opportunity_url)):
+        links.append(opportunity_url)
+    return list(dict.fromkeys(links))
+
+
+def _title_alignment(source_title, product_title):
+    source=re.sub(r'[^\w]+','',str(source_title or '').casefold())
+    product=re.sub(r'[^\w]+','',str(product_title or '').casefold())
+    if not source or not product:
+        return 'unknown'
+    return 'overlap' if source in product or product in source else 'different'
+
+
+def link_actions(row, cache, now=None):
+    """Build safe direct product actions separately from source and activity links."""
+    now=now or datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    raw_links=source_link_urls(row)
+    products={};pending={};activities={};other={}
+
+    def fresh(item):
+        return bool(item and item.get('checked_at') and item.get('next_check_at')
+                    and item['checked_at']<=now<item['next_check_at'])
+
+    def page_evidence(item):
+        try:
+            page=json.loads(item.get('product_page_json') or '{}') if item else {}
+        except (TypeError,ValueError):
+            page={}
+        if page:
+            checked=page.get('checked_at','')
+            page['current']=bool(checked and page.get('next_check_at')
+                                 and checked<=now<page['next_check_at'])
+        return page
+
+    for source_url in dict.fromkeys(url for url in raw_links if isinstance(url,str) and url):
+        item=cache.get(source_url)
+        direct=canonical_target(source_url)
+        resolved=bool(fresh(item) and item.get('state')=='resolved'
+                      and canonical_target(item.get('target_url') or ''))
+        target=(canonical_target(item['target_url']) if resolved else direct)
+        if target:
+            if resolved:
+                label='短链已解析到商品页' if not direct else '原文商品链接'
+            elif activity_target(source_url):
+                label='优惠入口含商品ID，已提取商品页'
+            else:
+                label='原文商品页链接'
+            page_item=item if item and item.get('target_url')==target else cache.get(target)
+            page=page_evidence(page_item)
+            alignment=_title_alignment(row.get('title'),page.get('title'))
+            candidate=products.setdefault(target,dict(
+                target_url=target,source_urls=[],label=label,
+                resolution_state='resolved' if resolved else 'direct',
+                resolution_reason=(item.get('reason','') if resolved else
+                    '从原文商品链接提取；页面商品、规格、价格和库存尚未核实'),
+                product_page=page,title_alignment=alignment))
+            if source_url not in candidate['source_urls']:
+                candidate['source_urls'].append(source_url)
+
+        activity=activity_target(source_url)
+        if not activity and fresh(item) and item.get('state')=='activity':
+            activity=activity_target(item.get('target_url') or '')
+        if activity:
+            activities.setdefault(activity,dict(url=activity,source_url=source_url,
+                label='原文优惠/活动入口',reason='可直接打开优惠或活动入口；不代表适用于本商品或账号'))
+
+        if not target and supported(source_url):
+            if item and not fresh(item):
+                reason='短链解析结果已过期，等待后台复查'
+            elif item:
+                reason=item.get('reason') or '短链暂未解析到商品页'
+            else:
+                reason='等待后台解析短链；跳转商品尚未确认'
+            pending.setdefault(source_url,dict(url=source_url,
+                state=item.get('state') if item else 'queued',reason=reason))
+
+        if not target and not activity and not supported(source_url):
+            try:
+                parsed=urlparse(source_url);port=parsed.port
+            except (TypeError,ValueError):
+                parsed=None;port=None
+            if (parsed and parsed.scheme=='https' and parsed.hostname
+                    and not parsed.username and not parsed.password and port in (None,443)):
+                other.setdefault(source_url,dict(url=source_url,host=parsed.hostname,
+                    label='原文链接，类型未识别'))
+
+    return list(products.values()),list(pending.values()),list(activities.values()),list(other.values())
+
+
 def enrich(row, cache):
     row=dict(row);metadata=json.loads(row.get('metadata_json') or '{}');detail=json.loads(row.get('detail_json') or '{}')
     links=metadata.get('activity_links',[])+detail.get('activity_links',[])
@@ -165,6 +271,8 @@ def enrich(row, cache):
     metadata['resolved_link_evidence']=evidence
     metadata['activity_links']=list(dict.fromkeys(metadata.get('activity_links',[])+[e['target_url'] for e in evidence]))
     row['metadata_json']=json.dumps(metadata,ensure_ascii=False)
+    (row['product_links'],row['pending_purchase_links'],row['activity_targets'],
+     row['unclassified_links'])=link_actions(row,cache,now)
     return row
 
 
@@ -180,6 +288,10 @@ def resolution_cache(db, rows):
             links=value.get('activity_links',[])
             if isinstance(links,list):
                 urls.update(link for link in links if isinstance(link,str) and link)
+        opportunity_url=row.get('url')
+        if isinstance(opportunity_url,str) and (canonical_target(opportunity_url)
+                or supported(opportunity_url) or activity_target(opportunity_url)):
+            urls.add(opportunity_url)
     if not urls:
         return {}
     ordered=sorted(urls)
@@ -286,16 +398,16 @@ def run_cycle(limit=10, urls=None):
     with connect() as c:
         cache={r['url']:dict(r) for r in c.execute('SELECT * FROM link_resolutions')}
         if urls is None:
-            rows=c.execute("""SELECT e.metadata_json,a.detail_json FROM opportunities o JOIN events e ON e.id=o.event_id
+            rows=c.execute("""SELECT o.url,e.metadata_json,a.detail_json FROM opportunities o JOIN events e ON e.id=o.event_id
                 JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
                 WHERE s.enabled=1 AND o.status NOT IN ('ignored','expired')
                 AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
                 ORDER BY e.published_at ASC,o.id ASC""").fetchall()
             urls=[]
             for row in rows:
-                for field in ('metadata_json','detail_json'):urls.extend(json.loads(row[field] or '{}').get('activity_links',[]))
+                urls.extend(source_link_urls(dict(row)))
     now=datetime.now(timezone.utc);stamp=now.strftime('%Y-%m-%d %H:%M:%S');counts={}
-    selected=[u for u in dict.fromkeys(urls) if supported(u) and (u not in cache or cache[u]['next_check_at']<=stamp)][:limit]
+    selected=[u for u in dict.fromkeys(urls) if (supported(u) or canonical_target(u)) and (u not in cache or cache[u]['next_check_at']<=stamp)][:limit]
     for url in selected:
         if time.monotonic()-started>45:break
         result=resolve(url);counts[result['state']]=counts.get(result['state'],0)+1
@@ -305,7 +417,10 @@ def run_cycle(limit=10, urls=None):
             ON CONFLICT(url) DO UPDATE SET target_url=excluded.target_url,state=excluded.state,reason=excluded.reason,checked_at=excluded.checked_at,next_check_at=excluded.next_check_at,
             product_page_json=CASE WHEN link_resolutions.target_url IS excluded.target_url THEN link_resolutions.product_page_json ELSE '{}' END''',
             (url,result['target_url'],result['state'],result['reason'],checked.strftime('%Y-%m-%d %H:%M:%S'),nxt.strftime('%Y-%m-%d %H:%M:%S')))
-    page_counts=probe_resolved_pages(limit=2,source_urls=resolved_urls if requested_urls is not None else None)
+    # In the scheduled worker, only recheck product pages referenced by fresh,
+    # currently enabled sources. The global resolution cache also contains
+    # archived links from paused sources and must not keep them active.
+    page_counts=probe_resolved_pages(limit=2,source_urls=resolved_urls if requested_urls is not None else urls)
     for state,count in page_counts.items():
         counts[f'product_page_{state}']=count
     return counts

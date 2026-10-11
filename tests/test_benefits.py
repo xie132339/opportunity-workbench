@@ -38,7 +38,7 @@ class BenefitTests(unittest.TestCase):
   add('预约抽奖保底优惠线索','https://offers.example/lottery-minimum',source_type='user_supplied',
       origin_text='预约抽奖2元保底',kind='lottery')
   from app import app
-  html=app.test_client().get('/benefits?q=预约抽奖').get_data(as_text=True)
+  html=app.test_client().get('/benefits?q=预约抽奖&kind=lottery').get_data(as_text=True)
   self.assertIn('抽奖最低奖励',html)
   self.assertIn('保底规则与兑现未核实',html)
   self.assertIn('不计为商品现金折价',html)
@@ -110,7 +110,7 @@ class BenefitTests(unittest.TestCase):
   with db.connect() as c:
    rows=listing(c);self.assertEqual(len(rows),1);self.assertIsNone(rows[0]['published_at']);self.assertEqual(rows[0]['source_type'],'user_supplied');self.assertTrue(rows[0]['old_check'])
  def test_listing_supports_bounded_pages(self):
-  for index in range(25):add(f'优惠入口{index:02d}',f'https://offers.example/coupon/{index}',kind='coupon')
+  for index in range(25):add(f'优惠入口{index:02d}',f'https://offers.example/coupon/{index}',source_type='user_supplied',kind='coupon')
   with db.connect() as c:
    first=listing(c,limit=21,offset=0);second=listing(c,limit=21,offset=20)
   self.assertEqual(len(first),21);self.assertEqual(len(second),5)
@@ -282,13 +282,53 @@ class BenefitTests(unittest.TestCase):
       source_url='https://example.com/post/old',kind='coupon',
       published_at='2024-01-01 00:00:00',source_observed_at='2024-01-02 00:00:00')
   from app import app
-  response=app.test_client().get('/benefits')
+  response=app.test_client().get('/benefits?scope=all')
   self.assertEqual(response.status_code,200)
   html=response.get_data(as_text=True)
   self.assertIn('来源采集端最近读到',html)
   self.assertIn('不代表优惠仍有效',html)
   self.assertIn('商品适用证明：0 条；原文同条关联：1 条',html)
   self.assertIn('不能作为优惠已适用或可计算到手价的证据',html)
+
+ def test_current_benefit_filter_uses_publication_and_campaign_window_not_rescan_time(self):
+  from benefits import _is_current_benefit
+  now=datetime(2026,10,7,1)
+  stamp=now.strftime('%Y-%m-%d %H:%M:%S')
+  fresh_source=dict(enabled=1,status='healthy',interval_minutes=15,
+                    source_last_seen_at=stamp,last_success=stamp,
+                    source_published_at=(now-timedelta(minutes=10)).strftime('%Y-%m-%d %H:%M:%S'))
+  row=dict(kind='coupon',source_type='collected',title='满100减10券',origin_text='满100减10',sources=[fresh_source])
+  self.assertTrue(_is_current_benefit(row,now))
+  old_source=dict(fresh_source,source_published_at=(now-timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S'))
+  self.assertFalse(_is_current_benefit(dict(row,sources=[old_source]),now))
+  lottery=dict(row,kind='lottery')
+  self.assertFalse(_is_current_benefit(lottery,now))
+  self.assertTrue(_is_current_benefit(lottery,now,explicit_kind=True))
+  campaign=dict(row,kind='campaign',origin_text=(
+      '众筹价：199元；众筹开始：2026年10月6日 10:00，众筹结束：2026年10月10日 10:00'))
+  self.assertTrue(_is_current_benefit(campaign,now))
+  ended=dict(campaign,origin_text=(
+      '众筹价：199元；众筹开始：2026年9月1日 10:00，众筹结束：2026年9月7日 10:00'))
+  self.assertFalse(_is_current_benefit(ended,now))
+
+ def test_benefit_page_defaults_to_current_nonlottery_and_keeps_explicit_archive(self):
+  add('本周有效券','https://u.jd.com/CurrentCoupon',source_type='user_supplied',
+      origin_text='满100减10',kind='coupon')
+  add('过去优惠抽奖','https://u.jd.com/OldLottery',source_type='user_supplied',
+      origin_text='抽奖1元',kind='lottery')
+  add('过期旧券','https://u.jd.com/OldCoupon',source_type='user_supplied',
+      origin_text='满100减10',kind='coupon')
+  with db.connect() as c:
+   c.execute("UPDATE benefit_resources SET last_seen_at='2024-01-01 00:00:00' WHERE url='https://u.jd.com/OldCoupon'")
+  from app import app
+  client=app.test_client()
+  current=client.get('/benefits').get_data(as_text=True)
+  self.assertIn('本周有效券',current)
+  self.assertNotIn('过去优惠抽奖',current)
+  self.assertNotIn('过期旧券',current)
+  archive=client.get('/benefits?scope=all').get_data(as_text=True)
+  self.assertIn('过去优惠抽奖',archive)
+  self.assertIn('过期旧券',archive)
  def test_page_shows_read_but_unparsed_and_keeps_source_claim_types_distinct(self):
   add('满100减10家用券','https://u.jd.com/ClaimTypes',source_type='user_supplied',
       origin_text='满100减10家用券，支付立减5元，会员最高8.5折',kind='coupon')
@@ -351,7 +391,7 @@ class BenefitTests(unittest.TestCase):
    rows=listing(c);self.assertEqual(len(rows),1);self.assertEqual(len(rows[0]['sources']),2)
    self.assertEqual(stats(c)['sources'],2)
  def test_cycle_reclassifies_legacy_non_benefit_supported_link(self):
-  add('旧入口','https://u.jd.com/Legacy')
+  add('旧入口','https://u.jd.com/Legacy',source_type='user_supplied')
   with db.connect() as c:c.execute("UPDATE benefit_resources SET state='non_benefit',reason='旧分类' WHERE url='https://u.jd.com/Legacy'")
   with patch('benefits.resolve',return_value=dict(state='resolved',target_url='https://item.jd.com/123.html',reason='商品页')) as resolver:
    self.assertEqual(run_cycle(),{'resolved':1});self.assertEqual(resolver.call_count,1)
@@ -360,7 +400,7 @@ class BenefitTests(unittest.TestCase):
   self.assertEqual((row['state'],row['target_url']),('product','https://item.jd.com/123.html'))
 
  def test_product_resolution_is_classified_and_hidden(self):
-  add('待识别链接','https://u.jd.com/Product')
+  add('待识别链接','https://u.jd.com/Product',source_type='user_supplied')
   with patch('benefits.resolve',return_value=dict(state='resolved',target_url='https://item.jd.com/123.html',reason='商品页')):
    self.assertEqual(run_cycle(),{'resolved':1})
   with db.connect() as c:
@@ -386,7 +426,7 @@ class BenefitTests(unittest.TestCase):
    summary=stats(c);self.assertEqual(summary['discovered'],2);self.assertEqual(summary['total'],1);self.assertEqual(summary['non_benefit'],1)
    rows=listing(c);self.assertEqual([r['url'] for r in rows],['https://m.tb.cn/short-offer'])
  def test_reclassify_consumes_current_shared_product_resolution(self):
-  add('共享商品入口','https://u.jd.com/Shared',kind='pending')
+  add('共享商品入口','https://u.jd.com/Shared',source_type='user_supplied',kind='pending')
   with db.connect() as c:
    c.execute("INSERT INTO link_resolutions(url,target_url,state,reason,checked_at,next_check_at) VALUES('https://u.jd.com/Shared','https://item.jd.com/456.html','resolved','test',CURRENT_TIMESTAMP,'2099-01-01 00:00:00')")
   self.assertEqual(reclassify(),1)
@@ -395,7 +435,7 @@ class BenefitTests(unittest.TestCase):
   self.assertEqual((row['state'],row['target_url']),('product','https://item.jd.com/456.html'))
 
  def test_legacy_target_evidence_restores_activity_state(self):
-  add('旧券入口','https://u.jd.com/Legacy',kind='coupon')
+  add('旧券入口','https://u.jd.com/Legacy',source_type='user_supplied',kind='coupon')
   with db.connect() as c:
    c.execute("UPDATE benefit_resources SET state='pending',target_url='https://pro.m.jd.com/mall/active/ABC/index.html?share=1' WHERE url='https://u.jd.com/Legacy'")
   self.assertEqual(reclassify(),1)

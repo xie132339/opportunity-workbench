@@ -12,7 +12,18 @@ from db import connect
 from pricing import discount_audit, explicit_source_order_claim, purchase_terms, promotion_mentions
 from xianbao import extract_links
 from offer import resource_kind, resource_topic, RESOURCE_LABELS
-from services.source_freshness import is_catalog_listing, source_snapshot_is_current
+from services.source_freshness import is_catalog_listing, is_taobao_alliance_feed, source_snapshot_is_current
+from services.taobao_alliance import (
+    TaobaoAllianceAPIError,
+    detail_item_identity as taobao_detail_item_identity,
+    has_current_promotion_signal as taobao_has_current_promotion_signal,
+    validated_offer as validated_taobao_alliance_offer,
+)
+from services.taobao_sku_detail import (
+    ACCESS_RETRY_HOURS,
+    DETAIL_METHOD as TAOBAO_DETAIL_METHOD,
+    fetch_item_detail as fetch_taobao_sku_detail,
+)
 from services.apple_catalog import parse_product_detail as parse_apple_catalog_detail
 from services.apple_catalog import supports_product_url as supports_apple_catalog_product
 from services.benefit_claims import parse_discount_claims
@@ -20,6 +31,7 @@ from services.guangdiu_detail import parse_detail as parse_guangdiu_detail
 from services.guangdiu_detail import supports_url as supports_guangdiu_detail
 from services.merchant_product_page import parse_product_page as parse_merchant_product_page
 from services.merchant_product_page import supports_url as supports_merchant_product_page
+from services.public_campaign import campaign_state, china_label, parse_public_campaign
 
 LABELS = {
     'excluded': '自动排除', 'stale': '时效不满足',
@@ -28,6 +40,8 @@ LABELS = {
     'missing_price': '未形成可用报价', 'conflict': '原文报价／规格冲突', 'observed': '公开报价已提取',
     'activity': '活动线索／条件待核',
     'conditional': '条件报价（含优惠／资格限制）',
+    'campaign_upcoming': '众筹活动即将开始 · 公开档位价',
+    'campaign_active': '众筹活动进行中 · 公开档位价',
 }
 
 
@@ -286,6 +300,8 @@ def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=No
     detail = json.loads(detail_json or '{}')
     body = detail.get('conditions') or body or ''
     text = title + '\n' + body + '\n' + (conditions or '')
+    origin = json.loads(metadata or '{}')
+    taobao_offer = validated_taobao_alliance_offer(origin)
     offer = public_offer(url, body, title)
     offer.setdefault('selected_spec', '')
     offer.setdefault('net_after_rebate_cents', None)
@@ -293,13 +309,40 @@ def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=No
     display_unit_cents = offer.get('unit_cents')
     if display_unit_cents is None and offer.get('total_cents') is not None and offer.get('quantity'):
         display_unit_cents = round(offer['total_cents'] / offer['quantity'])
+    if taobao_offer:
+        sku_bound = (detail.get('evidence_kind') == 'taobao_alliance_sku_detail'
+                     and detail.get('field_state') == 'bound')
+        official_quote_cents = taobao_offer.get('quote_price_cents')
+        quote_cents = detail.get('advertised_cents') if sku_bound else official_quote_cents
+        has_official_quote = isinstance(quote_cents, int) and quote_cents > 0
+        offer.update(total_cents=quote_cents, unit_cents=quote_cents,
+                     quantity=1 if has_official_quote else None,
+                     selected_spec=detail.get('specification', '') if sku_bound else '',
+                     error='' if has_official_quote else '淘宝联盟未返回可显示的官方推广价',
+                     store=taobao_offer.get('shop_title') or '淘宝联盟推广商品')
+        display_unit_cents = quote_cents
     promotion = promotion_mentions(text)
     qualifications = qualification_mentions(text)
-    origin = json.loads(metadata or '{}')
     price_status = _price_status(title, body, metadata, offer.get('total_cents'), detail)
+    if taobao_offer:
+        if sku_bound:
+            price_status = dict(
+                state='taobao_alliance_sku_promotion',
+                label='淘宝联盟SKU预估优惠价',
+                note='官方详细接口已绑定具体SKU、规格、库存与优惠路径；账号资格、运费及结算结果仍需下单页确认。',
+            )
+        else:
+            price_status = dict(
+                state='taobao_alliance_official_promotion',
+                label='淘宝联盟官方推广价',
+                note='淘宝联盟物料接口已返回商品身份、官方推广入口、参考价和当前推广价；'
+                     'SKU规格、库存、账号资格、运费及结算结果尚未核实，因此不用于同款比较或捡漏结论。',
+            )
     links = list(dict.fromkeys(detail.get('activity_links',[]) + origin.get('activity_links',[])))
     platforms = list(dict.fromkeys(re.findall(r'抖音商城|抖音小时达|美团闪购|淘宝闪购|京东秒送|京东到家|美团外卖|饿了么|京东|天猫|拼多多|苏宁|唯品会|淘宝|美团|抖音|高德|支付宝', offer.get('store','') + ' ' + title + ' ' + body + ' ' + origin.get('source_category',''))))
     previous = re.search(r'降价前售价为\s*(\d+(?:\.\d{1,2})?)元', body)
+    previous_cents = (int(Decimal(previous[1]) * 100) if previous else
+                      taobao_offer.get('reserve_price_cents') if taobao_offer else None)
     name = re.sub(r'^(?:限移动端|88VIP会员)[：:]\s*', '', title)
     # Only remove an explicit trailing quote, never a model number such as “荣耀600 元气版”.
     name = re.sub(r'\s+(?:券后)?\d+(?:\.\d{1,2})?元(?:[/／]件)?(?:[（(].*[）)])?$', '', name)
@@ -308,7 +351,7 @@ def offer_summary(title, url, body, conditions='', metadata='{}', detail_json=No
                 price_status=price_status, kind=resource_kind(title,body), source_category=origin.get('source_category',''),
                 resolved_links=origin.get('resolved_link_evidence',[]), activity_links=links, origin_url=detail.get('origin_url',''), external_checks=detail.get('external_checks',[]), audit=discount_audit(title,body),
                 promotions=promotion, qualifications=qualifications,
-                previous_cents=int(Decimal(previous[1])*100) if previous else None,
+                previous_cents=previous_cents,
                 promotion_sync=promotion_sync_status(title, body, detail_json,
                     sync_meta.get('detail_checked_at'), sync_meta.get('detail_error'), sync_meta.get('checked_at')))
 
@@ -472,6 +515,9 @@ def parse_detail(html):
 def classify(row, now, duplicate=False):
     price, spec, terms = extract(row['title'])
     snippet = (row.get('snippet') or '')[:12000]
+    metadata = json.loads(row.get('metadata_json') or '{}')
+    taobao_offer = (validated_taobao_alliance_offer(metadata, now=now)
+                    if is_taobao_alliance_feed(row) else None)
     catalog_listing = is_catalog_listing(row)
     starting_price = bool(re.search(r'\d+(?:\.\d+)?\s*元\s*起', row['title']))
     estimated_price = bool(re.search(r'预估到手价|预计到手价', row['title'] + ' ' + snippet))
@@ -487,7 +533,7 @@ def classify(row, now, duplicate=False):
             and detail['page_amount_cents'] > 0):
         estimated_price = True
     if detail:
-        title_price, inferred_spec, _ = extract(detail['title'])
+        title_price, inferred_spec, _ = extract(detail.get('title') or '')
         title_price = title_price or detail.get('headline_amount_cents')
         spec = detail.get('specification') or inferred_spec
         if detail.get('evidence_kind') == 'merchant_product_page':
@@ -495,8 +541,9 @@ def classify(row, now, duplicate=False):
             # exact Product/Offer price, never from a product title or range.
             price = detail.get('advertised_cents')
         else:
-            price = detail['advertised_cents'] if detail['advertised_cents'] is not None else title_price
-        terms = detail['conditions']
+            detail_amount = detail.get('advertised_cents')
+            price = detail_amount if detail_amount is not None else title_price
+        terms = detail.get('conditions') or ''
         offer = public_offer(row['url'], terms, detail.get('title') or row['title'])
         if offer.get('unit_cents') is not None:
             price = offer['unit_cents']
@@ -509,14 +556,40 @@ def classify(row, now, duplicate=False):
             price = offer['unit_cents']
         elif offer.get('total_cents') is not None:
             price = offer['total_cents']
-    kind = resource_kind(detail.get('title') or row['title'], detail.get('conditions') or snippet)
+    if taobao_offer:
+        sku_bound = (detail.get('evidence_kind') == 'taobao_alliance_sku_detail'
+                     and detail.get('field_state') == 'bound'
+                     and detail.get('advertised_cents') is not None)
+        price = detail.get('advertised_cents') if sku_bound else taobao_offer.get('quote_price_cents')
+        kind = 'purchase'
+        terms = snippet
+        offer = dict(unit_cents=price, total_cents=price,
+                     quantity=1 if isinstance(price, int) and price > 0 else None,
+                     error='' if isinstance(price, int) and price > 0 else '淘宝联盟未返回可显示的官方推广价',
+                     store='淘宝联盟推广商品', selected_spec=spec if sku_bound else '')
+    campaign_text = '\n'.join(filter(None, [row['title'], snippet, detail.get('title'),
+                                              detail.get('conditions'), detail.get('evidence')]))
+    campaign = parse_public_campaign(campaign_text)
+    campaign_phase = campaign_state(campaign, now)
+    kind = ('purchase' if taobao_offer else
+            resource_kind(detail.get('title') or row['title'], detail.get('conditions') or snippet))
+    if campaign:
+        # The ordinary crowdfunding purchase tier is separate from optional
+        # lottery copy. It remains a source-stated public amount, not checkout.
+        price = campaign['price_cents']
+        kind = 'purchase'
     # Detail parsing can populate ``price`` after the initial title check above.
     # Keep a starting/estimated catalogue label from being accidentally
     # upgraded to an exact quote by an unrelated or generic detail amount.
-    if catalog_listing and (starting_price or estimated_price):
+    if catalog_listing and (starting_price or estimated_price) and not campaign:
         price = None
     evidence = '\n'.join(filter(None, [row['title'], snippet, detail.get('evidence')]))[:6000]
     result = dict(advertised_cents=price, specification=spec, conditions=terms, evidence=evidence)
+    if campaign:
+        result.update(campaign_price_cents=campaign['price_cents'],
+                      campaign_start_at=stamp(campaign['start_at']),
+                      campaign_end_at=stamp(campaign['end_at']),
+                      campaign_phase=campaign_phase)
     if kind not in ('purchase','unknown'):
         # A coupon face value, rebate price or lottery prize is never a cash buy price.
         result['advertised_cents'] = None
@@ -535,29 +608,52 @@ def classify(row, now, duplicate=False):
     conflict = selected_spec_conflict(row['title'], snippet + '\n' + detail.get('conditions',''))
     if conflict:
         return state('conflict', conflict)
-    if offer.get('error'):
+    if offer.get('error') and not campaign and not taobao_offer:
         return state('conflict', offer['error'])
     title_amounts = {int(Decimal(v)*100) for v in re.findall(r'(\d+(?:\.\d{1,2})?)元', row['title'])}
-    if offer.get('unit_cents') is not None and len(title_amounts)==1:
+    if not campaign and not taobao_offer and offer.get('unit_cents') is not None and len(title_amounts)==1:
         if next(iter(title_amounts)) != offer['unit_cents']:
             return state('conflict', '标题报价与正文明确单件价不一致，不能用于价格比较')
     published = moment(row['published_at'] or detail.get('published_at'))
     catalog_current = catalog_listing and source_snapshot_is_current(row, now)
+    taobao_current = bool(taobao_offer and source_snapshot_is_current(row, now))
     if catalog_listing and not catalog_current:
         return state('source_unavailable', '商城目录快照超时或来源未成功采集；不能把旧目录标价当作当前')
-    if not catalog_listing and published and not timedelta(0) <= now - published <= timedelta(hours=2):
+    if not campaign and not catalog_listing and published and not timedelta(0) <= now - published <= timedelta(hours=2):
         return state('stale', '原文超过 2 小时或时间在未来；自动留档，不列作当前机会')
     ttl = timedelta(minutes=min(2 * row['interval_minutes'] + 15, 120))
     seen, success = moment(row['last_seen_at']), moment(row['last_success'])
     if not row['enabled'] or row['source_status'] != 'healthy' or not seen or not success or not (timedelta(0) <= now-seen <= ttl and timedelta(0) <= now-success <= ttl):
         return state('source_unavailable', '来源暂停、抓取失败或快照超时；等待采集恢复后自动重算')
+    if is_taobao_alliance_feed(row) and not taobao_offer:
+        return state('missing_price', '淘宝联盟记录缺少有效商品身份/价格，或活动已过期；不作为当前商品报价')
+    if is_taobao_alliance_feed(row):
+        if not isinstance(price, int) or price <= 0:
+            return state('missing_price', '淘宝联盟物料未返回可显示的官方推广价；不作为当前优惠')
+        if not taobao_has_current_promotion_signal(taobao_offer):
+            return state('conditional', '淘宝联盟官方物料已返回商品价，但未返回价格降低、当前可用优惠券或可解释促销路径；'
+                         '仅保留审计记录，不进入默认优惠列表')
+        if detail.get('field_state') in {'access_restricted', 'field_not_provided'}:
+            return state('observed', '淘宝联盟官方物料已返回当前推广价和优惠依据；SKU详情增强核验暂不可用，'
+                         '不阻断官方优惠观察，也不据此作规格比较或捡漏结论')
+        if not detail:
+            return state('observed', '淘宝联盟官方物料已返回当前推广价和优惠依据；SKU详情将作为增强核验，不阻断官方优惠观察')
     page_checked = moment(row.get('detail_checked_at'))
     if (detail.get('availability_status') == 'out_of_stock' and page_checked
             and timedelta(0) <= now - page_checked <= timedelta(minutes=30)):
         return state('missing_price', '商家商品详情明确标记已下架；主价区没有当前报价，页面其他区域金额不采纳')
+    if campaign:
+        if campaign_phase == 'expired':
+            return state('stale', f"原文众筹活动已结束（{china_label(campaign['end_at'])}）；保留原文，不列入当前候选")
+        if campaign_phase == 'outside_horizon':
+            return state('stale', '原文众筹活动开始时间超过 30 天；暂不列入当前候选')
+        phase_label = '即将开始' if campaign_phase == 'upcoming' else '进行中'
+        start_label, end_label = china_label(campaign['start_at']), china_label(campaign['end_at'])
+        return state('campaign_upcoming' if campaign_phase == 'upcoming' else 'campaign_active',
+                     f"来源原文标注众筹公开档位价 ¥{campaign['price_cents']/100:.2f}；{phase_label}：{start_label} 至 {end_label}。该金额是公开活动档位声称，不代表库存、本人资格或结算到手价，也未证明低于同款市场价")
     listing_card_observation = detail.get('evidence_kind') == 'apple_catalog_card'
     metadata = json.loads(row.get('metadata_json') or '{}')
-    if detail_probe_needed(
+    if not taobao_offer and detail_probe_needed(
             row['url'], row['title'], snippet, detail,
             published_at=row.get('published_at') or detail.get('published_at'),
             body_truncated=bool(metadata.get('content_truncated') or metadata.get('body_truncated'))
@@ -567,7 +663,7 @@ def classify(row, now, duplicate=False):
         checked = moment(row.get('detail_checked_at'))
         if not checked or now - checked > timedelta(minutes=30):
             return state('queued', '自动读取原文发布时间、公开报价和适用条件')
-    if not published and not catalog_listing:
+    if not published and not catalog_listing and not campaign and not taobao_current:
         return state('missing_time', '上游未提供可靠原文时间；隔离留档，采集更新后自动重算')
     audit = discount_audit(row['title'], detail.get('conditions') or snippet)
     if audit['formula']['state'] == 'conflict':
@@ -611,12 +707,18 @@ def review_all():
             a.detail_json,a.detail_checked_at,a.detail_error,
             EXISTS(SELECT 1 FROM opportunities newer JOIN sources ns ON ns.id=newer.source_id
                    JOIN events ne ON ne.id=newer.event_id
-                   WHERE newer.url=o.url AND
-                   ((newer.source_id=o.source_id AND newer.id>o.id) OR (s.method='xianbao' AND ns.method='xianbao'
-                    AND ns.enabled=1 AND ns.status='healthy' AND
-                    (ne.last_seen_at>e.last_seen_at OR (ne.last_seen_at=e.last_seen_at AND newer.id>o.id))))) AS duplicate
+                   WHERE (s.method='taobao_alliance' AND newer.source_id=o.source_id
+                          AND ne.external_key=e.external_key AND newer.id>o.id)
+                      OR (newer.url=o.url AND
+                          ((newer.source_id=o.source_id AND newer.id>o.id)
+                           OR (s.method='xianbao' AND ns.method='xianbao'
+                               AND ns.enabled=1 AND ns.status='healthy'
+                               AND (ne.last_seen_at>e.last_seen_at
+                                    OR (ne.last_seen_at=e.last_seen_at AND newer.id>o.id)))))
+                  ) AS duplicate
             FROM opportunities o JOIN events e ON e.id=o.event_id
-            JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id''').fetchall()
+            JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+            WHERE s.enabled=1 OR s.method='manual' ''').fetchall()
         counts = {}
         for item in rows:
             row = dict(item)
@@ -635,7 +737,8 @@ def review_all():
                         detail = {}
                         row['detail_json'] = None
             db.execute('UPDATE opportunities SET resource_kind=?,topic=? WHERE id=?',
-                       (resource_kind(detail.get('title') or row['title'],detail.get('conditions') or row['snippet']),
+                       ('purchase' if is_taobao_alliance_feed(row) else
+                        resource_kind(detail.get('title') or row['title'],detail.get('conditions') or row['snippet']),
                         resource_topic(row['title'],metadata.get('source_category','')),row['id']))
             result = classify(row, now, bool(row['duplicate']))
             db.execute('''INSERT INTO auto_reviews
@@ -650,8 +753,17 @@ def review_all():
         return counts
 
 
-def run_cycle(limit=6, opportunity_id=None):
-    """Bounded network batch; SQLite lease prevents overlapping workers from probing twice."""
+def run_cycle(limit=6, opportunity_id=None, source_method=None, opportunity_ids=None):
+    """Bounded network batch; SQLite lease prevents overlapping workers from probing twice.
+
+    ``source_method`` makes a dedicated collector complete only its own
+    evidence pipeline.  A Taobao-only worker must never send another source's
+    records through an unrelated detail probe.
+
+    ``opportunity_ids`` targets one just-synchronized batch while preserving
+    normal retry cooling. ``opportunity_id`` remains the explicit operator
+    override and is the only mode that can bypass that cooling.
+    """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     with connect() as db:
         db.execute('INSERT OR IGNORE INTO review_runs(id) VALUES(1)')
@@ -660,26 +772,76 @@ def run_cycle(limit=6, opportunity_id=None):
             (stamp(now), stamp(now-timedelta(minutes=10)))).rowcount
     if not leased:
         return {'busy': True}
+    target_ids = set()
+    for value in opportunity_ids or ():
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            target_ids.add(value)
+    target_ids = tuple(sorted(target_ids))
     counts = {}
     queue = []
     try:
         counts = review_all()
         with connect() as db:
-            queue = db.execute('''SELECT a.*,o.url,o.event_id FROM auto_reviews a
+            conditions = ['''(a.state IN ('queued','retry')
+                       OR (a.state='conditional' AND (
+                           json_extract(a.detail_json,'$.field_state')='access_restricted'
+                           OR (json_extract(a.detail_json,'$.field_state')='field_not_provided'
+                               AND (json_extract(a.detail_json,'$.sku_detail_api_state')='permission_unavailable'
+                                    OR json_extract(a.detail_json,'$.sku_detail_api_state') IS NULL))
+                       ))
+                       OR (s.method='taobao_alliance' AND a.state='observed' AND (
+                           a.detail_json IS NULL OR a.detail_json='' OR
+                           json_extract(a.detail_json,'$.field_state') IN ('access_restricted','field_not_provided')
+                       )))''',
+                          '(s.enabled=1 OR s.method=\'manual\')']
+            params = []
+            if opportunity_id is None:
+                conditions.append('(a.next_check_at IS NULL OR a.next_check_at<=CURRENT_TIMESTAMP)')
+            else:
+                conditions.append('o.id=?')
+                params.append(opportunity_id)
+            if target_ids:
+                placeholders = ','.join('?' for _ in target_ids)
+                conditions.append(f'o.id IN ({placeholders})')
+                params.extend(target_ids)
+            if source_method is not None:
+                conditions.append('s.method=?')
+                params.append(source_method)
+            params.append(limit)
+            queue = db.execute(f'''SELECT a.*,o.url,o.event_id,e.metadata_json,s.method AS source_method FROM auto_reviews a
                 JOIN opportunities o ON o.id=a.opportunity_id
                 JOIN events e ON e.id=o.event_id
-                WHERE a.state IN ('queued','retry') AND (a.next_check_at IS NULL OR a.next_check_at<=CURRENT_TIMESTAMP)
-                AND (? IS NULL OR o.id=?)
+                JOIN sources s ON s.id=o.source_id
+                WHERE {' AND '.join(conditions)}
                 ORDER BY COALESCE(e.published_at,e.last_seen_at,e.observed_at,o.created_at),
-                    a.next_check_at,a.detail_checked_at IS NOT NULL,o.id ASC LIMIT ?''',
-                (opportunity_id,opportunity_id,limit)).fetchall()
+                    a.next_check_at,a.detail_checked_at IS NOT NULL,o.id ASC LIMIT ?''', params).fetchall()
         from scanner import _fetch
         for row in queue:
-            if not supported(row['url']):
+            if row['source_method'] != 'taobao_alliance' and not supported(row['url']):
                 continue
+            link_identity = None
             try:
-                html = _fetch(row['url'])
-                if supports_apple_catalog_product(row['url']):
+                if row['source_method'] == 'taobao_alliance':
+                    metadata = json.loads(row['metadata_json'] or '{}')
+                    offer = validated_taobao_alliance_offer(metadata)
+                    if not offer:
+                        raise ValueError('淘宝联盟记录缺少有效官方物料证据')
+                    link_identity = taobao_detail_item_identity(offer, row['url'])
+                    if not link_identity:
+                        raise ValueError('淘宝联盟物料未提供可用于升级详情接口的商品ID')
+                    detail = fetch_taobao_sku_detail(link_identity['item_id'])
+                    detail['link_identity'] = link_identity
+                    html = None
+                else:
+                    html = _fetch(row['url'])
+                    detail = None
+                if detail is not None:
+                    pass
+                elif supports_apple_catalog_product(row['url']):
                     detail = parse_apple_catalog_detail(row['url'], html)
                 elif supports_merchant_product_page(row['url']):
                     detail = parse_merchant_product_page(row['url'], html)
@@ -695,12 +857,44 @@ def run_cycle(limit=6, opportunity_id=None):
                 if previous.get('external_checks'):
                     detail['external_checks'] = previous['external_checks']
                 with connect() as db:
+                    retry_after = (f'+{ACCESS_RETRY_HOURS} hours'
+                                   if detail.get('sku_detail_api_state') == 'permission_unavailable'
+                                   else '+30 minutes')
                     db.execute('''UPDATE auto_reviews SET detail_json=?,detail_checked_at=CURRENT_TIMESTAMP,
-                        detail_error=NULL,attempts=0,next_check_at=datetime('now','+30 minutes') WHERE opportunity_id=?''',
-                        (json.dumps(detail, ensure_ascii=False), row['opportunity_id']))
+                        detail_error=NULL,attempts=0,next_check_at=datetime('now',?) WHERE opportunity_id=?''',
+                        (json.dumps(detail, ensure_ascii=False), retry_after, row['opportunity_id']))
                     if detail['published_at']:
                         db.execute('UPDATE events SET published_at=COALESCE(published_at,?) WHERE id=?',
                                    (detail['published_at'],row['event_id']))
+            except TaobaoAllianceAPIError as exc:
+                if row['source_method'] == 'taobao_alliance' and exc.code == 'api_package_unavailable':
+                    detail = {
+                        'evidence_kind': 'taobao_alliance_sku_detail', 'field_state': 'access_restricted',
+                        'field_reason': '官方物料已提供动态商品ID，但两个官方SKU详情接口均未返回SKU、规格与价格绑定。',
+                        'title': '', 'advertised_cents': None, 'specification': '', 'conditions': '',
+                        'published_at': None, 'promotional_candidate': False,
+                        'sku_detail_api_state': 'permission_unavailable',
+                        # Production connector errors contain all actual calls.
+                        # Keep a one-call fallback only for non-connector
+                        # callers/tests; never invent a legacy response.
+                        'detail_api_attempts': getattr(exc, 'attempts', [
+                            {'method': TAOBAO_DETAIL_METHOD, 'state': 'permission_unavailable'},
+                        ]),
+                    }
+                    if link_identity:
+                        detail['link_identity'] = link_identity
+                    with connect() as db:
+                        db.execute('''UPDATE auto_reviews SET detail_json=?,detail_checked_at=CURRENT_TIMESTAMP,
+                            detail_error=NULL,attempts=0,next_check_at=datetime('now',?)
+                            WHERE opportunity_id=?''',
+                            (json.dumps(detail, ensure_ascii=False),
+                             f'+{ACCESS_RETRY_HOURS} hours', row['opportunity_id']))
+                else:
+                    delay = min(360, 5 * 2 ** min(row['attempts'], 7))
+                    with connect() as db:
+                        db.execute('''UPDATE auto_reviews SET detail_error=?,attempts=attempts+1,
+                            detail_checked_at=CURRENT_TIMESTAMP,next_check_at=datetime('now',?) WHERE opportunity_id=?''',
+                            (str(exc)[:250], f'+{delay} minutes',row['opportunity_id']))
             except Exception as exc:
                 delay = min(360, 5 * 2 ** min(row['attempts'], 7))
                 with connect() as db:
@@ -708,7 +902,11 @@ def run_cycle(limit=6, opportunity_id=None):
                         detail_checked_at=CURRENT_TIMESTAMP,next_check_at=datetime('now',?) WHERE opportunity_id=?''',
                         (str(exc)[:250], f'+{delay} minutes',row['opportunity_id']))
         counts = review_all()
-        return dict(counts=counts, probed=len(queue))
+        result = dict(counts=counts, probed=len(queue))
+        if target_ids:
+            result.update(target_opportunity_ids=list(target_ids),
+                          probed_opportunity_ids=[row['opportunity_id'] for row in queue])
+        return result
     finally:
         # A killed or interrupted process must not strand the singleton lease.
         # Matching started_at prevents a slow, superseded run from releasing a newer lease.

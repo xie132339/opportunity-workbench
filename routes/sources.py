@@ -1,14 +1,36 @@
 """Source configuration, discovery and scanning routes."""
 import os
+import json
 import requests
 from urllib.parse import urlparse
 from flask import flash, render_template, request
 from db import connect
+from autoreview import run_cycle
 from channel_discovery import refresh as refresh_channel_candidates, validate_many as validate_channel_candidates, promote as promote_channel_candidate
 from scanner import _local_adapter_url, _public_url, scan_all, scan_source
 from xianbao import validate_url as validate_xianbao_url
 from routes.common import go
 from services.source_metrics import current_source_yield
+from services.taobao_alliance import configuration_error as taobao_alliance_configuration_error
+from services.taobao_alliance import search_config as validate_taobao_alliance_url
+from services.taobao_sync_validation import detail_batch_limit, validate_taobao_syncs
+
+
+def _complete_taobao_syncs(results):
+    """Use the same per-run audit for a manual scan and the background worker."""
+    return validate_taobao_syncs(results, run_detail_cycle=run_cycle,
+                                 batch_size=detail_batch_limit(os.environ))
+
+
+def _validation_note(receipts):
+    if not receipts:
+        return ""
+    synced = sum(item["synced_count"] for item in receipts)
+    attempted = sum(item["attempted_count"] for item in receipts)
+    complete_sku = sum(item["sku_evidence_complete_count"] for item in receipts)
+    incomplete = sum(not item["complete"] for item in receipts)
+    note = f"；同步后逐条核验 {synced} 条，实际详情探测 {attempted} 条，SKU证据完整 {complete_sku} 条"
+    return note + (f"；{incomplete} 个批次仍等待核验租约释放" if incomplete else "")
 
 def sources():
     with connect() as db:
@@ -17,17 +39,25 @@ def sources():
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id
                                AND s.enabled=1 AND s.status='healthy'
                                AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                               AND e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
+                               AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
+                                    OR (s.method='taobao_alliance' AND e.published_at IS NULL))
                                AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')) recent_count,
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at IS NULL) unknown_count,
                              (SELECT COUNT(*) FROM events e WHERE e.source_id=s.id AND e.published_at>CURRENT_TIMESTAMP) future_count
                              FROM sources s ORDER BY s.enabled DESC,s.id""").fetchall()
         metrics = current_source_yield(db)
+        scan_runs = {row['source_id']: dict(row) for row in db.execute("""SELECT r.* FROM source_scan_runs r
+            WHERE r.id=(SELECT MAX(recent.id) FROM source_scan_runs recent WHERE recent.source_id=r.source_id)""") }
+        for run in scan_runs.values():
+            try:
+                run['report'] = json.loads(run['evidence_json'])
+            except (TypeError, ValueError):
+                run['report'] = {}
         candidates = db.execute("""SELECT * FROM source_candidates
             ORDER BY CASE state WHEN 'validated' THEN 0 WHEN 'discovered' THEN 1
                        WHEN 'failed' THEN 2 WHEN 'rejected' THEN 3 ELSE 4 END,
                      updated_at DESC,id DESC""").fetchall()
-    return render_template("sources.html", rows=rows, candidates=candidates, metrics=metrics)
+    return render_template("sources.html", rows=rows, candidates=candidates, metrics=metrics, scan_runs=scan_runs)
 
 def source_candidates_refresh():
     try:
@@ -58,9 +88,11 @@ def source_candidates_bulk():
         else:
             source_ids = [promote_channel_candidate(candidate_id) for candidate_id in ids]
             outcomes = [scan_source(source_id) for source_id in source_ids]
+            receipts = _complete_taobao_syncs(outcomes)
             healthy = sum(item["status"] == "healthy" for item in outcomes)
             flash(f"已接入 {len(source_ids)} 个渠道并立即采集；正常 {healthy} 个，"
-                  f"新增 {sum(item['new'] for item in outcomes)} 条", "ok" if healthy == len(outcomes) else "error")
+                  f"新增 {sum(item['new'] for item in outcomes)} 条" + _validation_note(receipts),
+                  "ok" if healthy == len(outcomes) else "error")
     except Exception as exc:
         flash(str(exc)[:300], "error")
     return go("sources")
@@ -71,21 +103,24 @@ def source_add():
     category = request.form.get("category", "").strip()
     url = request.form.get("url", "").strip()
     method = request.form.get("method", "manual")
-    parser = request.form.get("parser", "") if method == "html" else ""
+    parser = (request.form.get("parser", "") if method == "html"
+              else "taobao_alliance" if method == "taobao_alliance" else "")
     parser_hosts = {"smzdm": "www.smzdm.com", "apple": "www.apple.com.cn",
                     "mi": "www.mi.com", "ccgp": "www.ccgp.gov.cn",
                     "yiwugo": "www.yiwugo.com", "kongfz": "book.kongfz.com",
                     "suning": "www.suning.com", "lenovo": "www.lenovo.com.cn",
                     "honor": "www.honor.com"}
-    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "rsshub", "goofish", "html", "xianbao"):
+    if not all((platform, name, category)) or method not in ("manual", "monitor", "rss", "rsshub", "goofish", "html", "xianbao", "taobao_alliance"):
         flash("来源信息不完整", "error")
         return go("sources")
     try:
         interval = int(request.form.get("interval_minutes", "60"))
-        minimum = 1 if method=='xianbao' else 5
+        minimum = 1 if method=='xianbao' else 15 if method=='taobao_alliance' else 5
         if not minimum <= interval <= 1440:
             raise ValueError(f"检查间隔须在 {minimum} 到 1440 分钟之间")
-        if method == 'xianbao':
+        if method == 'taobao_alliance':
+            validate_taobao_alliance_url(url)
+        elif method == 'xianbao':
             validate_xianbao_url(url)
         elif method == "rsshub":
             _local_adapter_url(url, os.environ.get("RSSHUB_BASE", "http://127.0.0.1:1200"), "/")
@@ -93,7 +128,7 @@ def source_add():
             _local_adapter_url(url, os.environ.get("GOOFISH_BASE", "http://127.0.0.1:8000"), "/api/results/")
             if not urlparse(url).path.endswith(".jsonl"):
                 raise ValueError("闲鱼结果地址须以 .jsonl 结尾")
-        else:
+        elif method != 'taobao_alliance':
             _public_url(url)
         if method == "html" and (parser not in parser_hosts or urlparse(url).hostname != parser_hosts[parser]):
             raise ValueError("公开网页解析须选择与入口域名一致的已适配站点")
@@ -115,9 +150,13 @@ def source_add():
             db.execute("""INSERT INTO sources
                 (platform,name,category,url,method,parser,watch_uuid,status,enabled,interval_minutes)
                 VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (platform,name,category,url,method,parser,watch_uuid,"pending" if method != "manual" else "manual",
+                (platform,name,category,url,method,parser,watch_uuid,
+                 "not_configured" if method == "taobao_alliance" and taobao_alliance_configuration_error() else "pending" if method != "manual" else "manual",
                  int(method != "manual"),interval))
-        flash("来源已保存", "ok")
+        if method == "taobao_alliance" and taobao_alliance_configuration_error():
+            flash("来源入口已保存，但尚未连接：" + taobao_alliance_configuration_error(), "error")
+        else:
+            flash("来源已保存", "ok")
     except Exception as exc:
         flash("来源保存失败：" + str(exc)[:180], "error")
     return go("sources")
@@ -148,7 +187,8 @@ def source_bulk():
                     raise ValueError("请先启用所选渠道，再批量检查")
             elif action == "interval":
                 interval = int(request.form.get("interval_minutes", ""))
-                minimum = 1 if all(row['method']=='xianbao' for row in rows) else 5
+                minimum = (1 if all(row['method']=='xianbao' for row in rows)
+                           else 15 if any(row['method']=='taobao_alliance' for row in rows) else 5)
                 if not minimum <= interval <= 1440:
                     raise ValueError(f"检查间隔须在 {minimum} 到 1440 分钟之间")
                 db.execute(f"UPDATE sources SET interval_minutes=? WHERE id IN ({placeholders})", [interval, *ids])
@@ -158,9 +198,12 @@ def source_bulk():
                 db.execute(f"UPDATE sources SET enabled=0,status='paused' WHERE id IN ({placeholders})", ids)
         if action == "scan":
             results = [scan_source(source_id) for source_id in ids]
+            receipts = _complete_taobao_syncs(results)
             healthy = sum(result["status"] == "healthy" for result in results)
             flash(f"已检查 {len(results)} 个渠道；正常 {healthy} 个，新增 {sum(result['new'] for result in results)} 条" ,
                   "ok" if healthy == len(results) else "error")
+            if receipts:
+                flash("淘宝官方来源" + _validation_note(receipts).lstrip("；"), "ok")
         else:
             label = {"enable": "启用", "pause": "暂停", "interval": "更新频率"}[action]
             flash(f"已批量{label} {len(ids)} 个渠道", "ok")
@@ -174,7 +217,7 @@ def source_interval(source_id):
         with connect() as db:
             source = db.execute('SELECT method FROM sources WHERE id=?',(source_id,)).fetchone()
             if source is None:raise ValueError('来源不存在')
-            minimum = 1 if source['method']=='xianbao' else 5
+            minimum = 1 if source['method']=='xianbao' else 15 if source['method']=='taobao_alliance' else 5
             if not minimum <= interval <= 1440:raise ValueError(f'检查间隔须在 {minimum} 到 1440 分钟之间')
             db.execute("UPDATE sources SET interval_minutes=? WHERE id=?", (interval,source_id))
         flash("检查间隔已更新", "ok")
@@ -185,9 +228,11 @@ def source_interval(source_id):
 def scan_one(source_id):
     try:
         outcome = scan_source(source_id)
+        receipts = _complete_taobao_syncs([outcome])
         flash(f"检查结果：{outcome['status']}；本次新增 {outcome['new']} 条" +
               ("；首次采集为基线" if outcome.get("baseline") else "") +
-              ("；" + outcome["error"] if outcome.get("error") else ""),
+              ("；" + outcome["error"] if outcome.get("error") else "") +
+              _validation_note(receipts),
               "ok" if outcome["status"] == "healthy" else "error")
     except Exception as exc:
         flash(str(exc), "error")
@@ -195,7 +240,9 @@ def scan_one(source_id):
 
 def scan_everything():
     results = scan_all()
-    flash(f"检查 {len(results)} 个来源；成功 {sum(x['status']=='healthy' for x in results)} 个；新增 {sum(x['new'] for x in results)} 条", "ok")
+    receipts = _complete_taobao_syncs(results)
+    flash(f"检查 {len(results)} 个来源；成功 {sum(x['status']=='healthy' for x in results)} 个；新增 {sum(x['new'] for x in results)} 条" +
+          _validation_note(receipts), "ok")
     return go("sources")
 
 def register(app):

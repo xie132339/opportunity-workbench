@@ -7,6 +7,7 @@ from offer import TOPIC_LABELS, product_subcategory
 from pricing import public_market_profit
 from scanner import strategy_matches
 from services.money import COST_FIELDS, money
+from services.public_campaign import china_label
 
 RECENT_WINDOW = timedelta(hours=2)
 CHECKOUT_WINDOW = timedelta(minutes=15)
@@ -79,7 +80,15 @@ def public_profit_estimate(opp, quotes, brief, review, mode='sold'):
         except (TypeError, ValueError):
             detail = {}
     total = brief.get('total_cents')
-    spec = (brief.get('selected_spec') or detail.get('specification')
+    if detail.get('evidence_kind') == 'taobao_alliance_sku_detail' and not detail.get('specification_comparable', True):
+        return dict(mode=mode, mode_label={'sold':'保守成交模式','listing':'挂牌参考模式'}[mode],
+                    amount_cents=None,
+                    reason='官方已绑定唯一 SKU 的当前价格，但未返回规格属性，不能与其他商品作同款或捡漏比较。',
+                    market_cents=None, buy_cents=total, costs_cents=0, missing_costs=[],
+                    category_large=TOPIC_LABELS.get(opp['topic'], opp['category']),
+                    category_small=product_subcategory(brief.get('title') or opp['title'], opp['topic']),
+                    category_note='大类/小类只用于整理；缺少可比规格时不生成市场基准。')
+    spec = (brief.get('selected_spec') or detail.get('comparison_specification')
             or (review['specification'] if review else '') or opp['specification'])
     shipping = brief.get('audit', {}).get('plan', {}).get('shipping_cents')
     estimate = public_market_profit(opp, quotes, total, spec, mode, shipping)
@@ -111,6 +120,9 @@ def freshness_state(opp):
     seen = utc(opp["last_seen_at"])
     if not checked or not seen or not (timedelta(0) <= now - checked <= max_lag and timedelta(0) <= now - seen <= max_lag):
         return "source_stale"
+    if opp["source_method"] == "taobao_alliance":
+        # Official search is a live observation, not a publisher's dated post.
+        return "current"
     published = utc(opp["published_at"])
     if not published:
         return "unknown"
@@ -121,6 +133,17 @@ def freshness_state(opp):
     return "current"
 
 def freshness_label(opp):
+    auto_state = opp["auto_state"] if "auto_state" in opp.keys() else None
+    if auto_state in ("campaign_upcoming", "campaign_active"):
+        phase = "众筹尚未开始" if auto_state == "campaign_upcoming" else "众筹活动进行中"
+        start = opp["campaign_start_at"] if "campaign_start_at" in opp.keys() else None
+        end = opp["campaign_end_at"] if "campaign_end_at" in opp.keys() else None
+        if start and end:
+            return f"{phase} · 计划档期 {china_label(datetime.fromisoformat(start))} 至 {china_label(datetime.fromisoformat(end))}（非发布时间）"
+        return f"{phase} · 档期来自来源文案（非发布时间）"
+    if opp["source_method"] == "taobao_alliance":
+        return ("联盟接口最近采集，来源仍在更新" if freshness_state(opp) == "current"
+                else "联盟接口采集已超时或来源不可用")
     return {"current": "原文近 2 小时且来源仍在更新", "unknown": "原文时间未知，须核实",
             "future": "原文时间晚于当前，须核实", "old": "原文超过 2 小时",
             "source_stale": "来源或条目检查已超时"}.get(freshness_state(opp), "时效未知")

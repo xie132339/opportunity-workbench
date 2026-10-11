@@ -18,6 +18,9 @@ import requests
 from db import connect
 from offer import detected_offer_type, resource_kind, resource_topic
 from xianbao import fetch_rows as xianbao_rows
+from services.taobao_alliance import (
+    TaobaoAllianceConfigurationError, fetch_rows as taobao_alliance_rows,
+)
 
 USER_AGENT = "OpportunityWorkbench/0.1 (personal low-frequency public-source research)"
 FAILED_SOURCE_RETRY_MINUTES = 15
@@ -339,6 +342,26 @@ def scan_source(source_id, *, review=True):
         prior = db.execute("SELECT COUNT(*) FROM events WHERE source_id=?", (source_id,)).fetchone()[0]
         db.execute("UPDATE sources SET last_checked=CURRENT_TIMESTAMP WHERE id=?", (source_id,))
 
+    scan_report = {}
+    run_id = None
+    if source["method"] == "taobao_alliance":
+        with connect() as db:
+            run_id = db.execute("INSERT INTO source_scan_runs(source_id) VALUES(?)", (source_id,)).lastrowid
+
+    def save_scan_run(status, error_code=None, connection=None):
+        if run_id is None:
+            return
+        if connection is None:
+            with connect() as conn:
+                save_scan_run(status, error_code, connection=conn)
+            return
+        connection.execute("""UPDATE source_scan_runs SET
+            finished_at=CASE WHEN ?='parsed' THEN NULL ELSE CURRENT_TIMESTAMP END,status=?,
+            raw_count=?,parsed_count=?,promotion_count=?,rejected_count=?,evidence_json=?,error_code=? WHERE id=?""",
+            (status, status, scan_report.get('raw_count'), scan_report.get('parsed_count'),
+             scan_report.get('promotion_count'), scan_report.get('rejected_count'),
+             json.dumps(scan_report, ensure_ascii=False), error_code or scan_report.get('error_code'), run_id))
+
     try:
         if source["method"] == "monitor":
             records = _monitor_rows(source)
@@ -350,6 +373,8 @@ def scan_source(source_id, *, review=True):
             records = _goofish_rows(source["url"])
         elif source["method"] == "xianbao":
             records = xianbao_rows(source['url'])
+        elif source["method"] == "taobao_alliance":
+            records = taobao_alliance_rows(source['url'], report=scan_report)
         elif source["method"] == "html":
             html = _fetch(source["url"])
             records = []
@@ -359,69 +384,111 @@ def scan_source(source_id, *, review=True):
                 records.append((url, title, url, snippet, published_at, metadata))
         else:
             raise RuntimeError("此来源仅支持人工录入")
-        if not records and source["method"] == "monitor" and prior:
+        if ((not records and source["method"] == "monitor" and prior)
+                or (not records and source["method"] == "taobao_alliance")):
+            empty_status = "healthy"
+            if source["method"] == "taobao_alliance":
+                empty_status = "partial" if scan_report.get("status") == "partial" else "empty"
             with connect() as db:
-                db.execute("""UPDATE sources SET status='healthy',last_success=CURRENT_TIMESTAMP,
-                    last_error=NULL WHERE id=?""", (source_id,))
-            return {"source_id": source_id, "status": "healthy", "new": 0,
-                    "baseline": False, "seen": 0}
+                save_scan_run(scan_report.get('status', 'complete'), connection=db)
+                db.execute("""UPDATE sources SET status=?,last_success=CURRENT_TIMESTAMP,
+                    last_error=NULL WHERE id=?""", (empty_status, source_id))
+            return {"source_id": source_id, "status": empty_status, "new": 0,
+                    "baseline": prior == 0 if source["method"] == "taobao_alliance" else False,
+                    "seen": 0, "run_id": run_id,
+                    "opportunity_ids": [], "new_opportunity_ids": [],
+                    "collection_status": scan_report.get('status', 'complete'),
+                    "message": ("本轮未形成可解析报价；空集合、拒绝原因或分页失败见采集明细"
+                                if source["method"] == "taobao_alliance" else "")}
         if not records:
             raise RuntimeError("页面可访问，但当前适配器未提取到符合条件的条目")
     except Exception as exc:
-        status = "login_required" if isinstance(exc, PermissionError) else "failed"
+        save_scan_run('failed', getattr(exc, 'code', type(exc).__name__))
+        status = ("not_configured" if isinstance(exc, TaobaoAllianceConfigurationError)
+                  else "login_required" if isinstance(exc, PermissionError) else "failed")
         with connect() as db:
             db.execute("UPDATE sources SET status=?,last_error=? WHERE id=?",
                        (status, str(exc)[:400], source_id))
         if review:
             from autoreview import review_all
             review_all()
-        return {"source_id": source_id, "status": status, "new": 0, "error": str(exc)[:400]}
+        return {"source_id": source_id, "status": status, "new": 0,
+                "opportunity_ids": [], "new_opportunity_ids": [], "error": str(exc)[:400]}
 
+    save_scan_run('parsed')
     added = 0
-    with connect() as db:
-        for record in records:
-            key, title, url, snippet = record[:4]
-            published_at = record[4] if len(record) > 4 else None
-            metadata = record[5] if len(record)>5 else {}
-            encoded = json.dumps(metadata,ensure_ascii=False,sort_keys=True)
-            digest = hashlib.sha256((title + "\n" + snippet + (encoded if metadata else '')).encode()).hexdigest()
-            result = db.execute("""INSERT OR IGNORE INTO events
-                (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at,metadata_json)
-                VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)""",
-                (source_id,key,title,url,snippet,digest,published_at,int(prior == 0),encoded))
-            if not result.rowcount:
-                db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
-                    published_at=COALESCE(?,published_at)
-                    WHERE source_id=? AND external_key=? AND fingerprint=?""",
-                    (published_at,source_id,key,digest))
-                continue
-            added += 1
-            opp = db.execute("""INSERT INTO opportunities
-                (event_id,source_id,title,category,url,offer_type,resource_kind,topic) VALUES(?,?,?,?,?,?,?,?)""",
-                (result.lastrowid, source_id, title, source["category"], url, detected_offer_type(title),
-                 resource_kind(title,snippet),resource_topic(title,metadata.get('source_category',''))))
-            recent_publication = False
-            if published_at:
-                published = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                age = datetime.now(timezone.utc) - published
-                recent_publication = timedelta(0) <= age <= timedelta(hours=2)
-            if prior and recent_publication and _passes_strategy(db, title, source["category"]):
-                db.execute("""INSERT OR IGNORE INTO notifications
-                    (event_id,opportunity_id) VALUES(?,?)""",
-                    (result.lastrowid, opp.lastrowid))
-        db.execute("""UPDATE sources SET status='healthy',last_success=CURRENT_TIMESTAMP,
-            last_error=NULL WHERE id=?""", (source_id,))
+    opportunity_ids = []
+    new_opportunity_ids = []
+    try:
+        with connect() as db:
+            for record in records:
+                key, title, url, snippet = record[:4]
+                published_at = record[4] if len(record) > 4 else None
+                metadata = record[5] if len(record)>5 else {}
+                encoded = json.dumps(metadata,ensure_ascii=False,sort_keys=True)
+                digest = hashlib.sha256((title + "\n" + snippet + (encoded if metadata else '')).encode()).hexdigest()
+                result = db.execute("""INSERT OR IGNORE INTO events
+                    (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at,metadata_json)
+                    VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)""",
+                    (source_id,key,title,url,snippet,digest,published_at,int(prior == 0),encoded))
+                if not result.rowcount:
+                    db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
+                        published_at=COALESCE(?,published_at)
+                        WHERE source_id=? AND external_key=? AND fingerprint=?""",
+                        (published_at,source_id,key,digest))
+                    existing_event = db.execute("""SELECT id FROM events
+                        WHERE source_id=? AND external_key=? AND fingerprint=?""",
+                        (source_id, key, digest)).fetchone()
+                    if existing_event:
+                        existing_opportunity = db.execute("SELECT id FROM opportunities WHERE event_id=?",
+                                                          (existing_event["id"],)).fetchone()
+                        if existing_opportunity:
+                            opportunity_ids.append(existing_opportunity["id"])
+                    continue
+                added += 1
+                opp = db.execute("""INSERT INTO opportunities
+                    (event_id,source_id,title,category,url,offer_type,resource_kind,topic) VALUES(?,?,?,?,?,?,?,?)""",
+                    (result.lastrowid, source_id, title, source["category"], url, detected_offer_type(title),
+                     "purchase" if source["method"] == "taobao_alliance" else resource_kind(title,snippet),
+                     resource_topic(title,metadata.get('source_category',''))))
+                opportunity_ids.append(opp.lastrowid)
+                new_opportunity_ids.append(opp.lastrowid)
+                recent_publication = False
+                if published_at:
+                    published = datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                    age = datetime.now(timezone.utc) - published
+                    recent_publication = timedelta(0) <= age <= timedelta(hours=2)
+                if prior and recent_publication and _passes_strategy(db, title, source["category"]):
+                    db.execute("""INSERT OR IGNORE INTO notifications
+                        (event_id,opportunity_id) VALUES(?,?)""",
+                        (result.lastrowid, opp.lastrowid))
+            db.execute("""UPDATE sources SET status='healthy',last_success=CURRENT_TIMESTAMP,
+                last_error=NULL WHERE id=?""", (source_id,))
+            save_scan_run(scan_report.get('status', 'complete'), connection=db)
+    except Exception as exc:
+        save_scan_run('failed', getattr(exc, 'code', type(exc).__name__))
+        with connect() as db:
+            db.execute("UPDATE sources SET status='failed',last_error=? WHERE id=?",
+                       ("采集数据保存失败（" + type(exc).__name__ + "）", source_id))
+        raise
     if review:
         from autoreview import review_all
         review_all()
     return {"source_id": source_id, "status": "healthy", "new": added,
-            "baseline": prior == 0, "seen": len(records)}
+            "baseline": prior == 0, "seen": len(records),
+            "run_id": run_id,
+            "opportunity_ids": list(dict.fromkeys(opportunity_ids)),
+            "new_opportunity_ids": new_opportunity_ids,
+            "collection_status": scan_report.get('status', 'complete')}
 
 
-def scan_all(due_only=False):
+def scan_all(due_only=False, method=None):
     with connect() as db:
         sql = "SELECT id FROM sources WHERE enabled=1 AND method!='manual'"
         params = []
+        if method is not None:
+            sql += " AND method=?"
+            params.append(method)
         if due_only:
             sql += """ AND (last_checked IS NULL OR
                 (status='healthy' AND datetime(last_checked, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP) OR

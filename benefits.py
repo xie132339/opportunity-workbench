@@ -10,8 +10,21 @@ from offer import resource_kind,RESOURCE_LABELS
 from link_resolution import supported,activity_target,canonical_target,resolve,enrich,resolution_cache
 from comparison import merchant_identity
 from services.benefit_claims import PARSER_VERSION as BENEFIT_CLAIM_PARSER_VERSION,parse_discount_claims
+from services.public_campaign import campaign_state, parse_public_campaign
 
 KINDS={'coupon','points','trial','campaign','free_claim','lottery'}
+_ACTIVE_RESOURCE_ORIGIN = """(br.source_type IN ('user_supplied','manual')
+    OR br.source_type LIKE 'authorized_api:%'
+    OR EXISTS (SELECT 1 FROM benefit_resource_sources brs
+        JOIN opportunities origin_opp ON origin_opp.id=brs.source_opportunity_id
+        JOIN sources origin_source ON origin_source.id=origin_opp.source_id
+        WHERE brs.resource_id=br.id AND (origin_source.enabled=1 OR origin_source.method='manual')))"""
+_ACTIVE_SOURCE_LINK = """(brs.source_type IN ('user_supplied','manual')
+    OR brs.source_type LIKE 'authorized_api:%'
+    OR EXISTS (SELECT 1 FROM opportunities origin_opp
+        JOIN sources origin_source ON origin_source.id=origin_opp.source_id
+        WHERE origin_opp.id=brs.source_opportunity_id
+          AND (origin_source.enabled=1 OR origin_source.method='manual')))"""
 SHORT_HOSTS={'m.tb.cn','tb3.cn','s.click.taobao.com','p.pinduoduo.com','kurl07.cn','163cn.tv','m.duanqu.com'}
 
 
@@ -235,7 +248,9 @@ def sync():
     with connect() as c:
         rows=c.execute('''SELECT o.id,o.title,o.url,e.snippet,e.metadata_json,e.published_at,e.last_seen_at,a.detail_json
             FROM opportunities o JOIN events e ON e.id=o.event_id
+            JOIN sources s ON s.id=o.source_id
             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+            WHERE s.enabled=1 OR s.method='manual'
             ORDER BY o.id DESC''').fetchall()
     added=0
     for r in rows:
@@ -333,9 +348,9 @@ def inspect_page(target):
 def run_cycle(limit=4):
     sync()
     reclassify()
-    with connect() as c:rows=c.execute("""SELECT * FROM benefit_resources
-        WHERE state IN ('pending','activity','retry','blocked','unresolved')
-          AND (next_check_at IS NULL OR next_check_at<=CURRENT_TIMESTAMP)
+    with connect() as c:rows=c.execute(f"""SELECT br.* FROM benefit_resources br
+        WHERE {_ACTIVE_RESOURCE_ORIGIN} AND br.state IN ('pending','activity','retry','blocked','unresolved')
+          AND (br.next_check_at IS NULL OR br.next_check_at<=CURRENT_TIMESTAMP)
         ORDER BY source_type='user_supplied' DESC,next_check_at IS NOT NULL,next_check_at,id LIMIT ?""",(limit,)).fetchall()
     counts={}
     for r in rows:
@@ -366,17 +381,76 @@ def run_cycle(limit=4):
                  next_check.strftime('%Y-%m-%d %H:%M:%S') if next_check else None,r['id']))
     return counts
 
-def listing(c,query='',kind='',limit=100,offset=0):
-    rows=c.execute('''SELECT br.* FROM benefit_resources br WHERE br.state NOT IN ('product','non_benefit')
+def listing(c,query='',kind='',limit=100,offset=0,current_only=False):
+    sql=f'''SELECT br.* FROM benefit_resources br WHERE br.state NOT IN ('product','non_benefit')
+        AND {_ACTIVE_RESOURCE_ORIGIN}
         AND (?='' OR br.title LIKE ? OR br.origin_text LIKE ?) AND (?='' OR br.kind=?)
         ORDER BY br.source_type='user_supplied' DESC,CASE WHEN br.source_type='user_supplied' THEN br.id END ASC,
         COALESCE((SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
             FROM benefit_resource_sources brs
             LEFT JOIN opportunities so ON so.id=brs.source_opportunity_id
             LEFT JOIN events e ON e.id=so.event_id
-            WHERE brs.resource_id=br.id),br.last_seen_at) DESC,br.id DESC
-        LIMIT ? OFFSET ?''',(query,'%'+query+'%','%'+query+'%',kind,kind,limit,offset)).fetchall()
-    return _present(c,rows)
+            LEFT JOIN sources origin_source ON origin_source.id=so.source_id
+            WHERE brs.resource_id=br.id AND (origin_source.enabled=1 OR origin_source.method='manual'
+                OR (so.id IS NULL AND brs.source_type IN ('user_supplied','manual')))),br.last_seen_at) DESC,br.id DESC
+        '''
+    params=(query,'%'+query+'%','%'+query+'%',kind,kind)
+    if not current_only:
+        sql+=' LIMIT ? OFFSET ?'
+        params+=(limit,offset)
+    rows=c.execute(sql,params).fetchall()
+    presented=_present(c,rows)
+    if current_only:
+        now=datetime.now(timezone.utc).replace(tzinfo=None)
+        presented=[row for row in presented if _is_current_benefit(row,now,explicit_kind=bool(kind))]
+        return presented[offset:offset+limit]
+    return presented
+
+
+def _timestamp(value):
+    try:
+        parsed=datetime.fromisoformat(str(value or '').replace('Z','+00:00'))
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (TypeError,ValueError):
+        return None
+
+
+def _is_current_benefit(row,now,explicit_kind=False):
+    """Default ledger admits fresh, dated candidates; source re-reads alone do not renew validity."""
+    if row.get('kind')=='lottery' and not explicit_kind:
+        return False
+    source_text='\n'.join(filter(None,[row.get('title'),row.get('origin_text')]))
+    campaign=parse_public_campaign(source_text)
+    if campaign:
+        phase=campaign_state(campaign,now)
+        if phase not in ('active','upcoming'):
+            return False
+        # A purchase crowdfunding tier belongs in product search, not the
+        # independent coupon/benefit ledger.
+        if row.get('kind') in ('purchase','pending'):
+            return False
+        sources=row.get('sources') or []
+        return any(_fresh_benefit_source(source,now) for source in sources)
+    if row.get('source_type') in ('user_supplied','manual') or str(row.get('source_type') or '').startswith('authorized_api:'):
+        seen=_timestamp(row.get('last_seen_at'))
+        return bool(seen and timedelta(0)<=now-seen<=timedelta(hours=2))
+    return any(_fresh_benefit_source(source,now,require_recent_post=True)
+               for source in (row.get('sources') or []))
+
+
+def _fresh_benefit_source(source,now,require_recent_post=False):
+    if not source.get('enabled') or source.get('status')!='healthy':
+        return False
+    interval=source.get('interval_minutes')
+    try:ttl=timedelta(minutes=min(2*int(interval)+15,120))
+    except (TypeError,ValueError):ttl=timedelta(minutes=60)
+    seen,success=_timestamp(source.get('source_last_seen_at')),_timestamp(source.get('last_success'))
+    if not seen or not success or not (timedelta(0)<=now-seen<=ttl and timedelta(0)<=now-success<=ttl):
+        return False
+    if not require_recent_post:
+        return True
+    published=_timestamp(source.get('source_published_at'))
+    return bool(published and timedelta(0)<=now-published<=timedelta(hours=2))
 
 
 def _present(c,rows):
@@ -390,16 +464,20 @@ def _present(c,rows):
         url_marks=','.join('?' for _ in urls)
         observations={r['resource_url']:dict(r) for r in c.execute(
             f'SELECT * FROM benefit_observations WHERE resource_url IN ({url_marks}) ORDER BY checked_at,id',urls)}
-    source_rows=c.execute(f'''SELECT brs.*,s.platform,s.name,
+    source_rows=c.execute(f'''SELECT brs.*,s.platform,s.name,s.status,s.enabled,s.method,s.interval_minutes,s.last_success,
+        e.published_at AS source_published_at,
         COALESCE(e.last_seen_at,brs.last_seen_at) AS source_last_seen_at
         FROM benefit_resource_sources brs
         LEFT JOIN opportunities o ON o.id=brs.source_opportunity_id
         LEFT JOIN events e ON e.id=o.event_id
         LEFT JOIN sources s ON s.id=o.source_id
-        WHERE brs.resource_id IN ({marks}) ORDER BY source_last_seen_at DESC,brs.id DESC''',resource_ids).fetchall()
+        WHERE brs.resource_id IN ({marks}) AND {_ACTIVE_SOURCE_LINK}
+        ORDER BY source_last_seen_at DESC,brs.id DESC''',resource_ids).fetchall()
     sources={}
     for row in source_rows:sources.setdefault(row['resource_id'],[]).append(dict(row))
-    relation_rows=c.execute(f'SELECT * FROM benefit_product_relations WHERE resource_id IN ({marks}) ORDER BY id',resource_ids).fetchall()
+    relation_rows=c.execute(f'''SELECT r.* FROM benefit_product_relations r
+        JOIN opportunities o ON o.id=r.opportunity_id JOIN sources s ON s.id=o.source_id
+        WHERE r.resource_id IN ({marks}) AND (s.enabled=1 OR s.method='manual') ORDER BY r.id''',resource_ids).fetchall()
     relations={}
     for row in relation_rows:relations.setdefault(row['resource_id'],[]).append(dict(row))
     result=[];now=datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -460,8 +538,15 @@ def _present(c,rows):
 
 
 def stats(c):
-    counts=dict(c.execute('SELECT state,COUNT(*) FROM benefit_resources GROUP BY state').fetchall())
-    relations=dict(c.execute('SELECT state,COUNT(*) FROM benefit_product_relations GROUP BY state').fetchall())
+    counts=dict(c.execute(f'''SELECT br.state,COUNT(*) FROM benefit_resources br
+        WHERE {_ACTIVE_RESOURCE_ORIGIN} GROUP BY br.state''').fetchall())
+    relations=dict(c.execute(f'''SELECT r.state,COUNT(*) FROM benefit_product_relations r
+        JOIN benefit_resources br ON br.id=r.resource_id
+        JOIN opportunities o ON o.id=r.opportunity_id JOIN sources s ON s.id=o.source_id
+        WHERE (s.enabled=1 OR s.method='manual') AND {_ACTIVE_RESOURCE_ORIGIN}
+        GROUP BY r.state''').fetchall())
+    sources=c.execute(f'''SELECT COUNT(*) FROM benefit_resource_sources brs
+        WHERE {_ACTIVE_SOURCE_LINK}''').fetchone()[0]
     return dict(discovered=sum(counts.values()),
                 total=sum(v for k,v in counts.items() if k not in ('product','non_benefit')),
                 activity=counts.get('activity',0),
@@ -470,7 +555,7 @@ def stats(c):
                 non_benefit=counts.get('non_benefit',0),
                 confirmed_relations=relations.get('confirmed',0),
                 source_linked_relations=relations.get('source_linked',0),
-                sources=c.execute('SELECT COUNT(*) FROM benefit_resource_sources').fetchone()[0])
+                sources=sources)
 
 
 def related(c,opportunity_id):
@@ -479,11 +564,14 @@ def related(c,opportunity_id):
     This is provenance, not merchant confirmation that the benefit applies.
     Same-platform or keyword similarity is deliberately insufficient.
     """
-    rows=c.execute('''SELECT br.*,r.state AS relation_state,r.basis AS relation_basis,
+    rows=c.execute(f'''SELECT br.*,r.state AS relation_state,r.basis AS relation_basis,
         r.evidence_url AS relation_evidence_url,r.checked_at AS relation_checked_at,
         r.valid_until AS relation_valid_until,r.stackable AS relation_stackable
         FROM benefit_resources br JOIN benefit_product_relations r ON r.resource_id=br.id
-        WHERE r.opportunity_id=? AND br.state NOT IN ('product','non_benefit')
+        JOIN opportunities origin_opp ON origin_opp.id=r.opportunity_id
+        JOIN sources origin_source ON origin_source.id=origin_opp.source_id
+        WHERE r.opportunity_id=? AND (origin_source.enabled=1 OR origin_source.method='manual')
+          AND {_ACTIVE_RESOURCE_ORIGIN} AND br.state NOT IN ('product','non_benefit')
           AND br.kind IN ('pending','coupon','points','trial','campaign','free_claim','lottery')
         ORDER BY COALESCE((SELECT MAX(COALESCE(e.last_seen_at,brs.last_seen_at))
             FROM benefit_resource_sources brs

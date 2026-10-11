@@ -73,10 +73,10 @@ class XianbaoTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT state FROM auto_reviews WHERE opportunity_id=2").fetchone()[0],'excluded')
             self.assertEqual(c.execute('SELECT count(*) FROM buy_checks').fetchone()[0],0)
         with app.test_client() as client:
-            current=client.get('/?topic=home&view=current').get_data(as_text=True)
+            current=client.get('/?buy_platform=all&topic=home&view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',current)
             self.assertIn('自动复查排队中',current)
-            self.assertNotIn('洗衣液',client.get('/?topic=food').get_data(as_text=True))
+            self.assertNotIn('洗衣液',client.get('/?buy_platform=all&topic=food').get_data(as_text=True))
             self.assertEqual(client.get('/opportunities/1').status_code,200)
 
     def test_personal_trade_ledger_is_removed_but_external_quotes_remain(self):
@@ -113,8 +113,8 @@ class XianbaoTests(unittest.TestCase):
             review=c.execute('SELECT * FROM auto_reviews').fetchone()
             self.assertEqual(review['state'],'queued');self.assertIsNone(review['advertised_cents'])
         with app.test_client() as client:
-            self.assertNotIn('/opportunities/1',client.get('/?resource=coupon').get_data(as_text=True))
-            self.assertNotIn('100元打车立减券包',client.get('/?resource=free_claim').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&resource=coupon').get_data(as_text=True))
+            self.assertNotIn('100元打车立减券包',client.get('/?buy_platform=all&resource=free_claim').get_data(as_text=True))
 
     def test_scan_all_reclassifies_once_after_the_batch(self):
         with patch('scanner.scan_source', side_effect=lambda source_id, **kwargs:

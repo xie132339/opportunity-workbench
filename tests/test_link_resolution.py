@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch,MagicMock
 from datetime import datetime,timezone,timedelta
 import requests,db
+from bs4 import BeautifulSoup
 from link_resolution import (supported,intermediate_hop,canonical_target,login_return_target,
                              resolve,enrich,run_cycle,probe_resolved_pages)
 from comparison import merchant_identity
@@ -62,11 +63,16 @@ class LinkResolutionTests(unittest.TestCase):
     def test_domestic_short_links_resolve_only_to_product_pages(self):
         targets={
             'https://m.tb.cn/h.AbC123':'https://item.taobao.com/item.htm?id=123',
+            'https://m.tb.cn/h.H5Taobao123':'https://h5.m.taobao.com/awp/core/detail.htm?id=987654&ft=t',
             'https://p.pinduoduo.com/AbC123':'https://mobile.yangkeduo.com/goods.html?goods_id=456',
         }
         for source,target in targets.items():
             with patch('link_resolution.requests.get',return_value=self.response(302,location=target)):
-                self.assertEqual(resolve(source)['target_url'],target)
+                result=resolve(source)
+                expected=canonical_target(target)
+                self.assertEqual(result['target_url'],expected)
+        self.assertEqual(canonical_target('https://h5.m.taobao.com/awp/core/detail.htm?id=987654&ft=t'),
+                         'https://h5.m.taobao.com/awp/core/detail.htm?id=987654')
         self.assertEqual(canonical_target('https://product.suning.com/0000/789.html?track=x'),'https://product.suning.com/0000/789.html')
         self.assertEqual(canonical_target('https://detail.vip.com/detail-12-34.html?pcf=x'),'https://detail.vip.com/detail-12-34.html')
     def test_expired_or_future_cache_not_identity_evidence(self):
@@ -81,6 +87,94 @@ class LinkResolutionTests(unittest.TestCase):
     def test_multiple_resolved_products_stay_ambiguous(self):
         now=datetime.now(timezone.utc);fmt=lambda d:d.strftime('%Y-%m-%d %H:%M:%S');urls=['https://u.jd.com/Abc','https://u.jd.com/Def'];cache={u:dict(state='resolved',target_url=f'https://item.jd.com/{i}.html',checked_at=fmt(now-timedelta(seconds=1)),next_check_at=fmt(now+timedelta(hours=1))) for i,u in enumerate(urls)}
         self.assertTrue(merchant_identity(enrich(dict(id=1,title='两件',metadata_json=json.dumps({'activity_links':urls})),cache))['conflict'])
+
+    def test_direct_product_link_is_available_without_waiting_for_short_link_worker(self):
+        source='https://item.jd.com/123456.html?track=source'
+        row=enrich(dict(id=1,title='原文商品标题',metadata_json=json.dumps({'activity_links':[source]})),{})
+        self.assertEqual(row['product_links'][0]['target_url'],'https://item.jd.com/123456.html')
+        self.assertEqual(row['product_links'][0]['resolution_state'],'direct')
+        self.assertEqual(row['product_links'][0]['label'],'原文商品页链接')
+        with patch('link_resolution.requests.get') as get:
+            self.assertEqual(resolve(source)['target_url'],'https://item.jd.com/123456.html')
+            get.assert_not_called()
+        row=enrich(dict(id=2,title='商城目录商品',url='https://item.jd.com/123456.html',metadata_json='{}'),{})
+        self.assertEqual(row['product_links'][0]['target_url'],'https://item.jd.com/123456.html')
+
+    def test_short_link_action_uses_merchant_target_and_keeps_other_link_types_separate(self):
+        now=datetime.now(timezone.utc);fmt=lambda d:d.strftime('%Y-%m-%d %H:%M:%S')
+        short='https://u.jd.com/Abc';target='https://item.jd.com/123456.html'
+        coupon='https://coupon.m.jd.com/coupons/show.action?key=public'
+        unknown='https://www.douyin.com/video/123'
+        cache={short:dict(state='resolved',target_url=target,checked_at=fmt(now-timedelta(minutes=1)),
+            next_check_at=fmt(now+timedelta(hours=1)),product_page_json=json.dumps({'state':'public_price',
+            'checked_at':fmt(now-timedelta(minutes=1)),'next_check_at':fmt(now+timedelta(hours=1)),
+            'title':'商家商品页真实标题','advertised_cents':1990}))}
+        row=enrich(dict(id=1,title='线报文章标题',metadata_json=json.dumps({'activity_links':[short,coupon,unknown]})),cache)
+        self.assertEqual(len(row['product_links']),1)
+        self.assertEqual(row['product_links'][0]['target_url'],target)
+        self.assertEqual(row['product_links'][0]['label'],'短链已解析到商品页')
+        self.assertEqual(row['product_links'][0]['product_page']['title'],'商家商品页真实标题')
+        self.assertEqual(row['product_links'][0]['title_alignment'],'different')
+        self.assertEqual(row['activity_targets'][0]['url'],coupon)
+        self.assertEqual(row['unclassified_links'][0]['url'],unknown)
+
+    def test_unresolved_purchase_short_link_is_not_mislabeled_as_product(self):
+        now=datetime.now(timezone.utc);fmt=lambda d:d.strftime('%Y-%m-%d %H:%M:%S')
+        url='https://u.jd.com/Abc'
+        cache={url:dict(state='blocked',target_url=None,reason='平台限制访问',
+                        checked_at=fmt(now-timedelta(minutes=1)),next_check_at=fmt(now+timedelta(minutes=30)))}
+        row=enrich(dict(id=1,title='商品',metadata_json=json.dumps({'activity_links':[url]})),cache)
+        self.assertEqual(row['product_links'],[])
+        self.assertEqual(row['pending_purchase_links'][0]['url'],url)
+        self.assertIn('平台限制访问',row['pending_purchase_links'][0]['reason'])
+
+    def test_search_and_detail_offer_direct_product_before_source_article(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'ui.db'):
+            db.initialize()
+            direct='https://item.jd.com/123456.html?track=source'
+            with db.connect() as c:
+                source=c.execute('''INSERT INTO sources(platform,name,category,url,method,status,enabled)
+                    VALUES('线报酷','公开线报','零售优惠','https://new.ixbk.net/push/json','rss','healthy',1)''').lastrowid
+                event=c.execute('''INSERT INTO events(source_id,external_key,title,url,snippet,metadata_json,fingerprint,published_at)
+                    VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)''',(source,'post-1','纸巾限时优惠','https://new.ixbk.net/weibo/1.html',
+                    '商品线索',json.dumps({'activity_links':[direct]}),'post-1')).lastrowid
+                opportunity=c.execute('''INSERT INTO opportunities(event_id,source_id,title,category,url)
+                    VALUES(?,?,?,?,?)''',(event,source,'纸巾限时优惠','零售优惠','https://new.ixbk.net/weibo/1.html')).lastrowid
+            from app import app
+            client=app.test_client()
+            listing=BeautifulSoup(client.get('/?buy_platform=all&view=all').get_data(as_text=True),'html.parser')
+            actions=listing.select_one('td[data-label="操作"]')
+            self.assertIsNotNone(actions)
+            self.assertEqual([a.get_text(' ',strip=True) for a in actions.select('a')],
+                             ['打开商品 ↗','详情','来源原文 ↗'])
+            self.assertEqual(actions.select_one('a.direct-product-link')['href'],'https://item.jd.com/123456.html')
+            detail=BeautifulSoup(client.get(f'/opportunities/{opportunity}').get_data(as_text=True),'html.parser')
+            direct_action=detail.select_one('.product-entry-actions a.direct-product-link')
+            self.assertEqual(direct_action['href'],'https://item.jd.com/123456.html')
+            self.assertIn('查看采集来源原文',detail.get_text(' ',strip=True))
+
+    def test_worker_schedules_direct_merchant_product_page_probe(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'direct.db'):
+            db.initialize()
+            now=datetime.now(timezone.utc).replace(tzinfo=None)
+            direct='https://item.jd.com/123456.html'
+            with db.connect() as c:
+                source_id=c.execute('''INSERT INTO sources(platform,name,category,url,method,enabled)
+                    VALUES('京东','test','test','https://example.com/feed','rss',1)''').lastrowid
+                event_id=c.execute('''INSERT INTO events(source_id,external_key,title,url,metadata_json,fingerprint,published_at)
+                    VALUES(?,?,?,?,?,?,?)''',(source_id,'direct','商品线索','https://example.com/post',
+                    '{}','direct',now.strftime('%Y-%m-%d %H:%M:%S'))).lastrowid
+                c.execute('INSERT INTO opportunities(event_id,source_id,title,category,url) VALUES(?,?,?,?,?)',
+                          (event_id,source_id,'商品线索','test',direct))
+            page=dict(state='public_price',checked_at=now.strftime('%Y-%m-%d %H:%M:%S'),
+                      next_check_at='2099-01-01 00:00:00',title='真实商品页标题',advertised_cents=1990)
+            with patch('link_resolution.inspect_product_page',return_value=page) as probe:
+                self.assertEqual(run_cycle(limit=1),{'resolved':1,'product_page_public_price':1})
+                self.assertEqual(probe.call_args.args[0],direct)
+            with db.connect() as c:
+                saved=c.execute('SELECT target_url,state FROM link_resolutions WHERE url=?',(direct,)).fetchone()
+            self.assertEqual(tuple(saved),(direct,'resolved'))
+
     def test_worker_cache_prevents_repeat_requests(self):
         with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'test.db'):
             db.initialize()
@@ -119,6 +213,27 @@ class LinkResolutionTests(unittest.TestCase):
             with patch('link_resolution.resolve',side_effect=unresolved):
                 self.assertEqual(run_cycle(limit=1),{'unresolved':1})
             self.assertEqual(calls,[older])
+
+    def test_worker_does_not_probe_cached_pages_from_paused_sources(self):
+        with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'paused.db'):
+            db.initialize()
+            now=datetime.now(timezone.utc)
+            stamp=lambda value:value.strftime('%Y-%m-%d %H:%M:%S')
+            source='https://u.jd.com/Paused001';target='https://item.jd.com/987654321.html'
+            with db.connect() as c:
+                source_id=c.execute('''INSERT INTO sources(platform,name,category,url,method,enabled,status)
+                    VALUES('已暂停来源','test','test','https://aggregator.example/feed','rss',0,'healthy')''').lastrowid
+                event_id=c.execute('''INSERT INTO events(source_id,external_key,title,url,metadata_json,fingerprint,published_at)
+                    VALUES(?,?,?,?,?,?,?)''',(source_id,'paused','历史商品','https://aggregator.example/post',
+                    json.dumps({'activity_links':[source]}),'paused',stamp(now))).lastrowid
+                c.execute('INSERT INTO opportunities(event_id,source_id,title,category,url) VALUES(?,?,?,?,?)',
+                          (event_id,source_id,'历史商品','test','https://aggregator.example/post'))
+                c.execute('''INSERT INTO link_resolutions(url,target_url,state,reason,checked_at,next_check_at)
+                    VALUES(?,?,'resolved','cached',?,?)''',(source,target,stamp(now-timedelta(hours=1)),
+                    stamp(now+timedelta(hours=1))))
+            with patch('link_resolution.inspect_product_page') as probe:
+                self.assertEqual(run_cycle(),{})
+                probe.assert_not_called()
 
     def test_additive_page_evidence_migration_preserves_existing_resolution_rows(self):
         with tempfile.TemporaryDirectory() as temp,patch.object(db,'DB_PATH',Path(temp)/'legacy.db'):

@@ -1,0 +1,42 @@
+{% if run %}
+{% set states = {'complete':'已处理配置范围','partial':'部分页失败','failed':'失败','running':'处理中','parsed':'已解析，等待入库'} %}
+{% set reasons = {'invalid_item':'不是商品对象','unsupported_marketplace':'不在淘宝范围','invalid_product_identity':'商品编号或直达链接无效','missing_or_invalid_price':'价格缺失或格式无效','invalid_title_or_activity_window':'标题缺失或活动不在有效期','presale_requires_plan':'预售定金/尾款需要单独方案'} %}
+<details class="scan-audit">
+  <summary>最近采集 #{{ run.id }} · {{ states.get(run.status,run.status) }}</summary>
+  <div class="muted">
+    上游条目 {{ run.raw_count if run.raw_count is not none else '未取得' }} ·
+    可解析报价 {{ run.parsed_count if run.parsed_count is not none else '未取得' }} ·
+    优惠候选 {{ run.promotion_count if run.promotion_count is not none else '未取得' }} ·
+    拒绝 {{ run.rejected_count if run.rejected_count is not none else '未取得' }}
+    <br>报价不等于优惠，优惠候选不等于捡漏。
+    {% if run.error_code %}<br>错误：{{ run.error_code }}{% endif %}
+    {% if run.report %}
+      <br>停止原因：{{ {'page_limit':'达到本轮页数上限','page_exhausted':'上游返回不足一页','partial':'后续页读取失败','failed':'读取失败'}.get(run.report.stop_reason or run.report.status, '读取处理中') }}
+      {% if run.report.next_page %} · 可从第 {{ run.report.next_page }} 页继续{% endif %}
+      {% for page in run.report.pages %}
+        <br>第 {{ page.page_no }} 页：原始 {{ page.raw_items|length }} 条，拒绝 {{ page.rejections|length }} 条
+        {% for reject in page.rejections %}
+          <details>
+            <summary title="{{ reject.reason }}">条目 {{ reject.index + 1 }}：{{ reasons.get(reject.reason,reject.reason) }}</summary>
+            <small>{{ reject.reason }}</small>
+            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:12rem;overflow:auto">{{ page.raw_items[reject.index]|tojson(indent=2) }}</pre>
+          </details>
+        {% endfor %}
+      {% endfor %}
+      {% set validation = run.report.post_sync_validation %}
+      {% if validation %}
+        <details class="post-sync-validation">
+          <summary>同步后逐条核验：同步 {{ validation.synced_count }} 条 · 实际探测 {{ validation.attempted_count }} 条 · SKU证据完整 {{ validation.sku_evidence_complete_count }} 条 · {{ '全部已留存核验结果' if validation.complete else '仍在等待核验租约或重试' }}</summary>
+          <small>“SKU证据完整 0 条”表示没有记录同时具备商品身份、SKU、规格、库存、报价绑定和可复核优惠依据（官方促销路径，或同一SKU直接降价）；不表示这次同步没有执行，也不否定淘宝联盟物料已返回的官方推广价。官方物料优惠可独立进入默认列表；SKU 完整性只决定是否可以同款比较或判定捡漏。</small>
+          <ul>
+          {% for item in validation.records %}
+            <li>#{{ item.opportunity_id }} · {{ item.state }} · SKU详情：{{ item.sku_detail_api_state }}{% if item.missing %} · 缺 {{ item.missing|join('、') }}{% endif %}{% if item.next_check_at %} · 下次核验 {{ item.next_check_at|cn_time }}{% endif %}</li>
+          {% endfor %}
+          </ul>
+          {% if validation.unaccounted_opportunity_ids %}<small>未生成核验记录：{{ validation.unaccounted_opportunity_ids|join('、') }}</small>{% endif %}
+        </details>
+      {% endif %}
+    {% endif %}
+  </div>
+</details>
+{% endif %}

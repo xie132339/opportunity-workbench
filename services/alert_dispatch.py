@@ -18,7 +18,8 @@ def dispatch_verified_alerts():
                              s.last_success AS source_last_success,a.state AS auto_state
                              FROM opportunities o JOIN events e ON e.id=o.event_id
                              JOIN sources s ON s.id=o.source_id
-                             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id WHERE o.status='verified'""").fetchall()
+                             LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+                             WHERE o.status='verified' AND (s.enabled=1 OR s.method='manual')""").fetchall()
         for opp in rows:
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (opp["id"],)).fetchall()
             if not is_evidence_candidate(opp, quotes, rules):
@@ -31,13 +32,20 @@ def dispatch_verified_alerts():
             for channel in channels:
                 db.execute("""INSERT OR IGNORE INTO notification_deliveries
                               (notification_id,channel) VALUES(?,?)""", (notice_id, channel))
-        tasks = db.execute("""SELECT d.id,d.channel,o.id AS opportunity_id,o.title,o.url
+        tasks = db.execute("""SELECT d.id,d.channel,o.id AS opportunity_id,o.title,o.url,
+                              s.method AS source_method,s.enabled AS source_enabled
                               FROM notification_deliveries d
                               JOIN notifications n ON n.id=d.notification_id
                               JOIN opportunities o ON o.id=n.opportunity_id
+                              JOIN sources s ON s.id=o.source_id
                               WHERE d.status='pending' ORDER BY d.id LIMIT 20""").fetchall()
     sent = failed = 0
     for task in tasks:
+        if not task['source_enabled'] and task['source_method'] != 'manual':
+            with connect() as db:
+                db.execute("UPDATE notification_deliveries SET status='skipped',last_error='来源已暂停' WHERE id=?",
+                           (task['id'],))
+            continue
         with connect() as db:
             opp = db.execute("""SELECT o.*,e.published_at,e.last_seen_at,
                 s.method AS source_method,s.status AS source_status,s.enabled AS source_enabled,
@@ -48,10 +56,12 @@ def dispatch_verified_alerts():
             quotes = db.execute("SELECT * FROM quotes WHERE opportunity_id=?", (task["opportunity_id"],)).fetchall()
         profit, _ = estimated_profit(opp, quotes)
         allowed, gate_basis = resale_assessment(opp, quotes)
-        if not allowed or task["channel"] not in active_channels():
+        source_stopped = not opp['source_enabled'] and opp['source_method'] != 'manual'
+        if source_stopped or not allowed or task["channel"] not in active_channels():
             with connect() as db:
-                db.execute("UPDATE notification_deliveries SET status='skipped',last_error='条件已变化或通道已关闭' WHERE id=?",
-                           (task["id"],))
+                reason='来源已暂停' if source_stopped else '条件已变化或通道已关闭'
+                db.execute("UPDATE notification_deliveries SET status='skipped',last_error=? WHERE id=?",
+                           (reason,task["id"]))
             continue
         title = "转售测算达标线索：" + task["title"][:80]
         body = f"{gate_basis}\n保守价差 {money(profit)}；不代表已成交或已到账。\n原始链接：{task['url'] or '无'}"

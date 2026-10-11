@@ -39,17 +39,25 @@ class SearchProvenanceTests(unittest.TestCase):
             {"auto_state": "queued"},
         ]
         current = [
-            {"id": 6, "display_quote": {"amount_cents": 298}},
+            {"id": 6, "display_quote": {"kind":"source_claim","amount_cents":298},
+             "promotional_candidate":True},
             {"id": 7, "display_quote": None},
+            {"id": 8, "display_quote": {"kind":"catalog_public","amount_cents":9900},
+             "catalog_reference":True},
+            {"id": 9, "display_quote": {"kind":"source_claim","amount_cents":500},
+             "promotional_candidate":False},
         ]
 
         result = summarize_search_funnel(matches, current)
 
         self.assertEqual(result, {
-            "matched_count": 7, "current_count": 2, "current_quote_count": 1,
+            "matched_count": 7, "current_count": 4, "current_quote_count": 2,
+            "current_promotion_candidate_count": 1,
+            "current_catalog_reference_count": 1,
+            "current_plain_price_claim_count": 1,
             "current_unpriced_count": 1, "stale_count": 1,
             "source_unavailable_count": 1, "retry_count": 1,
-            "excluded_state_count": 1, "other_freshness_count": 1,
+            "excluded_state_count": 1, "other_freshness_count": 0,
         })
 
 

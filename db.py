@@ -30,6 +30,15 @@ def connect():
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS source_scan_runs (
+ id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
+ started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT,
+ status TEXT NOT NULL DEFAULT 'running', raw_count INTEGER,
+ parsed_count INTEGER, promotion_count INTEGER, rejected_count INTEGER,
+ evidence_json TEXT NOT NULL DEFAULT '{}', error_code TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_source_scan_runs_source ON source_scan_runs(source_id,id);
+
 CREATE TABLE IF NOT EXISTS sources (
  id INTEGER PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL,
  category TEXT NOT NULL, url TEXT NOT NULL, method TEXT NOT NULL,

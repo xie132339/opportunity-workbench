@@ -11,6 +11,8 @@ _PATHS = {
     "item.jd.com": re.compile(r"^/\d+\.html$"),
     "item.m.jd.com": re.compile(r"^/product/\d+\.html$"),
     "item.taobao.com": re.compile(r"^/item\.htm$"),
+    "m.taobao.com": re.compile(r"^/(?:awp/core/detail|item)\.htm$"),
+    "h5.m.taobao.com": re.compile(r"^/(?:awp/core/detail|item)\.htm$"),
     "detail.tmall.com": re.compile(r"^/item\.htm$"),
     "chaoshi.detail.tmall.com": re.compile(r"^/item\.htm$"),
     "mobile.yangkeduo.com": re.compile(r"^/(?:goods|goods2)\.html$"),
@@ -22,12 +24,15 @@ _PATHS = {
 }
 _MARKETPLACE_QUERY_IDS = {
     "item.taobao.com": ("id", "taobao"),
+    "m.taobao.com": ("id", "taobao"),
+    "h5.m.taobao.com": ("id", "taobao"),
     "detail.tmall.com": ("id", "taobao"),
     "chaoshi.detail.tmall.com": ("id", "taobao"),
     "mobile.yangkeduo.com": ("goods_id", "pdd"),
 }
+_TAOBAO_DETAIL_HOSTS = frozenset({"item.taobao.com", "m.taobao.com", "h5.m.taobao.com"})
 _STRUCTURED_MARKETPLACE_HOSTS = frozenset({
-    "item.jd.com", "item.m.jd.com", "item.taobao.com", "detail.tmall.com",
+    "item.jd.com", "item.m.jd.com", "item.taobao.com", "m.taobao.com", "h5.m.taobao.com", "detail.tmall.com",
     "chaoshi.detail.tmall.com", "mobile.yangkeduo.com", "detail.vip.com",
 })
 
@@ -94,9 +99,12 @@ def _same_product_page(candidate, page_url):
         page = urlsplit(page_url)
     except ValueError:
         return False
-    if (candidate_url.hostname or "").lower() != (page.hostname or "").lower():
+    candidate_host = (candidate_url.hostname or "").lower()
+    page_host = (page.hostname or "").lower()
+    if candidate_host != page_host and not (
+            candidate_host in _TAOBAO_DETAIL_HOSTS and page_host in _TAOBAO_DETAIL_HOSTS):
         return False
-    host = (page.hostname or "").lower()
+    host = page_host
     if host in _MARKETPLACE_QUERY_IDS:
         key, _ = _MARKETPLACE_QUERY_IDS[host]
         return (parse_qs(candidate_url.query).get(key)

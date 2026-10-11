@@ -2,7 +2,7 @@
 {% if brief.kind not in ('purchase','unknown') %}
 <div><span class="muted">活动类型（按原文初分）</span><div><strong>{{ resource_labels[brief.kind] }}</strong></div></div>
 {% elif display_quote %}
-{% if display_quote.kind=='catalog_public' %}
+{% if display_quote.kind in ('catalog_public','official_promotion_observation') %}
 <div><span class="muted">{{ display_quote.label }}</span><div><strong>{{ money(display_quote.amount_cents) }}</strong></div><small>{{ display_quote.note }}</small></div>
 {% elif brief.quantity == 1 %}
 <div><span class="muted">来源原文声称价 · 1件</span><div><strong>{{ money(brief.total_cents) }}</strong></div><small>单件订单，单价与整单金额相同，不重复展示；此处显示来源公开声称值。</small></div>

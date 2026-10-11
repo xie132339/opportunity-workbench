@@ -95,6 +95,29 @@ class ReviewRulesTests(unittest.TestCase):
         self.assertEqual(ar.classify(dict(self.row,source_status='failed'),self.now)['state'],
                          'source_unavailable')
 
+    def test_explicit_crowdfunding_purchase_tier_survives_optional_lottery_copy(self):
+        from offer import resource_kind
+        title='米家智能按摩仪 众筹价：509元'
+        body=('众筹开始：2026年10月12日 10:00，'
+              '众筹结束：2026年10月19日 10:00。另有1元支持抽奖。')
+        row=dict(self.row,title=title,snippet=body,
+                 published_at=ar.stamp(self.now-timedelta(days=5)))
+        result=ar.classify(row,self.now)
+        self.assertEqual(resource_kind(title,body),'purchase')
+        self.assertEqual(resource_kind(title,body+'\n'+title),'purchase')
+        self.assertEqual(result['state'],'campaign_upcoming')
+        self.assertEqual(result['advertised_cents'],50900)
+        self.assertEqual(result['campaign_price_cents'],50900)
+        self.assertIn('不代表库存、本人资格或结算到手价',result['reason'])
+
+    def test_expired_crowdfunding_public_price_is_not_a_current_candidate(self):
+        title='米家智能按摩仪 众筹价：509元'
+        body='众筹开始：2026年9月1日 10:00，众筹结束：2026年9月7日 10:00。'
+        row=dict(self.row,title=title,snippet=body)
+        result=ar.classify(row,self.now)
+        self.assertEqual(result['state'],'stale')
+        self.assertIn('活动已结束',result['reason'])
+
     def _case_fresh_merchant_catalog_price_uses_observation_time_not_post_time(self):
         row=dict(self.row,title='米家冰箱 对开636L 1899元',
                  url='https://www.mi.com/shop/buy?product_id=22504',
@@ -453,20 +476,41 @@ class ReviewPipelineTests(unittest.TestCase):
             for url in ['/','/?view=all','/verification','/opportunities/1']:
                 self.assertEqual(client.get(url).status_code,200,url)
 
+    def test_paused_source_is_not_reclassified_or_probed(self):
+        with db.connect() as c:
+            c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,enabled) VALUES(2,'线报酷','线报酷','零售优惠','https://feeds.example.test/','rss', 'paused', 0)")
+            c.execute("INSERT INTO events(id,source_id,external_key,title,url,fingerprint,published_at) VALUES(2,2,'paused','纸10元','https://new.ixbk.net/haodan/paused.html','paused',CURRENT_TIMESTAMP)")
+            c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,url) VALUES(2,2,2,'纸10元','零售优惠','https://new.ixbk.net/haodan/paused.html')")
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,detail_json,checked_at) VALUES(2,'queued','paused queue must remain untouched','{}','2000-01-01 00:00:00')")
+            c.execute("UPDATE sources SET enabled=0,status='paused' WHERE id=1")
+        with patch('scanner._fetch') as fetch:
+            result=ar.run_cycle(opportunity_id=2)
+        self.assertEqual(result['probed'],0)
+        fetch.assert_not_called()
+        with db.connect() as c:
+            saved=c.execute('SELECT state,reason,checked_at FROM auto_reviews WHERE opportunity_id=2').fetchone()
+            self.assertEqual(tuple(saved),('queued','paused queue must remain untouched','2000-01-01 00:00:00'))
+
+    def test_verification_copy_does_not_claim_paused_aggregators_are_connected(self):
+        with app.test_client() as client:
+            page=client.get('/verification').get_data(as_text=True)
+        self.assertIn('低可信聚合/社区来源已暂停',page)
+        self.assertNotIn('值得买及线报酷公开详情',page)
+
     def test_public_price_filter_without_checkout_and_excludes_conflict(self):
         with db.connect() as c:
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(1,'observed','公开报价',1232)")
         with app.test_client() as client:
-            page=client.get('/?view=all').get_data(as_text=True)
+            page=client.get('/?buy_platform=all&view=all').get_data(as_text=True)
             self.assertIn('/opportunities/1',page)
             self.assertIn('未形成可用报价',page)
             # An isolated parser amount without a purchase plan cannot pass budget filters.
-            self.assertNotIn('/opportunities/1',client.get('/?view=all&budget=13').get_data(as_text=True))
-            self.assertNotIn('/opportunities/1',client.get('/?view=all&budget=12').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&view=all&budget=13').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&view=all&budget=12').get_data(as_text=True))
             with db.connect() as c:
                 self.assertIsNone(c.execute('SELECT buy_cents FROM opportunities WHERE id=1').fetchone()[0])
                 c.execute("UPDATE auto_reviews SET state='conflict'")
-            self.assertNotIn('/opportunities/1',client.get('/?view=all&budget=13').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&view=all&budget=13').get_data(as_text=True))
 
     def _case_guangdiu_detail_cycle_extracts_and_displays_headline_money_without_promoting_it(self):
         title = '山丘 抽纸加厚4层76抽*8包餐巾纸卫生纸巾无漂白原生竹浆本色纸 7.3元'
@@ -492,12 +536,12 @@ class ReviewPipelineTests(unittest.TestCase):
             self.assertEqual(stored['advertised_cents'],730)
             self.assertIn(stored['state'],('conditional','missing_price'))
         with app.test_client() as client:
-            page = client.get('/?view=current&layout=cards').get_data(as_text=True)
+            page = client.get('/?buy_platform=all&view=current&layout=cards').get_data(as_text=True)
             self.assertIn('标题金额线索',page)
             self.assertIn('¥7.30',page)
             self.assertIn('不参与低价排序',page)
             self.assertNotIn('99.9元',page)
-            self.assertNotIn('/opportunities/1',client.get('/?budget=8').get_data(as_text=True))
+            self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&budget=8').get_data(as_text=True))
 
     def _case_merchant_product_detail_cycle_upgrades_missing_catalog_price_from_exact_offer(self):
         url = 'https://product.suning.com/123/456.html'
@@ -525,7 +569,7 @@ class ReviewPipelineTests(unittest.TestCase):
             self.assertEqual(stored['state'],'observed')
             self.assertEqual(stored['advertised_cents'],730)
         with app.test_client() as client:
-            page = client.get('/?view=current').get_data(as_text=True)
+            page = client.get('/?buy_platform=all&view=current').get_data(as_text=True)
             self.assertIn('¥7.30',page)
             self.assertIn('商城目录公开标价',page)
 
@@ -546,10 +590,10 @@ class ReviewPipelineTests(unittest.TestCase):
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,conditions,detail_json,detail_checked_at) VALUES(1,'conditional','页面预估价','预估到手价',?,CURRENT_TIMESTAMP)",
                       (json.dumps(detail,ensure_ascii=False),))
         with app.test_client() as client:
-            search = client.get('/?view=all').get_data(as_text=True)
+            search = client.get('/?buy_platform=all&view=all').get_data(as_text=True)
             verification = client.get('/verification?state=conditional').get_data(as_text=True)
             detail_page = client.get('/opportunities/1').get_data(as_text=True)
-            budget = client.get('/?view=all&budget=700').get_data(as_text=True)
+            budget = client.get('/?buy_platform=all&view=all&budget=700').get_data(as_text=True)
         for page in (search, verification, detail_page):
             self.assertIn('699.00',page)
             self.assertIn('预估到手价',page)

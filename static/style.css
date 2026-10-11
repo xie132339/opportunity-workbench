@@ -125,6 +125,15 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 .offer-row-actions{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
 .offer-row-actions a{white-space:nowrap;font-weight:600}
 .offer-row-actions .muted{font-size:12px}
+.direct-product-link{display:inline-flex;align-items:center;width:max-content;max-width:100%;padding:5px 9px;border-radius:6px;background:#e7f5f1;color:#08736d;font-weight:700;text-decoration:none;white-space:normal}
+.direct-product-link:hover,.direct-product-link:focus-visible{background:#d3eee7;text-decoration:underline}
+.pending-product-link{font-weight:600;color:#946200}
+.product-entry-actions{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px;margin:12px 0}
+.product-entry-actions small{flex-basis:100%;color:var(--muted)}
+.product-link-evidence{padding:8px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.product-link-evidence p{margin:5px 0}
+.link-warning{color:#9b4f00;font-weight:600}
+.offer-card-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px}
 .mobile-sort-toggle{display:none}
 @media(max-width:760px){
   .mobile-sort-toggle{display:inline-flex;align-items:center;padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--card);font-weight:600;white-space:nowrap}

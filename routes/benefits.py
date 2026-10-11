@@ -11,26 +11,32 @@ def benefits_page():
     query=request.args.get('q','').strip()
     benefit_kind=request.args.get('kind','').strip()
     if benefit_kind not in BENEFIT_KINDS:benefit_kind=''
+    scope=request.args.get('scope','current').strip()
+    if scope not in ('current','all'):scope='current'
     try:page=max(1,int(request.args.get('page','1')))
     except ValueError:page=1
     page_size=20
     with connect() as db:
-        rows=list_benefits(db,query,benefit_kind,limit=page_size+1,offset=(page-1)*page_size)
+        rows=list_benefits(db,query,benefit_kind,limit=10000,offset=0,current_only=scope=='current')
         summary=benefit_stats(db)
-    return render_template('benefits.html',benefits=rows[:page_size],benefits_summary=summary,
-                           query=query,benefit_kind=benefit_kind,page=page,
-                           has_next=len(rows)>page_size)
+    current_total=len(rows)
+    page_rows=rows[(page-1)*page_size:page*page_size]
+    return render_template('benefits.html',benefits=page_rows,benefits_summary=summary,
+                           query=query,benefit_kind=benefit_kind,scope=scope,page=page,
+                           current_total=current_total,has_next=page*page_size<current_total)
 
 def verification():
     state = request.args.get('state', '')
     with connect() as db:
-        counts = dict(db.execute('SELECT state,COUNT(*) FROM auto_reviews GROUP BY state').fetchall())
+        counts = dict(db.execute('''SELECT a.state,COUNT(*) FROM auto_reviews a
+            JOIN opportunities o ON o.id=a.opportunity_id JOIN sources s ON s.id=o.source_id
+            WHERE s.enabled=1 OR s.method='manual' GROUP BY a.state''').fetchall())
         run = db.execute('SELECT * FROM review_runs WHERE id=1').fetchone()
         rows = db.execute('''SELECT a.*,o.title,o.url,e.snippet,e.metadata_json,s.parser AS source_parser
             FROM auto_reviews a
             JOIN opportunities o ON o.id=a.opportunity_id LEFT JOIN events e ON e.id=o.event_id
-            LEFT JOIN sources s ON s.id=o.source_id
-            WHERE (?='' OR a.state=?)
+            JOIN sources s ON s.id=o.source_id
+            WHERE (?='' OR a.state=?) AND (s.enabled=1 OR s.method='manual')
             ORDER BY o.id DESC LIMIT 100''', (state,state)).fetchall()
     display_rows=[]
     for row in rows:

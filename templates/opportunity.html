@@ -1,6 +1,7 @@
 {% extends 'base.html' %}{% block title %}机会详情 · 多平台机会工作台{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('index') }}">← 返回商品搜索</a></p>
+{% if source_paused %}<p class="offer-alert">该来源已暂停。此页为历史归档，不进入当前商品搜索、优惠关联、自动核验或当前价格比较；原始记录保留以供审计。</p>{% endif %}
 <h1>{{ brief.title }}</h1>
 <p class="muted">商品大类：{{ public_estimate.category_large }} · 小类：{{ public_estimate.category_small }}</p>
 <p class="source-attribution"><strong>线索来源：</strong>{{ opp.platform or '人工录入' }}{% if opp.source_name and opp.source_name != opp.platform %} · {{ opp.source_name }}{% endif %}</p>
@@ -9,7 +10,10 @@
 {% if review and review.state in ('conflict','excluded','retry','source_unavailable','stale') %}<p class="offer-alert">{{ review_labels.get(review.state) }}：{{ review.reason }}</p>{% endif %}
 {% with source_label=opp.platform or '人工线索' %}{% include '_offer_summary.html' %}{% endwith %}
 <p class="muted">原文发布：{{ opp.published_at|cn_time }} · 最近采集：{{ opp.last_seen_at|cn_time }}</p>
-{% if opp.url %}<a class="offer-source-link" href="{{ opp.url }}" target="_blank" rel="noopener noreferrer">查看来源页面 ↗</a>{% endif %}
+{% if opp.source_method=='taobao_alliance' and opp.url %}<div class="product-entry-actions"><a class="pending-product-link" href="{{ opp.url }}" target="_blank" rel="noopener noreferrer">打开联盟官方推广入口 ↗</a><small>商品身份来自联盟接口；推广短链的最终商品页、规格和结算价尚未独立核实。</small></div>
+{% elif product_links %}<div class="product-entry-actions">{% for link in product_links %}<a class="direct-product-link" href="{{ link.target_url }}" target="_blank" rel="noopener noreferrer">{% if product_links|length==1 %}直接打开商品{% else %}打开商品 {{ loop.index }}{% endif %} ↗</a>{% if link.product_page.title %}<small>商品页标题：{{ link.product_page.title }}</small>{% endif %}{% if link.title_alignment=='different' %}<small class="link-warning">商品页标题与线报标题没有文本重合，可能跳错商品，请先核对。</small>{% elif link.title_alignment=='overlap' %}<small>商品名存在文本重合；规格、型号和变体仍未确认。</small>{% else %}<small>尚未读取商品页标题，地址识别不代表商品对应关系已核实。</small>{% endif %}{% endfor %}</div>
+{% elif pending_purchase_links %}<div class="product-entry-actions">{% for entry in pending_purchase_links %}<a class="pending-product-link" href="{{ entry.url }}" target="_blank" rel="noopener noreferrer">打开原文购买短链 ↗</a><small>解析状态：{{ entry.reason }}</small>{% endfor %}</div>{% endif %}
+{% if opp.url and opp.source_method!='taobao_alliance' %}<a class="offer-source-link" href="{{ opp.url }}" target="_blank" rel="noopener noreferrer">查看采集来源原文 ↗</a>{% endif %}
 </section>
 <section class="card readiness-card"><h2>本商品当前结论</h2>
 <div class="readiness-grid">
@@ -30,17 +34,21 @@
 {% if comparison.quantity_options.count > 1 %}<p>商品支出较少：<a href="{{ url_for('opportunity',opportunity_id=comparison.quantity_options.lowest_total) }}">方案 #{{ comparison.quantity_options.lowest_total }}</a>；折合单件较低：<a href="{{ url_for('opportunity',opportunity_id=comparison.quantity_options.lowest_unit) }}">方案 #{{ comparison.quantity_options.lowest_unit }}</a>。参与{{ comparison.quantity_options.count }}条方案比较，保留{{ comparison.quantity_options.frontier|length }}条较优或并列方案。</p>{% elif comparison.quantity_options.count == 1 %}<p>只有1条满足字段要求的方案，尚不能判断哪个购买方案更合适。</p>{% endif %}
 {% for item in comparison['items'] %}{% if item.optimization_gaps %}<p class="muted">#{{ item.id }}不参与数量方案推荐：{{ item.optimization_gaps|join('；') }}</p>{% endif %}{% endfor %}{% endif %}
 <p class="muted">当前有{{ comparison.peers }}条来源线索处于可比口径。自用省钱要有同款各渠道当前实际可得总价，按“次优总价−最低总价”显示金额和比例；捡漏要有同款历史价格序列。当前工作台尚无足够数据证明这两项，因此此处不把低来源价标为省钱或捡漏。</p></section>{% endif %}
-{% if brief.activity_links %}<section class="card"><h2>购买与优惠入口</h2>{% for link in brief.resolved_links %}{% set page=link.product_page or {} %}<p><a href="{{ link.target_url }}" target="_blank" rel="noopener noreferrer">查看解析后的商品页 ↗</a> · 商品地址检查：{{ link.checked_at|cn_time }}<br><small>自动解析原文短链，只确认商品页地址。优惠是否适用、账号资格、运费和最终结算金额仍需独立证据。</small>
-{% if page.state=='public_price' and page.current %}<br><strong>商品页当前公开标价：{{ money(page.advertised_cents) }}</strong>{% if page.title %} · {{ page.title }}{% endif %}<br><small>{{ page.price_evidence or '商品页公开标价' }} · 页面检查：{{ page.checked_at|cn_time }}。这是商家公开标价，不是来源活动的结算价，不自动扣除优惠。</small>
-{% elif page.state=='public_price' %}<br><strong>商品页上次读取的公开价已过期</strong> · 不用于当前价格比较。
-{% elif page.state=='page_amount_only' and page.current %}<br><strong>{{ page.page_amount_label or '页面金额线索' }}：{{ money(page.page_amount_cents) }}</strong> · 不作为公开报价或活动到手价。
-{% elif page.state=='out_of_stock' and page.current %}<br><strong>商品页明确显示已下架/售罄</strong> · 页面金额不作为当前价。
-{% elif page.state=='no_public_price' and page.current %}<br><strong>商品页已读取，但未找到唯一公开标价</strong>{% if page.reason %} · {{ page.reason }}{% endif %}
-{% elif page.state=='blocked' and page.current %}<br><strong>平台要求验证或限制访问</strong> · 未取得公开价格；{{ page.reason }}
-{% elif page.state=='unreadable' and page.current %}<br><strong>商品页当前不可机读</strong> · 未提取标题/价格，页面内容不会当报价；{{ page.reason }}
-{% elif page.state=='retry' and page.current %}<br><strong>商品页暂时读取失败</strong> · 等待低频重试；{{ page.reason }}
-{% elif page.state %}<br><strong>商品页价格核验暂不可用</strong> · {{ page.reason or page.state }}
-{% else %}<br><small>商品页价格核验排队中；短链已解析不代表已读到价格。</small>{% endif %}</p>{% endfor %}<p>原文提供的入口，点开可查看规则；链接存在不代表优惠可用。</p><ul>{% for link in brief.activity_links %}<li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ '查看优惠券规则' if 'coupon' in link else '查看原文活动或购买入口' }}</a></li>{% endfor %}</ul></section>{% endif %}
+{% if product_links or pending_purchase_links or activity_targets or unclassified_links %}<section class="card" id="purchase-links"><h2>商品与来源入口</h2>
+{% if product_links %}<h3>可直接打开的商品页（{{ product_links|length }}）</h3><p class="muted">从原文商品地址提取或从受支持短链解析；商品页标题用于对照原文，链接识别不等于同款、价格、库存或优惠已核实。</p>
+{% for link in product_links %}{% set page=link.product_page or {} %}<div class="product-link-evidence"><p><a class="direct-product-link" href="{{ link.target_url }}" target="_blank" rel="noopener noreferrer">{{ page.title or ('打开商品页 ' ~ loop.index) }} ↗</a> <small>{{ link.label }}</small></p>
+{% if page.title %}<p><strong>商品页读取标题：</strong>{{ page.title }}{% if page.specification %} · 规格：{{ page.specification }}{% endif %}</p>{% endif %}
+{% if link.title_alignment=='different' %}<p class="link-warning">商品页标题与线报标题没有文本重合：该链接可能不是这条线索对应的商品，需要核对。</p>{% elif link.title_alignment=='overlap' %}<p class="muted">两个标题存在文本重合，但这不证明品牌、型号、规格或变体一致。</p>{% else %}<p class="muted">未读取到商品页标题，暂不能核实链接是否对应这条线索。</p>{% endif %}
+{% if page.state=='public_price' and page.current %}<p><strong>当前公开标价：{{ money(page.advertised_cents) }}</strong> · {{ page.price_evidence or '商品页公开标价' }} · 检查 {{ page.checked_at|cn_time }}。不代表来源声称价或结算价。</p>
+{% elif page.state=='public_price' %}<p>上次读取公开价已过期，不用于当前比较。</p>
+{% elif page.state=='page_amount_only' and page.current %}<p>{{ page.page_amount_label or '页面金额线索' }}：{{ money(page.page_amount_cents) }} · 不作为报价。</p>
+{% elif page.state=='out_of_stock' and page.current %}<p>商品页当前明确显示已下架/售罄。</p>
+{% elif page.state and page.current %}<p>页面检查状态：{{ page.state }}{% if page.reason %} · {{ page.reason }}{% endif %}</p>
+{% else %}<p class="muted">商品页内容检查排队中；地址已识别，不代表商品内容或价格已核实。</p>{% endif %}</div>{% endfor %}{% endif %}
+{% if pending_purchase_links %}<h3>尚未解析的购买短链</h3><ul>{% for entry in pending_purchase_links %}<li><a href="{{ entry.url }}" target="_blank" rel="noopener noreferrer">直接打开原文购买短链 ↗</a> · {{ entry.reason }}</li>{% endfor %}</ul>{% endif %}
+{% if activity_targets %}<h3>优惠或活动入口</h3><ul>{% for entry in activity_targets %}<li><a href="{{ entry.url }}" target="_blank" rel="noopener noreferrer">打开优惠/活动入口 ↗</a> · {{ entry.reason }}</li>{% endfor %}</ul>{% endif %}
+{% if unclassified_links %}<details><summary>其他原文链接 {{ unclassified_links|length }} 个（类型未识别）</summary><ul>{% for entry in unclassified_links %}<li><a href="{{ entry.url }}" target="_blank" rel="noopener noreferrer">{{ entry.host }} ↗</a></li>{% endfor %}</ul><small>这些是原文链接，系统未确认其为商品页；点击后请核对商品和规格。</small></details>{% endif %}
+<p class="muted">采集来源原文保留在页面顶部，用于核对链接上下文。工作台不会把商品页标价当作来源价或最终到手价。</p></section>{% endif %}
 <section class="card" id="product-benefits"><h2>本商品能用什么优惠</h2>
 <p><strong>系统从公开来源识别到明确适用本商品的优惠：{{ confirmed_benefits|length }} 个。</strong>{% if not confirmed_benefits %} 当前公开证据不足以把外部优惠计入来源报价；不需要你补商家账号或结算页信息。{% endif %}</p>
 {% if confirmed_benefits %}<ul>{% for b in confirmed_benefits %}<li><a href="{{ b.url }}" target="_blank" rel="noopener noreferrer">{{ b.title }}</a> · {{ b.discount }}<br><small>{{ b.relation_label }} · 规则检查 {{ b.relation_checked_at|cn_time }} · 有效至 {{ b.relation_valid_until|cn_time }} · 叠加：{{ b.relation_stackable }}</small></li>{% endfor %}</ul>{% endif %}
@@ -55,6 +63,7 @@
 <h3>原始标题</h3><p>{{ opp.title }}</p>
 {% if brief.activity_links %}<h3>原文提供的链接（未核验）</h3><ul>{% for link in brief.activity_links %}<li><a href="{{ link }}" target="_blank" rel="noopener noreferrer">{{ link }}</a></li>{% endfor %}</ul>{% endif %}<h3>原始正文</h3><p>{{ opp.snippet or '尚未取得正文' }}</p>
 {% if review %}<h3>自动检查</h3><p>{{ review_labels.get(review.state,review.state) }} · {{ review.reason }}</p><p>{{ review.conditions }}</p><p class="muted">规则检查：{{ review.checked_at|cn_time }} · 详情读取：{{ review.detail_checked_at|cn_time }}</p>{% if review.detail_error %}<p>{{ review.detail_error }} · 下次复查：{{ review.next_check_at|cn_time }}</p>{% endif %}{% endif %}
+{% if detail_evidence.evidence_kind=='taobao_alliance_sku_detail' %}<h3>淘宝联盟 SKU 报价核验</h3><p><strong>{{ detail_evidence.field_reason or '未取得详情核验结论' }}</strong></p>{% if detail_evidence.link_identity %}<p>商品身份来源：<code>{{ detail_evidence.link_identity.resolution_method }}</code>，商品 ID <code>{{ detail_evidence.link_identity.item_id }}</code>。</p>{% endif %}{% if detail_evidence.specification_comparable is false %}<p class="muted">官方只返回一个 SKU，已绑定此 SKU 的库存和价格，但未给出包数、颜色、型号等规格属性。该价格可作为该 SKU 的优惠观察，不能用于跨商品同款、市场基准或“捡漏”结论。</p>{% endif %}{% if detail_evidence.product_level_prices %}<p>官方物料金额：公开推广价 {{ money(detail_evidence.product_level_prices.public_sale_cents) if detail_evidence.product_level_prices.public_sale_cents is not none else '未提供' }}{% if detail_evidence.product_level_prices.promotion_estimate_cents is not none %}；可解释路径的优惠后价 {{ money(detail_evidence.product_level_prices.promotion_estimate_cents) }}{% endif %}{% if detail_evidence.product_level_prices.reference_cents is not none %}；参考价 {{ money(detail_evidence.product_level_prices.reference_cents) }}{% endif %}。公开推广价可作为“官方优惠观察”展示；未绑定 SKU、规格、库存或购买数量时，不构成 SKU 报价，不能用于同款比较、捡漏或宣称账号结算价。</p>{% endif %}{% if detail_evidence.detail_api_attempts %}<ul>{% for attempt in detail_evidence.detail_api_attempts %}<li><code>{{ attempt.method }}</code>：{{ {'returned':'已返回结果','permission_unavailable':'当前应用未获得此详细接口能力','api_package_unavailable':'当前应用未获得此详细接口能力','api_error':'接口返回非权限错误','network_error':'网络请求失败'}.get(attempt.state,attempt.state) }}{% if attempt.remote_code %}（TOP：<code>{{ attempt.remote_code }}</code>）{% endif %}</li>{% endfor %}</ul>{% endif %}{% endif %}
 <p class="muted">首次采集：{{ opp.observed_at|cn_time }} · 来源最近成功：{{ opp.source_last_success|cn_time }}</p>
 <a href="{{ url_for('verification') }}">查看全部检查结果 →</a>
 </details>

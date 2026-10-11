@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import db
 import app as workbench
+import benefits as benefit_service
 from services import alert_dispatch, opportunity_analysis
 
 
@@ -107,26 +108,30 @@ class CoreFlowTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_existing_form_update_changes_candidate_list_and_detail(self):
-        self.assertIn('测试纸',self.client.get('/?candidate=1').get_data(as_text=True))
+        self.assertIn('测试纸',self.client.get('/?buy_platform=all&candidate=1').get_data(as_text=True))
         self.assertIn('预计利润算法',self.client.get('/opportunities/1').get_data(as_text=True))
         response=self.client.post('/strategies/1',data=dict(csrf='test-csrf',name='更新',max_buy='30',min_profit='10.01',enabled='1'))
         self.assertEqual(response.status_code,302)
-        self.assertNotIn('测试纸',self.client.get('/?candidate=1').get_data(as_text=True))
+        self.assertNotIn('测试纸',self.client.get('/?buy_platform=all&candidate=1').get_data(as_text=True))
         self.assertIn('预计利润算法',self.client.get('/opportunities/1').get_data(as_text=True))
         with db.connect() as c:
             self.assertEqual(c.execute('SELECT min_profit_cents FROM strategies WHERE id=1').fetchone()[0],1001)
 
     def test_products_show_only_own_source_benefits_and_pool_is_separate(self):
         with db.connect() as c:
-            for index in range(25):
+            # One source-linked coupon belongs to this product; the remaining
+            # standalone records are explicitly user-supplied resources.
+            insert_order=[0,1,2,3,*range(5,22),4,22,23,24]
+            for index in insert_order:
+                source_type='collected' if index==0 else 'user_supplied'
                 cursor=c.execute("""INSERT INTO benefit_resources(url,title,kind,state,reason,source_type)
-                           VALUES(?,?,'coupon','unsupported','test','collected')""",
-                          (f'https://offers.example/coupon/{index}', f'优惠入口{index:02d}'))
+                           VALUES(?,?,'coupon','unsupported','test',?)""",
+                          (f'https://offers.example/coupon/{index}', f'优惠入口{index:02d}',source_type))
                 if index==0:
                     c.execute("""INSERT INTO benefit_resource_sources
                         (resource_id,source_key,source_type,source_opportunity_id,source_title)
                         VALUES(?,'opportunity:1','collected',1,'测试纸')""",(cursor.lastrowid,))
-        center=self.client.get('/?view=all').get_data(as_text=True)
+        center=self.client.get('/?buy_platform=all&view=all').get_data(as_text=True)
         self.assertIn('本商品优惠',center);self.assertIn('原文关联 1 个入口',center)
         self.assertNotIn('优惠资源归属台账',center)
         detail=self.client.get('/opportunities/1').get_data(as_text=True)
@@ -138,6 +143,43 @@ class CoreFlowTests(unittest.TestCase):
         second=self.client.get('/benefits?page=2').get_data(as_text=True)
         self.assertIn('第 2 页',second)
         self.assertIn('优惠入口04',second)
+
+    def test_paused_source_benefits_are_excluded_from_live_views_and_worker(self):
+        paused_link='https://offers.example/paused-only'
+        with db.connect() as c:
+            c.execute("UPDATE sources SET enabled=1,status='healthy' WHERE id=1")
+            c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,enabled) VALUES(2,'第三方聚合','暂停来源','零售优惠','https://agg.example/feed','rss','paused',0)")
+            c.execute("INSERT INTO events(id,source_id,external_key,title,url,metadata_json,fingerprint,published_at,last_seen_at) VALUES(2,2,'paused','暂停商品','https://agg.example/post',?,'paused',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",(json.dumps({'activity_links':[paused_link]}),))
+            c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url) VALUES(2,2,2,'暂停商品','零售优惠','pending','https://agg.example/post')")
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,checked_at) VALUES(1,'observed','active',CURRENT_TIMESTAMP),(2,'observed','paused',CURRENT_TIMESTAMP)")
+            resources={}
+            for key,title in [('active','启用优惠'),('paused','暂停专属优惠'),('shared','混合来源优惠')]:
+                resources[key]=c.execute("INSERT INTO benefit_resources(url,title,kind,state,reason,source_type) VALUES(?,?,'coupon','unsupported','test','collected')",(f'https://offers.example/{key}',title)).lastrowid
+            for key,opp_id in [('active',1),('paused',2),('shared',1),('shared',2)]:
+                c.execute("INSERT INTO benefit_resource_sources(resource_id,source_key,source_type,source_opportunity_id,source_title) VALUES(?,?,'collected',?,?)",(resources[key],f'opportunity:{opp_id}:{key}',opp_id,key))
+            before=(c.execute('SELECT COUNT(*) FROM benefit_resources').fetchone()[0],c.execute('SELECT COUNT(*) FROM benefit_resource_sources').fetchone()[0])
+            items=benefit_service.listing(c,limit=100)
+            summary=benefit_service.stats(c)
+            active_shared=next(item for item in items if item['title']=='混合来源优惠')
+            self.assertTrue(all(source.get('platform')!='第三方聚合' for source in active_shared['sources']))
+            self.assertIn('启用优惠',[item['title'] for item in items])
+            self.assertIn('混合来源优惠',[item['title'] for item in items])
+            self.assertNotIn('暂停专属优惠',[item['title'] for item in items])
+            self.assertEqual(summary['total'],2)
+            self.assertEqual(summary['sources'],2)
+            self.assertEqual(benefit_service.related(c,2),[])
+        benefit_service.sync()
+        page=self.client.get('/benefits').get_data(as_text=True)
+        self.assertIn('启用优惠',page)
+        self.assertIn('混合来源优惠',page)
+        self.assertNotIn('暂停专属优惠',page)
+        review=self.client.get('/verification').get_data(as_text=True)
+        self.assertIn('测试纸',review)
+        self.assertNotIn('暂停商品',review)
+        benefit_service.run_cycle(limit=100)
+        with db.connect() as c:
+            self.assertIsNone(c.execute('SELECT checked_at FROM benefit_resources WHERE url=?',(paused_link,)).fetchone())
+            self.assertEqual((c.execute('SELECT COUNT(*) FROM benefit_resources').fetchone()[0],c.execute('SELECT COUNT(*) FROM benefit_resource_sources').fetchone()[0]),before)
 
     def test_search_explains_freshness_drop_and_preserves_related_source_rows(self):
         body='活动售价2元，下单1件，实付2元，包邮'
@@ -153,7 +195,7 @@ class CoreFlowTests(unittest.TestCase):
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url) VALUES(3,3,1,'测试纸旧线索','零售优惠','pending','https://example.com/old')")
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,checked_at) VALUES(3,'stale','原文过期',CURRENT_TIMESTAMP)")
 
-        page=self.client.get('/?q=测试纸&view=current&layout=list')
+        page=self.client.get('/?buy_platform=all&q=测试纸&view=current&layout=list')
         text=page.get_data(as_text=True)
 
         self.assertEqual(page.status_code,200)
@@ -196,22 +238,50 @@ class CoreFlowTests(unittest.TestCase):
         self.assertIn('优惠入口规则页面尚未单独读取',html)
         self.assertIn('满99减10券',html)
 
+    def test_paused_source_rows_leave_current_search_but_remain_in_archive(self):
+        body='活动售价2元，下单1件，实付2元，包邮'
+        with db.connect() as c:
+            c.execute("UPDATE sources SET status='healthy',enabled=1,interval_minutes=1,last_success=CURRENT_TIMESTAMP WHERE id=1")
+            c.execute("UPDATE events SET snippet=?,last_seen_at=CURRENT_TIMESTAMP,published_at=CURRENT_TIMESTAMP WHERE id=1",(body,))
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents,conditions,evidence,checked_at) VALUES(1,'observed','当前来源声称',200,?,?,CURRENT_TIMESTAMP)",(body,body))
+            c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,enabled,interval_minutes,last_success) VALUES(2,'第三方聚合','暂停源','零售优惠','https://aggregator.example/feed','rss','paused',0,1,CURRENT_TIMESTAMP)")
+            c.execute("INSERT INTO events(id,source_id,external_key,title,url,snippet,fingerprint,published_at,last_seen_at) VALUES(2,2,'old','测试纸 暂停源旧线索','https://aggregator.example/post',?,'old',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",(body,))
+            c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url) VALUES(2,2,2,'测试纸 暂停源旧线索','零售优惠','pending','https://aggregator.example/post')")
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents,conditions,evidence,checked_at) VALUES(2,'observed','旧来源声称',200,?,?,CURRENT_TIMESTAMP)",(body,body))
+
+        current=self.client.get('/?buy_platform=all&q=测试纸&view=current&layout=list')
+        archive=self.client.get('/?buy_platform=all&q=测试纸&view=all&layout=list')
+
+        self.assertEqual(current.status_code,200)
+        current_html=current.get_data(as_text=True)
+        archive_html=archive.get_data(as_text=True)
+        self.assertIn('/opportunities/1',current_html)
+        self.assertNotIn('/opportunities/2',current_html)
+        self.assertIn('/opportunities/2',archive_html)
+        current_platform_filter=current_html.split('<select name="platform">',1)[1].split('</select>',1)[0]
+        archive_platform_filter=archive_html.split('<select name="platform">',1)[1].split('</select>',1)[0]
+        self.assertNotIn('第三方聚合',current_platform_filter)
+        self.assertIn('第三方聚合',archive_platform_filter)
+        with db.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM events').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM opportunities').fetchone()[0],2)
+
     def test_default_search_is_quote_list_and_clue_inbox_keeps_unpriced_records(self):
         with db.connect() as c:
             c.execute("UPDATE sources SET last_success=CURRENT_TIMESTAMP WHERE id=1")
-        default=self.client.get('/').get_data(as_text=True)
+        default=self.client.get('/?buy_platform=all').get_data(as_text=True)
         self.assertNotIn('/opportunities/1',default)
-        self.assertIn('当前明确来源报价',default)
-        self.assertIn('当前线索池（含缺价与待补证据）',default)
-        current=self.client.get('/?view=current').get_data(as_text=True)
+        self.assertIn('公开优惠',default)
+        self.assertIn('当前线索池（含普通价格参考与待补证据）',default)
+        current=self.client.get('/?buy_platform=all&view=current').get_data(as_text=True)
         self.assertIn('/opportunities/1',current)
         self.assertIn('当前线索池',current)
         self.assertIn('未形成可用报价',current)
-        offers=self.client.get('/?view=offers').get_data(as_text=True)
+        offers=self.client.get('/?buy_platform=all&view=offers').get_data(as_text=True)
         self.assertNotIn('/opportunities/1',offers)
-        self.assertIn('当前明确来源报价',offers)
+        self.assertIn('公开优惠',offers)
         self.assertIn('row-gaps',current)
-        ready=self.client.get('/?view=ready').get_data(as_text=True)
+        ready=self.client.get('/?buy_platform=all&view=ready').get_data(as_text=True)
         self.assertNotIn('/opportunities/1',ready)
         self.assertIn('当前达到比较准入的报价',ready)
 
@@ -222,8 +292,8 @@ class CoreFlowTests(unittest.TestCase):
                 VALUES(1,'coupon-clue','满减券活动','https://example.com/coupon','coupon-clue',CURRENT_TIMESTAMP)""").lastrowid
             c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url,resource_kind)
                 VALUES(?,1,'满减券活动','零售优惠','https://example.com/coupon','coupon')""",(event,))
-        page=self.client.get('/').get_data(as_text=True)
-        self.assertIn('2小时原始条目 2 条 · 当前有效机会 2 条 · 本次商品线索 1 条 · 明确报价 0 条',page)
+        page=self.client.get('/?buy_platform=all').get_data(as_text=True)
+        self.assertIn('2小时原始条目 2 条 · 当前有效机会 2 条 · 本次商品线索 1 条 · 有金额/目录参考 0 条',page)
 
     def test_current_search_includes_fresh_catalog_price_without_faking_post_time(self):
         with db.connect() as c:
@@ -238,16 +308,67 @@ class CoreFlowTests(unittest.TestCase):
                        VALUES(?,2,'米家冰箱 对开636L 1899元','新品与补货',
                        'https://www.mi.com/shop/buy?product_id=22504')""",(event,)).lastrowid
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'missing_time','旧规则缺发布时间',189900)",(opportunity,))
-        current=self.client.get('/?view=current').get_data(as_text=True)
+        current=self.client.get('/?buy_platform=all&view=current').get_data(as_text=True)
         self.assertIn(f'/opportunities/{opportunity}',current)
         self.assertIn('目录采集',current)
         self.assertIn('商城目录公开标价',current)
         self.assertIn('商城目录观察期内',current)
-        self.assertIn('公开报价已提取',current)
+        self.assertIn('商城目录参考价 1 条',current)
         self.assertIn('¥1,899.00',current)
-        self.assertNotIn(f'/opportunities/{opportunity}',self.client.get('/?view=ready').get_data(as_text=True))
+        default=self.client.get('/?buy_platform=all').get_data(as_text=True)
+        self.assertNotIn(f'/opportunities/{opportunity}',default)
+        self.assertIn('当前没有通过完整准入的公开优惠',default)
+        self.assertIn('1 条含商城目录公开标价',default)
+        self.assertNotIn(f'/opportunities/{opportunity}',self.client.get('/?buy_platform=all&budget=2000').get_data(as_text=True))
+        self.assertNotIn(f'/opportunities/{opportunity}',self.client.get('/?buy_platform=all&view=ready').get_data(as_text=True))
         with db.connect() as c:
             self.assertEqual(c.execute('SELECT state FROM auto_reviews WHERE opportunity_id=?',(opportunity,)).fetchone()[0],'missing_time')
+
+    def test_catalog_price_requires_explicit_price_drop_for_current_offer_list(self):
+        with db.connect() as c:
+            now=c.execute('SELECT CURRENT_TIMESTAMP').fetchone()[0]
+            c.execute("""INSERT INTO sources(id,platform,name,category,url,method,parser,status,enabled,
+                       interval_minutes,last_success) VALUES(2,'小米商城','目录商品','新品与补货',
+                       'https://www.mi.com/shop','html','mi','healthy',1,60,?)""",(now,))
+            plain_event=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,
+                       published_at,last_seen_at) VALUES(2,'mi-plain','米家冰箱 对开636L 1899元',
+                       'https://www.mi.com/shop/buy?product_id=22504','','mi-plain',NULL,?)""",(now,)).lastrowid
+            plain=c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                       VALUES(?,2,'米家冰箱 对开636L 1899元','新品与补货',
+                       'https://www.mi.com/shop/buy?product_id=22504')""",(plain_event,)).lastrowid
+            promo_event=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,
+                       published_at,last_seen_at) VALUES(2,'mi-promo','米家电视限时活动价 999元',
+                       'https://www.mi.com/shop/buy?product_id=999','','mi-promo',NULL,?)""",(now,)).lastrowid
+            promo=c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                       VALUES(?,2,'米家电视限时活动价 999元','新品与补货',
+                       'https://www.mi.com/shop/buy?product_id=999')""",(promo_event,)).lastrowid
+            sale_event=c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,fingerprint,
+                       published_at,last_seen_at) VALUES(2,'mi-sale','米家电视 原价30元，活动价20元',
+                       'https://www.mi.com/shop/buy?product_id=2000','','mi-sale',NULL,?)""",(now,)).lastrowid
+            sale=c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                       VALUES(?,2,'米家电视 原价30元，活动价20元','新品与补货',
+                       'https://www.mi.com/shop/buy?product_id=2000')""",(sale_event,)).lastrowid
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'missing_time','目录公开观察',189900)",(plain,))
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'missing_time','目录公开观察',99900)",(promo,))
+            c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(?,'observed','目录公开观察',2000)",(sale,))
+
+        default=self.client.get('/?buy_platform=all&view=offers').get_data(as_text=True)
+        self.assertNotIn(f'/opportunities/{promo}',default)
+        self.assertNotIn(f'/opportunities/{plain}',default)
+        self.assertNotIn(f'/opportunities/{sale}',default)
+        self.assertIn('当前没有通过完整准入的公开优惠',default)
+
+        current=self.client.get('/?buy_platform=all&view=current').get_data(as_text=True)
+        self.assertIn(f'/opportunities/{promo}',current)
+        self.assertIn(f'/opportunities/{plain}',current)
+        promo_row=current.split(f'/opportunities/{promo}',1)[1].split('</tr>',1)[0]
+        self.assertIn('商城目录公开标价',promo_row)
+        self.assertNotIn('命中优惠文案 · 到手价未核',promo_row)
+        self.assertNotIn('来源原文整单声称价',promo_row)
+        budget=self.client.get('/?buy_platform=all&view=current&budget=2000').get_data(as_text=True)
+        self.assertNotIn(f'/opportunities/{promo}',budget)
+        with db.connect() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM opportunities').fetchone()[0],4)
 
     def test_default_search_keeps_same_offer_captured_by_separate_sources(self):
         with db.connect() as c:
@@ -255,7 +376,7 @@ class CoreFlowTests(unittest.TestCase):
             c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,last_success) VALUES(2,'另一个平台','另一入口','零售优惠','https://example.com/feed2','rss','healthy',CURRENT_TIMESTAMP)")
             c.execute("INSERT INTO events(id,source_id,external_key,title,url,fingerprint,published_at) VALUES(2,2,'same','测试纸','https://example.com/item2','same',CURRENT_TIMESTAMP)")
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(2,2,2,'测试纸','零售优惠','pending','https://example.com/item2','standard')")
-        page=self.client.get('/?q=测试纸&view=current').get_data(as_text=True)
+        page=self.client.get('/?buy_platform=all&q=测试纸&view=current').get_data(as_text=True)
         self.assertIn('/opportunities/1',page)
         self.assertIn('/opportunities/2',page)
         self.assertIn('测试 · 测试',page)
@@ -301,7 +422,7 @@ class CoreFlowTests(unittest.TestCase):
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(2,'observed','test quote',500)")
             c.execute("INSERT INTO events(id,source_id,external_key,title,url,fingerprint,published_at) VALUES(3,1,'unknown','没写价格的测试纸','https://example.com/unknown','unknown',CURRENT_TIMESTAMP)")
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(3,3,1,'没写价格的测试纸','零售优惠','pending','https://example.com/unknown','standard')")
-        page=self.client.get('/?view=all&sort=price_low').get_data(as_text=True)
+        page=self.client.get('/?buy_platform=all&view=all&sort=price_low').get_data(as_text=True)
         self.assertLess(page.index('/opportunities/2'),page.index('/opportunities/1'))
         self.assertGreater(page.index('/opportunities/3'),page.index('/opportunities/1'))
         with db.connect() as c:
@@ -311,7 +432,7 @@ class CoreFlowTests(unittest.TestCase):
             c.execute("INSERT INTO events(id,source_id,external_key,title,url,snippet,fingerprint,published_at) VALUES(5,1,'tissue','抽纸6包 12元','https://example.com/tissue',?,'tissue',CURRENT_TIMESTAMP)",('该价格商品规格：6包\n下单1件，实付12元',))
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(5,5,1,'抽纸6包 12元','零售优惠','pending','https://example.com/tissue','standard')")
             c.execute("INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents) VALUES(5,'observed','test quote',1200)")
-        paper_page=self.client.get('/?view=all&sort=paper_unit_low').get_data(as_text=True)
+        paper_page=self.client.get('/?buy_platform=all&view=all&sort=paper_unit_low').get_data(as_text=True)
         self.assertLess(paper_page.index('/opportunities/5'),paper_page.index('/opportunities/4'))
 
     def test_single_character_search_ignores_unrelated_source_snippet(self):
@@ -326,19 +447,19 @@ class CoreFlowTests(unittest.TestCase):
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(10,10,1,'纸皮烧麦','零售优惠','pending','https://example.com/paper-bun','standard')")
             c.execute("INSERT INTO events(id,source_id,external_key,title,url,snippet,fingerprint,published_at) VALUES(7,1,'snippet-paper','限时活动','https://example.com/snippet-paper','抽纸30抽，9.9元','snippet-paper',CURRENT_TIMESTAMP)")
             c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url,offer_type) VALUES(7,7,1,'限时活动','零售优惠','pending','https://example.com/snippet-paper','standard')")
-        single=self.client.get('/?q=纸&view=all').get_data(as_text=True)
+        single=self.client.get('/?buy_platform=all&q=纸&view=all').get_data(as_text=True)
         self.assertNotIn('/opportunities/6',single)
         self.assertNotIn('/opportunities/8',single)
         self.assertNotIn('/opportunities/9',single)
         self.assertNotIn('/opportunities/10',single)
         self.assertIn('全渠道产出：1 / 1 个启用入口命中本次商品线索',single)
-        multi=self.client.get('/?q=抽纸&view=all').get_data(as_text=True)
+        multi=self.client.get('/?buy_platform=all&q=抽纸&view=all').get_data(as_text=True)
         self.assertIn('/opportunities/7',multi)
 
     def test_source_feed_is_visible_and_archive_link_keeps_current_search(self):
         with db.connect() as c:
             c.execute("UPDATE sources SET name='纸品关键词采集' WHERE id=1")
-        page=self.client.get('/?q=测试纸&layout=list&view=current').get_data(as_text=True)
+        page=self.client.get('/?buy_platform=all&q=测试纸&layout=list&view=current').get_data(as_text=True)
         self.assertIn('测试 · 纸品关键词采集',page)
         import re
         from html import unescape
@@ -355,13 +476,13 @@ class CoreFlowTests(unittest.TestCase):
         self.assertLess(source_at,detail.index('本商品当前结论'))
 
     def test_price_header_is_a_clickable_sort_toggle(self):
-        low=self.client.get('/?q=纸&sort=price_low&view=all').get_data(as_text=True)
+        low=self.client.get('/?buy_platform=all&q=纸&sort=price_low&view=all').get_data(as_text=True)
         self.assertIn('sortable-header',low)
         self.assertIn('mobile-sort-toggle',low)
         self.assertIn('sort-indicator',low)
         self.assertIn('来源报价排序；点击切换升序和降序',low)
         self.assertIn('sort=price_high',low)
-        high=self.client.get('/?q=纸&sort=price_high&view=all').get_data(as_text=True)
+        high=self.client.get('/?buy_platform=all&q=纸&sort=price_high&view=all').get_data(as_text=True)
         self.assertIn('sort=price_low',high)
         self.assertIn('↓',high)
 
@@ -397,6 +518,29 @@ class CoreFlowTests(unittest.TestCase):
         with db.connect() as c:
             self.assertEqual(c.execute('SELECT status FROM notification_deliveries').fetchone()[0],'skipped')
 
+    def test_paused_source_pending_delivery_is_skipped_without_sending(self):
+        with db.connect() as c:
+            c.execute('UPDATE sources SET enabled=0 WHERE id=1')
+            notice_id=c.execute('INSERT INTO notifications(event_id,opportunity_id) VALUES(1,1)').lastrowid
+            c.execute("INSERT INTO notification_deliveries(notification_id,channel) VALUES(?,'qq')",(notice_id,))
+        with patch.object(alert_dispatch,'active_channels',return_value=['qq']),patch.object(alert_dispatch,'deliver') as send:
+            result=workbench.dispatch_verified_alerts()
+        self.assertEqual((result['eligible'],result['sent']),(0,0))
+        send.assert_not_called()
+        with db.connect() as c:
+            delivery=c.execute('SELECT status,last_error FROM notification_deliveries').fetchone()
+            self.assertEqual(tuple(delivery),('skipped','来源已暂停'))
+
+    def test_paused_source_detail_is_labeled_archive_without_current_comparison(self):
+        with db.connect() as c:
+            c.execute("INSERT INTO sources(id,platform,name,category,url,method,status,enabled) VALUES(2,'不可靠聚合源','不可靠聚合源','优惠','https://aggregator.example/feed','rss','healthy',0)")
+            c.execute("INSERT INTO events(id,source_id,external_key,title,url,snippet,fingerprint,published_at) VALUES(2,2,'archive','测试历史纸','https://aggregator.example/item/2','商品价格9元','archive',CURRENT_TIMESTAMP)")
+            c.execute("INSERT INTO opportunities(id,event_id,source_id,title,category,status,url) VALUES(2,2,2,'测试历史纸','优惠','pending','https://aggregator.example/item/2')")
+        page=self.client.get('/opportunities/2').get_data(as_text=True)
+        self.assertIn('该来源已暂停。此页为历史归档',page)
+        self.assertIn('原始记录保留以供审计',page)
+        self.assertNotIn('来源价格线索比较',page)
+
     def test_dispatch_uses_new_gate_without_historical_samples(self):
         with patch.object(alert_dispatch,'active_channels',return_value=['qq']),patch.object(alert_dispatch,'deliver') as send:
             self.assertEqual(workbench.dispatch_verified_alerts()['sent'],1)
@@ -404,6 +548,58 @@ class CoreFlowTests(unittest.TestCase):
             send.assert_called_once()
             self.assertIn('测试门槛',send.call_args.args[2])
         # Mock only; no network sender is invoked in any test.
+
+    def test_taobao_ecosystem_default_scope_includes_tmall_and_requires_a_product_link(self):
+        with db.connect() as c:
+            c.execute("UPDATE sources SET status='healthy',enabled=1,interval_minutes=1,last_success=CURRENT_TIMESTAMP WHERE id=1")
+            examples = [
+                (2, 'taobao-promo', '纸巾 活动价 8元', 'https://item.taobao.com/item.htm?id=123456789',
+                 '原价10元，活动售价8元，下单1件，实付8元，包邮', 800),
+                (6, 'taobao-h5-promo', '纸巾 活动价 7元', 'https://h5.m.taobao.com/awp/core/detail.htm?id=123456788',
+                 '商品原价9元，券后7元，下单1件，实付7元，包邮', 700),
+                (3, 'taobao-plain', '纸巾 10元', 'https://item.taobao.com/item.htm?id=123456790',
+                 '售价10元，下单1件，实付10元，包邮', 1000),
+                (4, 'title-only', '淘宝纸巾 活动价 7元', 'https://source.example/post/taobao',
+                 '活动售价7元，下单1件，实付7元', 700),
+                (5, 'tmall-item', '纸巾 活动价 6元', 'https://detail.tmall.com/item.htm?id=123456791',
+                 '活动售价6元，下单1件，实付6元', 600),
+                (7, 'taobao-promo-copy-only', '纸巾 限时活动价 6元', 'https://item.taobao.com/item.htm?id=123456792',
+                 '活动售价6元，下单1件，实付6元', 600),
+            ]
+            for opportunity_id, external_key, title, url, snippet, amount in examples:
+                event_id = c.execute("""INSERT INTO events(source_id,external_key,title,url,snippet,
+                    fingerprint,published_at,last_seen_at)
+                    VALUES(1,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)""",
+                    (external_key,title,url,snippet,external_key)).lastrowid
+                c.execute("""INSERT INTO opportunities(id,event_id,source_id,title,category,status,url)
+                    VALUES(?,?,1,?,'零售优惠','pending',?)""",(opportunity_id,event_id,title,url))
+                c.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents,
+                    conditions,evidence,checked_at)
+                    VALUES(?,'observed','隔离回归样本',?,?,?,CURRENT_TIMESTAMP)""",
+                    (opportunity_id,amount,snippet,snippet))
+
+        default_offers = self.client.get('/').get_data(as_text=True)
+        self.assertNotIn('/opportunities/2', default_offers)
+        self.assertNotIn('/opportunities/6', default_offers)
+        self.assertNotIn('/opportunities/3', default_offers)
+        self.assertNotIn('/opportunities/4', default_offers)
+        self.assertNotIn('/opportunities/7', default_offers)
+        self.assertNotIn('/opportunities/5', default_offers)
+        self.assertIn('当前没有通过完整准入的公开优惠', default_offers)
+        self.assertIn('专用淘宝商品采集入口已启用 0 个', default_offers)
+
+        taobao_clues = self.client.get('/?buy_platform=taobao&view=current').get_data(as_text=True)
+        self.assertIn('/opportunities/2', taobao_clues)
+        self.assertIn('/opportunities/6', taobao_clues)
+        self.assertIn('/opportunities/3', taobao_clues)
+        self.assertNotIn('/opportunities/4', taobao_clues)
+        self.assertIn('/opportunities/5', taobao_clues)
+        tmall_clues = self.client.get('/?buy_platform=tmall&view=current').get_data(as_text=True)
+        self.assertIn('/opportunities/5', tmall_clues)
+        self.assertNotIn('/opportunities/2', tmall_clues)
+        all_clues = self.client.get('/?buy_platform=all&view=current').get_data(as_text=True)
+        self.assertIn('/opportunities/4', all_clues)
+        self.assertIn('/opportunities/5', all_clues)
 
 
 if __name__=='__main__':

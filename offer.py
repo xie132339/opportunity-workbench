@@ -1,6 +1,7 @@
 """Conservative title hints; account eligibility is always confirmed by a person."""
 import re
 import unicodedata
+from services.public_campaign import parse_public_campaign
 
 NEW_USER_WORDS = re.compile(r"新人|新客|新用户|首单|首购|首次下单|新注册|新人券|新客券")
 
@@ -52,6 +53,12 @@ def product_subcategory(title, topic='other'):
 def resource_kind(title, body=''):
     """Mechanism hints only; no promise of eligibility or free fulfillment."""
     text = title + '\n' + (body or '')
+    # A public crowdfunding page can describe a normal paid pledge alongside
+    # an optional lottery tier. If it gives one explicit campaign price and
+    # window, classify the paid product tier as a purchase; never let the
+    # lottery copy erase the stated product price.
+    if parse_public_campaign(text):
+        return 'purchase'
     for kind, pattern in [('rebate',r'晒反|晒返|返后|先付后返|先买后返|返现'),
                           ('shipping',r'付邮|运费自理|支付\s*\d+元运费'),
                           ('trial',r'试用|中选'),('lottery',r'抽奖|中奖|抽中|翻牌'),
