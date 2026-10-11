@@ -11,6 +11,7 @@ from services.category_policy import encode_policy, validate_policy, decode_poli
 from services.category_comparison_rules import default_rule, encode_rule, decode_rule
 from services.maintained_price_baselines import (decode_terms, parse_terms, unit_label,
                                                   validate_baseline)
+from services.maintained_price_candidates import load_maintained_price_candidates
 from services.money import cents
 from offer import TOPIC_LABELS
 
@@ -75,8 +76,9 @@ def price_benchmarks():
             row["unit_label"] = unit_label(row)
         baseline_summary = dict(total=len(baselines), enabled=sum(bool(row["enabled"]) for row in baselines),
                                 ready=sum(bool(row["enabled"]) for row in baselines))
+        maintained_candidates = load_maintained_price_candidates(db, categories)
     return render_template("price_benchmarks.html", categories=categories, baselines=baselines,
-                           baseline_summary=baseline_summary)
+                           baseline_summary=baseline_summary, maintained_candidates=maintained_candidates)
 
 
 def _baseline_payload(form):

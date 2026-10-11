@@ -15,6 +15,23 @@
 </section>
 
 <section class="card">
+  <h2>当前官方优惠中的维护候选</h2>
+  <p class="muted">只列出当前淘宝联盟官方物料中已有明确降价且标题含数量单位的商品。它们只帮助选择要维护的具体商品；四档价格带必须由你填写，候选价不会被自动写入基准。未匹配现有品类的候选会明确提示，不会被静默丢弃。</p>
+  {% if maintained_candidates %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>商品 / 品类</th><th>官方推广价</th><th>官方优惠依据</th><th>条件</th><th>操作</th></tr></thead>
+    <tbody>{% for row in maintained_candidates %}<tr>
+      <td><strong>{{ row.title }}</strong><br><small>{% if row.category_name %}{{ row.category_name }}{% else %}{{ topic_labels.get(row.topic_key,row.topic_key) }}（待配置具体品类）{% endif %} · {{ row.source_name }}</small></td>
+      <td>{{ money(row.price_cents) }}{% if row.reference_cents %}<br><small>接口参考价 {{ money(row.reference_cents) }}</small>{% endif %}</td>
+      <td>{{ row.reason }}</td>
+      <td>{{ row.condition }}</td>
+      <td><a href="{{ url_for('opportunity', opportunity_id=row.opportunity_id) }}">查看证据</a></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<p>当前没有同时满足官方降价和明确单位的候选；这不会影响官方优惠正常展示。</p>{% endif %}
+</section>
+
+<section class="card">
   <h2>新建维护基准</h2>
   <p class="muted">匹配词填写商品身份的必要部分，例如“清风，原木，3层”。计数、质量和容量会从标题中的明确数字换算；按件比较则须填写固定规格。所有金额都按下方所选基准单位填写。</p>
   <form method="post" action="{{ url_for('save_maintained_price_baseline') }}" class="form-grid">

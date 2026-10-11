@@ -82,6 +82,10 @@ class PublicProfitTests(unittest.TestCase):
         topic = resource_topic(oranges, '公开优惠线索')
         self.assertEqual(topic, 'food')
         self.assertEqual(product_subcategory(oranges, topic), '生鲜食品')
+        self.assertEqual(resource_topic('金龙鱼 食用油 5L'), 'food')
+        self.assertEqual(resource_topic('五常大米 5kg'), 'food')
+        self.assertEqual(resource_topic('高筋面粉 10kg'), 'food')
+        self.assertEqual(resource_topic('天然饮用水 550ml*24瓶'), 'food')
 
     def _case_home_electrical_hardware_has_a_specific_subcategory(self):
         title='西门子开关插座面板 致典系列雅白色 一开单控'

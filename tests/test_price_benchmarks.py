@@ -1,6 +1,8 @@
 """Price benchmark management never fabricates samples or provider connections."""
+import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +10,7 @@ import app as workbench
 import db
 from services.price_benchmark_evidence import price_claim_evidence
 from services.source_provenance import source_provenance_evidence
+from services.taobao_alliance import parse_item
 
 
 class PriceBenchmarkPageTests(unittest.TestCase):
@@ -58,6 +61,44 @@ class PriceBenchmarkPageTests(unittest.TestCase):
             after = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                      for table in before}
         self.assertEqual(before, after)
+
+    def test_page_lists_only_current_measurable_official_discount_as_maintenance_candidate(self):
+        now = datetime.now(timezone(timedelta(hours=8)))
+        item = {
+            "num_iid": "123456789", "title": "可配置抽纸 3层 100抽10包",
+            "item_url": "https://item.taobao.com/item.htm?id=123456789",
+            "reserve_price": "30.00", "zk_final_price": "18.00",
+            "coupon_amount": "", "shop_title": "官方店", "user_type": 0,
+        }
+        parsed = parse_item(item, now=now)
+        self.assertIsNotNone(parsed)
+        with db.connect() as conn:
+            category_id = conn.execute("""INSERT INTO benchmark_categories
+                (name,pricing_unit,identity_rule,topic_key,match_terms_json,policy_json,comparison_rule_json)
+                VALUES('测试抽纸','元/100抽','品牌、层数、抽数、包数一致','home','[\"可配置抽纸\"]','{}','{}')""").lastrowid
+            source_id = conn.execute("""INSERT INTO sources
+                (platform,name,category,url,method,parser,status,enabled,interval_minutes,last_success)
+                VALUES('淘宝联盟','测试官方物料','零售优惠','https://eco.taobao.com/router/rest?q=抽纸',
+                       'taobao_alliance','taobao_alliance','healthy',1,60,CURRENT_TIMESTAMP)""").lastrowid
+            event_id = conn.execute("""INSERT INTO events
+                (source_id,external_key,title,url,metadata_json,fingerprint,last_seen_at)
+                VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                (source_id, parsed[0], parsed[1], parsed[2], json.dumps(parsed[5]), 'candidate-1')).lastrowid
+            opportunity_id = conn.execute("""INSERT INTO opportunities
+                (event_id,source_id,title,category,topic,url)
+                VALUES(?,?,?,'零售优惠','other',?)""", (event_id, source_id, parsed[1], parsed[2])).lastrowid
+            conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
+                VALUES(?,'observed','官方优惠观察',1800)""", (opportunity_id,))
+        response = self.client.get("/price-benchmarks")
+        page = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("当前官方优惠中的维护候选", page)
+        self.assertIn("可配置抽纸 3层 100抽10包", page)
+        self.assertIn("测试抽纸", page)
+        self.assertIn("官方推广价比接口参考价低", page)
+        self.assertIn(f'/opportunities/{opportunity_id}', page)
+        with db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 
     def test_source_provenance_audit_separates_collector_publisher_and_product_links(self):
         with db.connect() as conn:
