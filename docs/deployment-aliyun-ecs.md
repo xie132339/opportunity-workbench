@@ -19,6 +19,8 @@
 
 **访问与凭据边界：**公网只经 Nginx 的 TCP 80 访问；应用的 5002 端口只监听本机，不应开放到安全组。`/health` 仅允许 ECS 本机访问，可用 `curl -fsS http://127.0.0.1/health` 检查。网页登录用户为 `admin`；管理员密码、`WORKBENCH_SECRET`、淘宝联盟 App Secret 和推广位 ID 均只从服务器环境文件读取，文档与 Git 不保存其实际值。环境变量名包括 `WORKBENCH_ADMIN_USERNAME`、`WORKBENCH_ADMIN_PASSWORD`、`WORKBENCH_SECRET`、`TAOBAO_ALLIANCE_APP_KEY`、`TAOBAO_ALLIANCE_APP_SECRET`、`TAOBAO_ALLIANCE_ADZONE_ID`。
 
+手机浏览器使用同一个公网入口 <http://8.159.128.186/>；登录后底部可切换搜索、节日、优惠、渠道，其余入口在“更多”。本机 `127.0.0.1:5002` 只供本机访问。当前入口仍是 HTTP，登录信息在公网传输缺少 TLS 保护；正式从手机公网使用前应配置域名与 HTTPS 证书。
+
 健康接口的 `monitor_api_configured` 字段只检查 `CHANGED_API_TOKEN`，不代表淘宝联盟凭据状态；判断淘宝采集是否成功，应查看 `/sources` 和数据库 `source_scan_runs` 的最新完成回执。
 
 ### 最近一次真实采集验收
@@ -73,8 +75,9 @@ systemctl --no-pager --full status opportunity-workbench-web opportunity-workben
 ```bash
 cd /application
 git fetch origin feature/bootstrap
-git switch feature/bootstrap
-git reset --hard origin/feature/bootstrap
+git branch --show-current  # 必须为非保护分支 feature/bootstrap
+git status --short          # 应为空；有改动先调查，不覆盖
+git merge --ff-only origin/feature/bootstrap
 /application/.venv/bin/python -m pip install -r requirements.txt
 systemctl restart opportunity-workbench-web opportunity-workbench-worker
 ```

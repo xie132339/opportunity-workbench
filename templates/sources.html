@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
 {% block title %}渠道管理 · 多平台机会工作台{% endblock %}
 {% block content %}
-<h1>渠道管理</h1><p>优先覆盖家用低价、免费/试用、餐饮出行及会员权益；不同栏目可能来自同一聚合上游，不当作独立比价证据。线报JSON可设1分钟检查，其他来源最低5分钟；实际更新时间见每行。</p>
-<section class="card"><p>闲鱼账号、搜索任务和采集结果统一从 <a href="{{ url_for('xianyu') }}">闲鱼任务</a> 管理。采集组件在本机后台运行，无需打开另一个管理网站。</p></section>
+<h1>渠道管理</h1><details class="home-guide" data-mobile-collapse open><summary>渠道使用说明</summary><div class="guide-content"><p>优先覆盖家用低价、免费/试用、餐饮出行及会员权益；不同栏目可能来自同一聚合上游，不当作独立比价证据。线报JSON可设1分钟检查，其他来源最低5分钟；实际更新时间见每行。</p>
+<p>闲鱼账号、搜索任务和采集结果统一从 <a href="{{ url_for('xianyu') }}">闲鱼任务</a> 管理。采集组件在本机后台运行，无需打开另一个管理网站。</p></div></details>
 <section class="card">
-  <p>“采集有返回”只表示入口返回了标题/链接，不代表拿到商品报价。分阶段计数统计最近成功采集周期内仍能看到的线索；原文发布时间单独核对，绝不拿采集时间代替。“公开金额已提取”包含“条件待拆”，这些阶段数不能直接相加。报价已提取也不代表商家结算价、优惠适用或全网最低；时间缺失/过期/未来、优惠条件不清、活动权益和冲突均分开列出，不计作已验证捡漏。</p>
+  <details class="source-status-help" data-mobile-collapse open><summary>采集状态与金额口径</summary><p>“采集有返回”只表示入口返回了标题/链接，不代表拿到商品报价。分阶段计数统计最近成功采集周期内仍能看到的线索；原文发布时间单独核对，绝不拿采集时间代替。“公开金额已提取”包含“条件待拆”，这些阶段数不能直接相加。报价已提取也不代表商家结算价、优惠适用或全网最低；时间缺失/过期/未来、优惠条件不清、活动权益和冲突均分开列出，不计作已验证捡漏。</p></details>
   <form method="post" action="{{ url_for('scan_everything') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>检查全部已启用来源</button></form>
 </section>
 <section class="card">

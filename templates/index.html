@@ -1,6 +1,7 @@
 {% extends 'base.html' %}{% block title %}商品搜索 · 多平台机会工作台{% endblock %}
 {% block content %}
 <h1>商品搜索</h1>
+<details class="home-guide" data-mobile-collapse open><summary>使用说明与快捷入口</summary><div class="guide-content">
 <p class="row"><a href="/?topic=home">家用日用品</a><a href="{{ url_for('benefits_page',kind='free_claim') }}">免费领取线索</a><a href="{{ url_for('benefits_page',kind='trial') }}">申请试用</a><a href="{{ url_for('benefits_page',kind='coupon') }}">优惠券与权益</a><a href="{{ url_for('benefits_page',kind='points') }}">积分兑换</a><a href="{{ url_for('benefits_page',kind='campaign') }}">优惠会场</a></p>
 <p class="muted">当前购买平台范围：<strong>{{ buy_platform_label }}</strong>。按链接识别 {{ marketplace_selected_count }} / {{ marketplace_population_count }} 条；未确认商品平台 {{ marketplace_unidentified_count }} 条。专用淘宝商品采集入口已启用 {{ dedicated_taobao_source_count }} 个。商品链接只确认平台归属，不确认同款、价格、优惠或库存。</p>
 <p>默认显示淘宝联盟官方优惠观察。维护价格带只是附加校准标签，不是列表准入条件：商品标题同时命中你维护的品牌、规格和单位价格带时，显示“按维护基准”的优惠或可捡漏判断；没有命中、规格无法换算或规则冲突时，商品保持正常显示且不下结论。任何维护基准判断都不等于账号结算价或全网最低价。</p>
@@ -8,9 +9,11 @@
 <p class="muted">此处搜索工作台已采集且仍新鲜的线索，不是对京东、淘宝、拼多多等商城实时全站搜价。购买平台仅按直达或有效解析的商品页域名确认；原文提及的平台只算线索，线索来源是发布/采集该线索的平台。逛丢等爆料不是商家报价；相同内容会按来源分别展示，但转载不算独立购买方案。来源标价不等于账号结算价、全网最低或利润；自动分析不会等待商家人工核实。</p>
 
 <p class="row"><a href="{{ url_for('index',buy_platform='taobao',view=view_mode,q=query,platform=platform,minimum_discount=minimum_discount_text) }}">淘宝系官方商品（淘宝/天猫，当前默认）</a><a href="{{ url_for('index',buy_platform='all',view=view_mode,q=query,platform=platform,minimum_discount=minimum_discount_text) }}">查看其它购买平台</a></p>
+</div></details>
 <div class="grid search-layout">
 <section class="card search-summary">
   <h2>{% if show_archive %}全部线索{% elif ready_only %}当前达到比较准入的报价{% elif priced_only %}公开优惠{% else %}当前线索池{% endif %}<span class="pill">{{ total }} 条</span></h2>
+  <details class="search-summary-info" data-mobile-collapse open><summary>查看统计口径与说明</summary><div>
   {% if show_archive %}
   <p>包含历史、时效未知、资料不足和活动资源；请查看每条线索的时间及缺口。</p>
   {% else %}
@@ -28,6 +31,7 @@
   <p class="muted">本视图保留缺价、规格/数量缺口、自动复查排队和报价冲突等待补证据线索；它们不等于通过商品搜索准入。过期、来源失效和优惠资源不作为当前商品线索。</p>
   {% endif %}
   {% endif %}
+  </div></details>
   {% if search_funnel %}
   <details class="search-funnel" aria-label="本次查询数据漏斗">
     <summary>查询范围说明：全部时间匹配 {{ search_funnel.matched_count }} 条，当前时效可见 {{ search_funnel.current_count }} 条</summary>
@@ -49,9 +53,10 @@
 
 <section class="card search-filters">
 <h2>搜索与筛选</h2>
-<form method="get" class="form-grid">
+<form method="get" class="form-grid mobile-search-form">
 <input type="hidden" name="layout" value="{{ layout_mode }}">
 <label>关键词<input name="q" value="{{ query }}" placeholder="例如：纸、牛奶、手机"></label>
+<details class="advanced-filters" data-mobile-collapse open><summary>更多筛选</summary><div class="advanced-filter-grid">
 <label>数据范围<select name="view">
 <option value="offers" {% if view_mode=="offers" %}selected{% endif %}>官方优惠观察（默认；维护基准可选）</option>
 <option value="current" {% if view_mode=="current" %}selected{% endif %}>当前线索池（含无价、金额不明和待补证据）</option>
@@ -69,6 +74,7 @@
 <label>最低官方优惠额<input name="minimum_discount" type="number" step="0.01" min="0" value="{{ minimum_discount_text }}"><small>默认 ¥5；输入 0 不设门槛。仅作用于“公开优惠（默认）”：按当次淘宝联盟官方参考价差、可单独计算的券或完整促销路径筛选，不叠加未证实的优惠。</small></label>
 <label>处理状态<select name="status"><option value="">未忽略</option>{% for key,label in [('pending','待分析'),('verified','条件已核实'),('ignored','已忽略'),('expired','已失效')] %}<option value="{{ key }}" {% if status==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
 <label>利润筛选<select name="candidate"><option value="">不附加利润条件</option><option value="1" {% if candidate_only %}selected{% endif %}>利润执行候选（需行情与成本证据）</option></select></label>
+</div></details>
 <div><button>开始检索</button></div>
 </form>
 </section>
