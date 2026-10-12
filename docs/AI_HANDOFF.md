@@ -65,6 +65,16 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 真实数据回放（100,707 条）：假优惠（优惠>50 元且付款<10 元）1661 条 **100% 拦截**；旧降价信号 58,156 条中新规则判定不可信 4,689 条（含 85–90% 区间 1,636 条与恰好 90% 边界 131 条）；超主题上界 486 条（其中 115 条原为优惠信号被拦出默认列表）。收紧后默认列表优惠额 TOP 全为真品（山茶油礼盒、五常大米 20 斤、PDO 橄榄油、低氘水 12 瓶）；coupon 形态大额假优惠 0 条。高端真品（山茶油 5L 1308 元、橄榄油 3L 616 元）在上界内不受影响。
 - 测试：新增 6 项专项（合理性边界、解析信号、官方优惠额、准入拦截、真品不误伤），后按用户反馈将 90% 边界收紧至 85%（含恰 85%，新增 KUB/柴火场景断言）；全量 `unittest discover -s tests` 374 项，唯一失败为既有 `test_single_item_price_is_not_rendered_twice`（基线同样失败）。文档：`docs/current-product-contract.md` 第 3 节新增价格规则 6/7 与准入表"可解释的当前优惠信号"表述；`docs/core-acceptance.md` 增补 2026-10-12 拦截验收记录。
 
+## 5.2b 2026-10-12 数据驱动校准替换写死阈值（假优惠自适应收尾）
+
+- 背景：用户明确要求"假优惠判断不能写死、要用非常不错的算法解决"。固定阈值（85%/20 倍/10 元-50 元/主题上界）的 85% 收紧仍遗留：①低价箱被假货污染，85–90% 区间假优惠仍漏网；②高价箱尖刺误伤高端真品（康泽泉低氘水 358 元 61% 曾被 water 高价箱 46% 界误拦）。
+- 模块 `services/discount_calibration.py`（新建，判定边界全部由存量语料统计估计，worker 每小时按数据新鲜度重算落盘）：
+  - `calibrate(db)`：每主题估计 `price_ceiling_cents = median(log10 promo)+6×MAD(log10 promo)`；按推广价 0.5 log10 宽分箱（1.0–7.5），每箱取降幅与优惠额 P97（校准样本剔除降幅 >0.92 的虚高尾段防污染；箱样本 <30 回退全局 P97）；`high_log = P97 所在箱上界`（高价豁免线）。落盘值：paper ceiling ¥356 high ¥100；water ¥457/¥316；rice ¥1142/¥316；flour ¥489/¥316；cooking_oil ¥2555/¥1000；laundry ¥646/¥316。
+  - `judge_drop(topic, reserve_cents, promotion_cents)`：荒谬单价超上界 → 拦（"推广价超出…合理上界"）；推广价 ≥ high_log → 豁免（只受上界约束）；否则降幅/优惠额任一超所在箱界 → 拦。topic 可 None（来源外主题回退全局/种子）。`price_ceiling_cents(topic)` 供 `promotion_admission` 复用（有校准用校准上界，否则回退 `living_topic_ceiling_cents`）。
+  - 接入：`taobao_alliance.py::reference_drop_plausibility` 改为委托 `judge_drop(None,…)`（REFERENCE_* 常数保留为种子注释）；`product_search.py::official_promotion_discount`/`promotion_admission` 改用 `topic_key(source_name)+judge_drop()/price_ceiling_cents()`；`db.py::initialize()` 建 `discount_calibration` 表并 `load_calibration`；`app.py` 两个 worker 循环每轮 `refresh_if_stale(connection)`（60 分钟重算）。种子回退：无校准/样本不足时 0.85、20 倍、10 元/50 元、原主题上界。
+- 真实数据回放（六主题 103,135 条，有划线 57,511 条）：拦 4,169（高价 63 + 降幅 3,709 + 优惠额 397；纸 2,563/水 371/米 162/面 408/油 109/洗衣液 556）。关键假货全拦：KUB 69.9→699、柴火 73→699、袁谷 188.3→1016、百岁山 37.1→300、42 元面粉 88%、碾米机 1380、威露士 2997。关键真品全保留：康泽泉低氘水 358、山茶油礼盒 1498、依云 108.9、赣江 2L 茶油 208、食刻橄榄油 54.9。本机页面回放（`q=抽纸/大米/食用油/饮用水/洗衣液&sort=discount_high`）：KUB/柴火优惠从排序消失，各主题 TOP 优惠额全为真品（纸 596.9/米 499/油 960/水 169.2/洗衣液 293.5）。
+- 测试：`tests/test_discount_calibration.py` 8 项（quantile/bin 映射、calibrate 估计、箱界判定、premium 豁免、种子回退与旧规则等价、价格上界种子、refresh 重算、topic 映射）；全量 `unittest discover -s tests` 382 项，唯一失败仍为既有 `test_single_item_price_is_not_rendered_twice`（基线失败）。文档：契约第 3 节规则 6/7 重写为自适应描述；`core-acceptance.md` 增补 2026-10-12 自适应收尾验收。提交与部署：`git diff --check` 通过后提交推送，ECS `/application` 快进并重启 web+worker，公网登录回放同本机。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。

@@ -34,8 +34,13 @@ PROMOTION_SIGNAL_FIELDS = (
 # A price-drop signal that relies on it is only explainable when the drop stays
 # within a plausible range; otherwise the drop is kept for audit but never
 # presented as an official discount amount.
-REFERENCE_DROP_MAX_RATIO = 0.85  # drop/reserve must be < 85%; 85%+ strikethrough on household items is inflated (merchants exploit 90%/89.5% edges)
-REFERENCE_MAX_MARKUP = 20        # reserve / promotion must be <= 20x
+#
+# The plausibility boundaries are estimated from the corpus by
+# services.discount_calibration (per-topic price ceiling, per-price-bin ratio
+# and drop caps).  The constants below are only the conservative seeds used
+# before the first calibration or when a topic has too few samples.
+REFERENCE_DROP_MAX_RATIO = 0.85  # seed: drop/reserve must be < 85% (used before calibration)
+REFERENCE_MAX_MARKUP = 20        # seed: reserve / promotion must be <= 20x
 
 
 def reference_drop_plausibility(reserve_cents, promotion_cents):
@@ -44,21 +49,13 @@ def reference_drop_plausibility(reserve_cents, promotion_cents):
     ``reserve_price`` is set by the merchant, so an extreme reduction against it
     (e.g. a 199 yuan strikethrough on a 2.9 yuan pack of tissues) is treated as
     an unverified marketing anchor rather than an official discount.
+
+    The judgment delegates to the data-driven calibration (see
+    services.discount_calibration.judge_drop) when a calibration is loaded;
+    without one it falls back to the conservative seed rules below.
     """
-    if not (isinstance(reserve_cents, int) and isinstance(promotion_cents, int)
-            and not isinstance(reserve_cents, bool) and not isinstance(promotion_cents, bool)
-            and reserve_cents > promotion_cents > 0):
-        return False, "无有效参考价差"
-    drop = reserve_cents - promotion_cents
-    # Absolute guard: a household item costing under 10 yuan cannot credibly
-    # "save" over 50 yuan (e.g. 6.26 yuan tissues with a 53-yuan strikethrough).
-    if promotion_cents < 1000 and drop > 5000:
-        return False, "低价值商品优惠额超过50元，划线价作为优惠证据不可信"
-    if drop * 20 >= reserve_cents * 17:  # drop / reserve >= 0.85（含边界；生活品低于1.5折的划线基本为虚高）
-        return False, "降幅达到参考价85%或以上，参考价作为划线价不可信"
-    if reserve_cents > promotion_cents * REFERENCE_MAX_MARKUP:
-        return False, "参考价超过推广价20倍，参考价作为划线价不可信"
-    return True, ""
+    from services import discount_calibration
+    return discount_calibration.judge_drop(None, reserve_cents, promotion_cents)
 
 
 def has_current_promotion_signal(offer):

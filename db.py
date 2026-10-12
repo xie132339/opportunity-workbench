@@ -458,6 +458,9 @@ def initialize():
         initialize_maintained_price_baselines(db)
         initialize_taobao_campaigns(db)
         initialize_festival_promotions(db)
+        from services.discount_calibration import CALIBRATION_SCHEMA, load as load_calibration
+        db.executescript(CALIBRATION_SCHEMA)
+        load_calibration(db)
         provider_seeds = [
             ("smzdm_history", "什么值得买历史价格 API", "independent_index", "按商品URL的历史价格曲线；Price/FinalPrice字段", "需App Key与OAuth；历史索引不等于当前结算价", "https://openapi.zhidemai.com/pages/price/4.%E5%8E%86%E5%8F%B2%E4%BB%B7%E6%A0%BC%E6%9F%A5%E8%AF%A2API.html"),
             ("manmanbuy", "慢慢买", "independent_index", "历史价格与跨商城比价；当前可用 API 覆盖待合作核实", "公开介绍未提供本项目可直接调用的接口契约，需合作询价", "https://help.manmanbuy.com/"),

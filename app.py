@@ -163,6 +163,9 @@ def main():
             result = run_taobao_cycle()
             if result:
                 print(result, flush=True)
+            from services import discount_calibration
+            with connect() as connection:
+                discount_calibration.refresh_if_stale(connection)
             time.sleep(60)
     elif command == "review":
         print(run_cycle())
@@ -189,6 +192,9 @@ def main():
                 deliveries = dispatch_verified_alerts()
                 if deliveries["sent"] or deliveries["failed"]:
                     print(deliveries, flush=True)
+                from services import discount_calibration
+                with connect() as connection:
+                    discount_calibration.refresh_if_stale(connection)
                 time.sleep(60)
         finally:
             link_stop.set()
