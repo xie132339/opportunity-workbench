@@ -20,7 +20,9 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 - [x] (2026-10-12) 验证已有 ECS 公网 HTTP 入口、远端干净功能分支及网页/worker服务；保留本机监听边界。
 - [x] (2026-10-12) 完成手机顶部、底部导航、折叠说明/筛选和常用表格卡片布局。
 - [x] (2026-10-12) 以 390px / 320px 浏览器视口检查搜索、详情、节日、渠道、价格基准及导航，均无整页横向溢出；登录和公网待部署后检查。
-- [ ] 更新访问说明、验收记录和实施日志；提交非保护分支，并将同一版本部署 ECS。
+- [x] (2026-10-12) 提交非保护分支，经 Workbench CLI 传输 Git bundle，快进 ECS `/application`，网页与 worker 均加载新版本。
+- [x] (2026-10-12) 公网 `/login`、手机脚本 200，未登录首页 302；390px 公网登录页无横向溢出。
+- [x] (2026-10-12) 更新最终验收记录与 Obsidian 实施日志；实体手机及 HTTPS 因缺域名/设备回放仍是外部边界。
 
 ## Plan of work
 
@@ -48,4 +50,4 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 ## Outcomes and retrospective
 
-待验收。
+本机手机视口与 ECS 公网入口已验收；实体手机和真实蜂窝网络未回放。公网当前只有 HTTP，登录传输缺少 TLS，不作为安全的正式公网登录验收。用户可见页面布局已在 390px/320px 浏览器视口回放。
