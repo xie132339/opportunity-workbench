@@ -19,6 +19,7 @@ import requests
 API_ENDPOINT = "https://eco.taobao.com/router/rest"
 API_METHOD = "taobao.tbk.dg.material.optional.upgrade"
 ACTIVITY_INFO_METHOD = "taobao.tbk.activity.info.get"
+MATERIAL_IDS_METHOD = "taobao.tbk.optimus.tou.material.ids.get"
 CHINA_TZ = timezone(timedelta(hours=8))
 ALLOWED_SEARCH_PARAMS = frozenset({"q", "material_id", "cat", "start_price", "end_price", "is_tmall", "page_no", "page_size", "has_coupon", "max_pages"})
 TAOBAO_ITEM_HOSTS = frozenset({"item.taobao.com", "m.taobao.com", "h5.m.taobao.com"})
@@ -739,6 +740,72 @@ def fetch_activity_info(activity_material_id, *, http_get=None, env=None, now=No
         "short_promotion_url": _official_activity_link(data.get("short_click_url")),
         "raw_payload": payload,
     }
+
+
+def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=None):
+    """List official promotion-product materials exposed to this promoter.
+
+    The returned material IDs identify product feeds, not activity halls.  The
+    caller must keep them distinct from ``activity_material_id`` and let an
+    operator choose which official material belongs to a holiday.
+    """
+    page_size = 100
+    page_no = 1
+    materials = []
+    seen = set()
+    total_count = None
+    while page_no <= 100:
+        query = {"page_no": page_no, "subject": 1, "material_type": 1,
+                 "page_size": page_size}
+        payload = _request_top_payload(
+            MATERIAL_IDS_METHOD,
+            {"material_query": json.dumps(query, separators=(",", ":"))},
+            http_get=http_get, env=env, now=now, report=report,
+        )
+        response = payload.get("tbk_optimus_tou_material_ids_get_response")
+        data = response.get("data") if isinstance(response, dict) else None
+        page = data.get("tou_materials") if isinstance(data, dict) else None
+        if not isinstance(page, list):
+            raise TaobaoAllianceAPIError("淘宝联盟物料列表未返回 tou_materials", "schema_mismatch")
+        try:
+            total_count = int(response.get("total_count"))
+        except (TypeError, ValueError, AttributeError):
+            total_count = None
+        accepted = 0
+        for item in page:
+            if not isinstance(item, dict):
+                continue
+            material_id = str(item.get("material_id") or "").strip()
+            if (not re.fullmatch(r"[0-9]{1,24}", material_id)
+                    or material_id in seen
+                    or str(item.get("material_type")) != "1"
+                    or str(item.get("subject")) != "1"):
+                continue
+            seen.add(material_id)
+            accepted += 1
+            material = {
+                "material_id": material_id,
+                "material_name": re.sub(r"\s+", " ", str(item.get("material_name") or "")).strip()[:160],
+                "material_type": 1,
+                "subject": 1,
+                "start_time": item.get("start_time"),
+                "end_time": item.get("end_time"),
+            }
+            for key in ("start_time", "end_time"):
+                try:
+                    stamp = int(material[key])
+                    material[key] = datetime.fromtimestamp(stamp, CHINA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                except (TypeError, ValueError, OverflowError, OSError):
+                    material[key] = ""
+            materials.append(material)
+        if not page or len(page) < page_size or (total_count is not None and page_no * page_size >= total_count):
+            break
+        page_no += 1
+    if report is not None:
+        report.update(endpoint=API_ENDPOINT, method=MATERIAL_IDS_METHOD,
+                      subject=1, material_type=1, pages=page_no,
+                      total_count=total_count, returned_count=len(materials))
+    return materials
 
 def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
     """Bounded pages; preserve rejected input and partial success for diagnosis."""

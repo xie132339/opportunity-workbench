@@ -8,7 +8,9 @@ from unittest.mock import patch
 import db
 import scanner
 from app import app
-from services.taobao_alliance import ACTIVITY_INFO_METHOD, fetch_activity_info, parse_item, search_config
+from services.taobao_alliance import (ACTIVITY_INFO_METHOD, MATERIAL_IDS_METHOD,
+                                      fetch_activity_info, fetch_promoter_material_ids,
+                                      parse_item, search_config)
 from services.taobao_campaigns import (campaign_copy, campaign_window, create_campaign,
                                        material_source_url, refresh_campaign)
 
@@ -56,7 +58,7 @@ class TaobaoCampaignTests(unittest.TestCase):
         self.assertEqual(campaign["material_id"], "27939")
         self.assertEqual(search_config(source["url"])["material_id"], "27939")
         self.assertNotIn("987654321", source["url"])
-        self.assertNotIn("q", search_config(material_source_url("27939")))
+        self.assertEqual(search_config(material_source_url("27939"))["q"], "双11")
 
     def test_activity_api_uses_exact_official_method_and_does_not_report_secret(self):
         received = {}
@@ -81,6 +83,36 @@ class TaobaoCampaignTests(unittest.TestCase):
         self.assertEqual(result["short_promotion_url"], "https://s.click.taobao.com/short")
         self.assertNotIn("test-secret-never-persisted", json.dumps(report, ensure_ascii=False))
         self.assertNotIn("test-secret-never-persisted", json.dumps(result["raw_payload"], ensure_ascii=False))
+
+    def test_promoter_material_discovery_uses_official_promotion_products_and_validates_ids(self):
+        received = {}
+        now = datetime(2026, 10, 12, 9, tzinfo=CHINA)
+        payload = {"tbk_optimus_tou_material_ids_get_response": {
+            "total_count": 3, "data": {"tou_materials": [
+                {"material_id": 111338, "material_name": "快消第二波淘礼金补贴货盘",
+                 "material_type": 1, "subject": 1, "start_time": 1791561600,
+                 "end_time": 1793376000},
+                {"material_id": "111338", "material_name": "重复项",
+                 "material_type": 1, "subject": 1},
+                {"material_id": 222, "material_name": "不接受的权益物料",
+                 "material_type": 2, "subject": 1},
+            ]},
+        }}
+
+        def request(method, params, **_kwargs):
+            received.update(method=method, params=params)
+            return payload
+
+        with patch("services.taobao_alliance._request_top_payload", side_effect=request):
+            report = {}
+            materials = fetch_promoter_material_ids(env=self.env, now=now, report=report)
+        self.assertEqual(received["method"], MATERIAL_IDS_METHOD)
+        query = json.loads(received["params"]["material_query"])
+        self.assertEqual(query, {"page_no": 1, "subject": 1, "material_type": 1, "page_size": 100})
+        self.assertEqual([item["material_id"] for item in materials], ["111338"])
+        self.assertEqual(materials[0]["material_name"], "快消第二波淘礼金补贴货盘")
+        self.assertEqual(materials[0]["start_time"], "2026-10-10 00:00:00")
+        self.assertEqual(report["returned_count"], 1)
 
     def test_refresh_and_date_only_window_do_not_claim_an_unproven_active_time(self):
         with db.connect() as conn:

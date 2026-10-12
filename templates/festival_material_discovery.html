@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}官方促销物料发现 · 节日大促{% endblock %}
+{% block content %}
+<h1>淘宝联盟官方促销物料</h1>
+<p class="muted">来自推广者物料 ID 列表 API。这里只证明这些是当前账号可见的商品促销物料；物料名称、时间或节日归属仍须按官方活动信息判断。</p>
+<p><a href="{{ url_for('festival_promotions') }}">返回节日大促</a></p>
+{% if error %}<div class="message error">官方物料查询失败：{{ error }}</div>{% endif %}
+{% if report %}<p class="muted">官方接口 {{ report.method }} · 返回 {{ report.returned_count or 0 }} 个促销商品物料{% if report.total_count is not none %} / 总数 {{ report.total_count }}{% endif %}</p>{% endif %}
+{% if materials %}<div class="table-wrap"><table><thead><tr><th>官方物料</th><th>有效期</th><th>归入节日监控</th></tr></thead><tbody>
+{% for material in materials %}<tr>
+  <td><strong>{{ material.material_name or '官方未提供名称' }}</strong><small>商品物料 ID {{ material.material_id }} · 促销商品物料</small></td>
+  <td>{{ material.start_time or '未返回' }}<br>至 {{ material.end_time or '未返回' }}</td>
+  <td><form method="post" action="{{ url_for('festival_material_add') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="material_id" value="{{ material.material_id }}">
+    <label>归入节日<select name="festival_code" required>{% for code,label in festival_options %}<option value="{{ code }}"{% if code == 'double_11' %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>年份<input name="festival_year" type="number" min="2020" max="2100" value="{{ festival_year }}" required></label>
+    <label>自定义节日名<input name="festival_name" maxlength="64" placeholder="自定义节日必填"></label>
+    <label>最低优惠额<input name="minimum_discount" type="number" min="0" step="0.01" value="5" required></label>
+    <label>同步间隔（分钟）<input name="interval_minutes" type="number" min="15" max="1440" value="60" required></label>
+    <div><button class="secondary">加入节日定时监控</button></div>
+  </form></td>
+</tr>{% endfor %}
+</tbody></table></div>{% elif not error %}<section class="card"><p>淘宝联盟当前没有返回可用的促销商品物料。</p></section>{% endif %}
+<section class="card"><p class="muted">归入节日后系统会为该官方商品物料建立独立淘宝联盟来源，并由现有 worker 定时全量翻页采集。进入“可直接参与”的商品仍须通过当前单品优惠字段与最低优惠额规则；物料 ID 不会被解释为活动会场 ID。</p></section>
+{% endblock %}

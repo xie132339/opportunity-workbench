@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,8 +10,9 @@ import db
 import scanner
 from app import app
 from services.festival_promotions import (create_festival, festival_products,
+                                          create_festival_material_feed,
                                           list_festivals)
-from services.taobao_alliance import parse_item
+from services.taobao_alliance import parse_item, search_config
 
 
 CHINA = timezone(timedelta(hours=8))
@@ -116,3 +118,78 @@ class FestivalPromotionTests(unittest.TestCase):
         self.assertEqual(festivals[0]["id"], festival["id"])
         self.assertEqual(festivals[0]["products"]["direct"], [])
         self.assertEqual(festivals[0]["products"]["bundle"], [])
+
+    def test_discovered_product_material_creates_separate_scheduled_festival_feed(self):
+        material = {"material_id": "111338", "material_name": "快消第二波淘礼金补贴货盘",
+                    "start_time": "2026-10-10 00:00:00", "end_time": "2026-10-31 00:00:00"}
+        with db.connect() as conn:
+            feed_id = create_festival_material_feed(
+                conn, festival_code="double_11", festival_year="2026", material=material,
+                minimum_discount="5", interval_minutes=60, env=self.env,
+            )
+            feed = conn.execute("SELECT * FROM festival_material_feeds WHERE id=?", (feed_id,)).fetchone()
+            source = conn.execute("SELECT * FROM sources WHERE id=?", (feed["source_id"],)).fetchone()
+            festivals = list_festivals(conn)
+        self.assertEqual(feed["material_id"], "111338")
+        self.assertEqual(feed["festival_name"], "双11")
+        self.assertEqual(feed["material_name"], "快消第二波淘礼金补贴货盘")
+        self.assertEqual(search_config(source["url"])["material_id"], "111338")
+        self.assertEqual(search_config(source["url"])["q"], "双11")
+        self.assertNotIn("activity_material_id=", source["url"])
+        self.assertEqual([item["feed_type"] for item in festivals], ["official_material"])
+        self.assertEqual(festivals[0]["products"]["direct"], [])
+
+    def test_current_material_id_is_revalidated_before_it_can_be_monitored(self):
+        client = app.test_client()
+        page = client.get("/festival-promotions")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("查询当前官方促销物料", page.get_data(as_text=True))
+        with client.session_transaction() as session:
+            csrf = session["csrf"]
+        with patch.dict(os.environ, self.env, clear=False), patch(
+                "routes.festival_promotions.fetch_promoter_material_ids", return_value=[]):
+            response = client.post("/festival-promotions/materials", data={
+                "csrf": csrf, "material_id": "999999", "festival_code": "double_11",
+                "festival_year": "2026", "minimum_discount": "5", "interval_minutes": "60",
+            }, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("该物料已不在淘宝联盟当前可发现列表中", response.get_data(as_text=True))
+        with db.connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM festival_material_feeds").fetchone()[0], 0)
+
+    def test_discovery_route_calls_official_api_and_renders_current_materials(self):
+        client = app.test_client()
+        client.get("/festival-promotions")
+        with client.session_transaction() as session:
+            csrf = session["csrf"]
+        material = {"material_id": "111338", "material_name": "官方快消活动物料",
+                    "start_time": "2026-10-10 00:00:00", "end_time": "2026-10-31 00:00:00"}
+        with patch.dict(os.environ, self.env, clear=False), patch(
+                "routes.festival_promotions.fetch_promoter_material_ids", return_value=[material]) as fetch:
+            response = client.post("/festival-promotions/discover", data={"csrf": csrf})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("111338", response.get_data(as_text=True))
+        self.assertIn("官方快消活动物料", response.get_data(as_text=True))
+        fetch.assert_called_once()
+
+    def test_add_material_route_revalidates_and_creates_a_scheduled_feed(self):
+        client = app.test_client()
+        client.get("/festival-promotions")
+        with client.session_transaction() as session:
+            csrf = session["csrf"]
+        material = {"material_id": "111338", "material_name": "官方快消活动物料",
+                    "start_time": "2026-10-10 00:00:00", "end_time": "2026-10-31 00:00:00"}
+        with patch.dict(os.environ, self.env, clear=False), patch(
+                "routes.festival_promotions.fetch_promoter_material_ids", return_value=[material]):
+            response = client.post("/festival-promotions/materials", data={
+                "csrf": csrf, "material_id": "111338", "festival_code": "double_11",
+                "festival_year": "2026", "minimum_discount": "5", "interval_minutes": "60",
+            }, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("官方物料已加入节日监控", response.get_data(as_text=True))
+        with db.connect() as conn:
+            feed = conn.execute("SELECT * FROM festival_material_feeds").fetchone()
+            source = conn.execute("SELECT * FROM sources WHERE id=?", (feed["source_id"],)).fetchone()
+        self.assertEqual(feed["material_id"], "111338")
+        self.assertEqual(feed["festival_code"], "double_11")
+        self.assertEqual(search_config(source["url"])["material_id"], "111338")

@@ -102,6 +102,26 @@ CREATE INDEX IF NOT EXISTS idx_festival_promotions_year
 """
 
 
+FESTIVAL_MATERIAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS festival_material_feeds (
+ id INTEGER PRIMARY KEY,
+ festival_code TEXT NOT NULL,
+ festival_name TEXT NOT NULL,
+ festival_year INTEGER NOT NULL CHECK(festival_year BETWEEN 2020 AND 2100),
+ material_id TEXT NOT NULL,
+ material_name TEXT NOT NULL,
+ material_start_time TEXT NOT NULL DEFAULT '',
+ material_end_time TEXT NOT NULL DEFAULT '',
+ source_id INTEGER NOT NULL REFERENCES sources(id),
+ minimum_discount_cents INTEGER NOT NULL DEFAULT 500 CHECK(minimum_discount_cents >= 0),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(festival_code,festival_year,material_id)
+);
+CREATE INDEX IF NOT EXISTS idx_festival_material_feeds_year
+  ON festival_material_feeds(festival_year,festival_code,id DESC);
+"""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_scan_runs (
  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
@@ -399,6 +419,7 @@ def initialize_taobao_campaigns(db):
 def initialize_festival_promotions(db):
     """Create holiday configuration without changing campaign or product history."""
     db.executescript(FESTIVAL_PROMOTION_SCHEMA)
+    db.executescript(FESTIVAL_MATERIAL_SCHEMA)
 
 
 def ensure_link_resolution_product_page_column(db=None):

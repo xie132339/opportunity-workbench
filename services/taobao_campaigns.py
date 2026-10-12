@@ -43,10 +43,13 @@ def validate_campaign(name, activity_material_id, material_id, interval_minutes)
     return name, activity_material_id, material_id, interval_minutes
 
 
-def material_source_url(material_id):
+def material_source_url(material_id, query="双11"):
     material_id = _digits(material_id, "商品物料 ID", required=True)
+    query = " ".join(str(query or "").split())
+    if not 1 <= len(query) <= 100:
+        raise ValueError("商品物料兼容查询词须为 1 到 100 个字符")
     url = API_ENDPOINT + "?" + urlencode((
-        ("material_id", material_id), ("page_no", "1"),
+        ("material_id", material_id), ("q", query), ("page_no", "1"),
         ("page_size", "100"), ("max_pages", "all"),
     ))
     search_config(url)

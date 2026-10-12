@@ -5,14 +5,15 @@ module adds no scraper and never invents a campaign price: it only presents
 the currently returned official material fields in a participation-oriented
 order.
 """
+import os
 from datetime import datetime
 
 from db import connect
 from services.money import cents
 from services.product_search import official_promotion_discount
-from services.taobao_alliance import validated_offer_for_row
+from services.taobao_alliance import configuration_error, validated_offer_for_row
 from services.taobao_campaigns import (campaign_window, create_campaign,
-                                       refresh_campaign)
+                                       material_source_url, refresh_campaign)
 
 
 FESTIVAL_PRESETS = {
@@ -76,6 +77,60 @@ def create_festival(db, *, festival_code, festival_year, festival_name, campaign
         (festival_code,festival_name,festival_year,campaign_id,minimum_discount_cents)
         VALUES(?,?,?,?,?)""", (festival_code, festival_name, festival_year,
                                   campaign_id, minimum_discount_cents)).lastrowid
+
+
+def create_festival_material_feed(db, *, festival_code, festival_year,
+                                  material, minimum_discount="5",
+                                  interval_minutes=60, env=None):
+    """Attach a freshly discovered official product material to a holiday.
+
+    This is intentionally independent of a campaign hall: a material ID is
+    official evidence for a product feed, never an activity hall ID.
+    """
+    festival_code = str(festival_code or "").strip()
+    if festival_code not in FESTIVAL_PRESETS:
+        raise ValueError("节日类型不受支持")
+    festival_year = _year(festival_year)
+    minimum_discount_cents = _minimum_discount(minimum_discount)
+    try:
+        interval_minutes = int(interval_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("同步间隔必须为整数分钟") from exc
+    if not 15 <= interval_minutes <= 1440:
+        raise ValueError("同步间隔须在 15 到 1440 分钟之间")
+    if not isinstance(material, dict):
+        raise ValueError("官方物料信息无效")
+    material_id = str(material.get("material_id") or "").strip()
+    if not material_id.isdigit() or not 1 <= len(material_id) <= 24:
+        raise ValueError("官方物料 ID 无效")
+    material_name = _text(material.get("material_name"), "官方物料名称", maximum=160)
+    preset = FESTIVAL_PRESETS[festival_code]
+    festival_name = _text(material.get("festival_name"), "节日名称") if festival_code == "custom" else preset["label"]
+    existing = db.execute("""SELECT id FROM festival_material_feeds
+        WHERE festival_code=? AND festival_year=? AND material_id=?""",
+        (festival_code, festival_year, material_id)).fetchone()
+    if existing:
+        raise ValueError(f"该官方物料已加入节日监控 #{existing['id']}")
+    url = material_source_url(material_id, query=preset["label"])
+    source = db.execute("SELECT id FROM sources WHERE platform=? AND url=? AND method=?",
+                         ("淘宝联盟", url, "taobao_alliance")).fetchone()
+    source_id = source["id"] if source else db.execute("""INSERT INTO sources
+        (platform,name,category,url,method,parser,status,enabled,interval_minutes)
+        VALUES(?,?,?,?,?,?,?,?,?)""", (
+            "淘宝联盟", f"淘宝联盟官方物料·{material_name[:80]}", "零售优惠", url,
+            "taobao_alliance", "taobao_alliance",
+            "not_configured" if configuration_error(env or os.environ) else "pending",
+            1, interval_minutes,
+        )).lastrowid
+    return db.execute("""INSERT INTO festival_material_feeds
+        (festival_code,festival_name,festival_year,material_id,material_name,
+         material_start_time,material_end_time,source_id,minimum_discount_cents)
+        VALUES(?,?,?,?,?,?,?,?,?)""", (
+            festival_code, festival_name, festival_year, material_id, material_name,
+            str(material.get("start_time") or "")[:40],
+            str(material.get("end_time") or "")[:40], source_id,
+            minimum_discount_cents,
+        )).lastrowid
 
 
 def participation_for_row(row, now=None):
@@ -164,7 +219,22 @@ def list_festivals(db, now=None):
         JOIN taobao_campaigns c ON c.id=f.campaign_id
         LEFT JOIN sources s ON s.id=c.source_id
         ORDER BY f.festival_year DESC,f.id DESC""")]
+    feeds = [dict(row) for row in db.execute("""SELECT f.id,f.festival_code,f.festival_name,
+        f.festival_year,f.material_id,f.material_name,f.material_start_time,
+        f.material_end_time,f.source_id,f.minimum_discount_cents,
+        s.status,s.last_success AS source_last_success,s.last_error
+        FROM festival_material_feeds f JOIN sources s ON s.id=f.source_id
+        ORDER BY f.festival_year DESC,f.id DESC""")]
+    for feed in feeds:
+        feed.update({"feed_type": "official_material", "campaign_name": feed["material_name"],
+                     "activity_material_id": "", "promotion_url": "",
+                     "short_promotion_url": "", "page_name": "",
+                     "page_start_time": feed["material_start_time"],
+                     "page_end_time": feed["material_end_time"],
+                     "source_status": feed["status"]})
+        rows.append(feed)
     for row in rows:
+        row.setdefault("feed_type", "campaign")
         row["preset"] = FESTIVAL_PRESETS[row["festival_code"]]
         row["window"] = campaign_window(row, now=now)
         row["products"] = festival_products(db, row, now=now)
