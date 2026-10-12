@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+.runtime/
 data/
 datastore/
 state/

@@ -21,7 +21,7 @@ bash deploy/aliyun/install-server.sh
 
 安装脚本只安装依赖、创建运行用户、虚拟环境、systemd 单元和 Nginx 配置，不启动网页服务、不启用 Nginx，避免使用示例密码对公网暴露服务。
 
-编辑 `/etc/opportunity-workbench/workbench.env`，至少设置：
+编辑 `/application/.runtime/workbench.env`，至少设置：
 
 ```dotenv
 WORKBENCH_SECRET=<仅服务器保存的随机值>
@@ -58,7 +58,7 @@ systemctl restart opportunity-workbench-web opportunity-workbench-worker
 
 ## 数据与恢复
 
-SQLite 位于 `/var/lib/opportunity-workbench/workbench.sqlite3`。每日 03:15 UTC 由 `opportunity-workbench-backup.timer` 执行在线备份，备份目录为 `/var/lib/opportunity-workbench/backups`。每个备份执行 `PRAGMA integrity_check` 并输出 SHA-256 摘要。
+SQLite 位于 `/application/.runtime/workbench.sqlite3`。每日 03:15 UTC 由 `opportunity-workbench-backup.timer` 执行在线备份，备份目录为 `/application/.runtime/backups`。每个备份执行 `PRAGMA integrity_check` 并输出 SHA-256 摘要。
 
 ```bash
 systemctl start opportunity-workbench-backup.service

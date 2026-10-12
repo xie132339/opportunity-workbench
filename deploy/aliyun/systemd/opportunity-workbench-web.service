@@ -8,9 +8,9 @@ Type=exec
 User=workbench
 Group=workbench
 WorkingDirectory=__APP_ROOT__
-EnvironmentFile=/etc/opportunity-workbench/workbench.env
+EnvironmentFile=__APP_ROOT__/.runtime/workbench.env
 Environment=PYTHONUNBUFFERED=1
-Environment=WORKBENCH_DB=/var/lib/opportunity-workbench/workbench.sqlite3
+Environment=WORKBENCH_DB=__APP_ROOT__/.runtime/workbench.sqlite3
 ExecStart=__APP_ROOT__/.venv/bin/gunicorn --workers 1 --threads 4 --timeout 60 --bind 127.0.0.1:5002 --access-logfile - --error-logfile - --capture-output wsgi:app
 Restart=on-failure
 RestartSec=5
@@ -18,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=/var/lib/opportunity-workbench
+ReadWritePaths=__APP_ROOT__/.runtime
 
 [Install]
 WantedBy=multi-user.target

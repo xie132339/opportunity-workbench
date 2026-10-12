@@ -7,12 +7,12 @@ Type=oneshot
 User=workbench
 Group=workbench
 WorkingDirectory=__APP_ROOT__
-EnvironmentFile=/etc/opportunity-workbench/workbench.env
-Environment=WORKBENCH_DB=/var/lib/opportunity-workbench/workbench.sqlite3
-Environment=WORKBENCH_BACKUP_DIR=/var/lib/opportunity-workbench/backups
+EnvironmentFile=__APP_ROOT__/.runtime/workbench.env
+Environment=WORKBENCH_DB=__APP_ROOT__/.runtime/workbench.sqlite3
+Environment=WORKBENCH_BACKUP_DIR=__APP_ROOT__/.runtime/backups
 ExecStart=__APP_ROOT__/.venv/bin/python -B deploy/aliyun/scripts/backup_sqlite.py
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=/var/lib/opportunity-workbench
+ReadWritePaths=__APP_ROOT__/.runtime
