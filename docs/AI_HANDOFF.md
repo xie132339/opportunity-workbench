@@ -65,6 +65,12 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 真实数据回放（100,707 条）：假优惠（优惠>50 元且付款<10 元）1661 条 **100% 拦截**；旧降价信号 56,407 条中新规则判定不可信 2,977 条；超主题上界 486 条（其中 115 条原为优惠信号被拦出默认列表）。高端真品（山茶油 5L 1308 元、橄榄油 3L 616 元）在上界内不受影响。
 - 测试：新增 6 项专项（合理性边界、解析信号、官方优惠额、准入拦截、真品不误伤）；全量 `unittest discover -s tests` 372 项，唯一失败为既有 `test_single_item_price_is_not_rendered_twice`（基线同样失败）。文档：`docs/current-product-contract.md` 第 3 节新增价格规则 6/7 与准入表"可解释的当前优惠信号"表述；`docs/core-acceptance.md` 增补 2026-10-12 拦截验收记录。
 
+## 5.3 2026-10-12 登录页"保持登录状态"
+
+- `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
+- 勾选时登录 cookie 带 `Expires`（30 天后过期），不勾选则维持浏览器会话 cookie（关闭浏览器即失效）。密码本身不落盘，仅保持登录态；`/logout` 仍即时清除会话。
+- 测试：新增 2 项（勾选→permanent+Expires、不勾选→会话 cookie）；全量 374 项仅剩既有失败 `test_single_item_price_is_not_rendered_twice`。本机 5002 登录页实测复选框与两种 cookie 行为正确。
+
 ## 6. 安全与交付
 
 不要将本机 `.env`、服务器 `.runtime/workbench.env`、App Secret、管理员密码、会话密钥或数据库写进交接文档、终端输出或 Git。远端操作优先按已安装的 `alibabacloud-workbench-cli` Skill 和 `docs/deployment-aliyun-ecs.md`；仅在用户当前明确授权的范围内变更外部系统。GitHub 分支当前比本机落后，下一位 AI 不能只拉取远端再宣称拿到最新代码。若需发布，先核对当前凭据、分支、差异、ECS 状态和用户意图。

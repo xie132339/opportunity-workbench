@@ -12,6 +12,7 @@ def login():
         if verify(request.form.get("username"), request.form.get("password"), os.environ):
             sign_out(session)
             sign_in(session, request.form.get("username", ""))
+            session.permanent = bool(request.form.get("remember"))
             return redirect(next_path)
         flash("账号或密码不正确。", "error")
         return render_template("login.html", next_path=next_path), 401

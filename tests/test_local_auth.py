@@ -81,6 +81,40 @@ class LocalAuthenticationTests(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/login")
         self.assertEqual(client.get("/").status_code, 302)
 
+    def login_with(self, client, remember):
+        client.get("/login")
+        with client.session_transaction() as stored_session:
+            csrf = stored_session["csrf"]
+        data = {"csrf": csrf, "username": "admin", "password": "taobaoadmin@1"}
+        if remember:
+            data["remember"] = "1"
+        return client.post("/login", data=data)
+
+    def test_remember_login_sets_persistent_session_cookie(self):
+        client = app.test_client(authenticated=False)
+        with patch.dict(os.environ, {
+            "WORKBENCH_ADMIN_USERNAME": "admin",
+            "WORKBENCH_ADMIN_PASSWORD": "taobaoadmin@1",
+        }, clear=False):
+            response = self.login_with(client, remember=True)
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as stored_session:
+            self.assertTrue(stored_session.permanent)
+        # 持久会话 cookie：带 Expires（30 天后过期）
+        self.assertIn("Expires=", response.headers.get("Set-Cookie", ""))
+
+    def test_plain_login_keeps_browser_session_cookie(self):
+        client = app.test_client(authenticated=False)
+        with patch.dict(os.environ, {
+            "WORKBENCH_ADMIN_USERNAME": "admin",
+            "WORKBENCH_ADMIN_PASSWORD": "taobaoadmin@1",
+        }, clear=False):
+            response = self.login_with(client, remember=False)
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as stored_session:
+            self.assertFalse(stored_session.permanent)
+        self.assertNotIn("Expires=", response.headers.get("Set-Cookie", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

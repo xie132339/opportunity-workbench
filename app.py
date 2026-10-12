@@ -60,6 +60,9 @@ class WorkbenchTestClient(FlaskClient):
 def create_app():
     application = Flask(__name__)
     application.secret_key = os.environ.get("WORKBENCH_SECRET") or secrets.token_hex(32)
+    # "保持登录"复选框开启后，会话 cookie 在 PERMANENT_SESSION_LIFETIME 内保持；
+    # 未勾选则维持浏览器会话 cookie（关闭浏览器即失效）。
+    application.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
     application.test_client_class = WorkbenchTestClient
 
     @application.template_filter("cn_time")
