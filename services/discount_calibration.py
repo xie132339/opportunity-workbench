@@ -109,11 +109,15 @@ _SPEC_UNIT = {
     "瓶": "bottle", "支": "bottle", "粒": "bottle",
     "ml": "ml", "毫升": "ml",
     "L": "liter", "l": "liter", "升": "liter",
+    "g": "kg", "克": "kg",
     "kg": "kg", "斤": "kg",
 }
-_SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(抽|张|片|包|提|瓶|支|粒|ml|毫升|L|升|kg|斤)", re.IGNORECASE)
+_SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(抽|张|片|包|提|瓶|支|粒|ml|毫升|L|升|kg|斤|g|克)", re.IGNORECASE)
 _BOX_RE = re.compile(r"(\d+(?:\.\d+)?)\s*箱")
 _BAG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*袋")
+_TIMES_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(kg|斤|g|克|l|L|升)\s*[x×*]\s*(\d+(?:\.\d+)?)(?:\s*(?:袋|包|瓶|桶|提|盒|箱|罐))?",
+    re.IGNORECASE)
 
 # =============================================================================
 # 品牌标准市场参考配置（正式配置数据，随主题关键词同步维护，非业务阈值）
@@ -137,7 +141,7 @@ _BAG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*袋")
 # =============================================================================
 BRAND_REFERENCE_CONFIG = {
     "paper": {
-        "维达":   {"terms": ("维达", "vinda"), "unit": "pack100", "price_cents": 300, "note": "维达超韧/棉韧抽纸单包(100抽)零售"},
+        "维达":   {"terms": ("维达", "vinda"), "unit": "pack100", "price_cents": 350, "note": "维达超韧/棉韧抽纸单包(100抽)零售"},
         "清风":   {"terms": ("清风",), "unit": "pack100", "price_cents": 250, "note": "清风原木纯品单包(100抽)"},
         "洁柔":   {"terms": ("洁柔",), "unit": "pack100", "price_cents": 300, "note": "洁柔Face/立体美单包(100抽)"},
         "心相印": {"terms": ("心相印",), "unit": "pack100", "price_cents": 280, "note": "心相印茶语经典单包(100抽)"},
@@ -149,11 +153,11 @@ BRAND_REFERENCE_CONFIG = {
         "可优比": {"terms": ("可优比",), "unit": "pack100", "price_cents": 1200, "note": "可优比婴童云柔巾单包"},
         "全棉时代": {"terms": ("全棉时代",), "unit": "pack100", "price_cents": 600, "note": "全棉时代棉柔巾单包"},
         "得宝":   {"terms": ("得宝", "tempo"), "unit": "pack100", "price_cents": 300, "note": "得宝抽纸单包"},
-        "斑布":   {"terms": ("斑布",), "unit": "pack100", "price_cents": 200, "note": "斑布竹浆抽纸单包"},
+        "斑布":   {"terms": ("斑布",), "unit": "pack100", "price_cents": 350, "note": "斑布竹浆抽纸单包"},
         "顺清柔": {"terms": ("顺清柔",), "unit": "pack100", "price_cents": 150, "note": "顺清柔抽纸单包"},
         "理文":   {"terms": ("理文",), "unit": "pack100", "price_cents": 150, "note": "理文本色抽纸单包"},
-        "洁云":   {"terms": ("洁云",), "unit": "pack100", "price_cents": 200, "note": "洁云抽纸单包"},
-        "妮飘":   {"terms": ("妮飘", "nepia"), "unit": "pack100", "price_cents": 400, "note": "妮飘鼻贵族单包(100抽)"},
+        "洁云":   {"terms": ("洁云",), "unit": "pack100", "price_cents": 280, "note": "洁云抽纸单包"},
+        "妮飘":   {"terms": ("妮飘", "nepia"), "unit": "pack100", "price_cents": 1200, "note": "妮飘鼻贵族单包(100抽)"},
         "舒洁":   {"terms": ("舒洁", "kleenex"), "unit": "pack100", "price_cents": 250, "note": "舒洁抽纸单包"},
         "惠寻":   {"terms": ("惠寻",), "unit": "pack100", "price_cents": 150, "note": "惠寻低价抽纸单包"},
         "京东京造": {"terms": ("京东京造", "京造"), "unit": "pack100", "price_cents": 250, "note": "京东京造抽纸单包"},
@@ -171,10 +175,10 @@ BRAND_REFERENCE_CONFIG = {
         "恒大冰泉": {"terms": ("恒大冰泉",), "unit": "bottle500", "price_cents": 200, "note": "恒大冰泉500ml单瓶"},
         "依云":   {"terms": ("依云", "evian"), "unit": "bottle500", "price_cents": 1000, "note": "依云330ml进口单瓶"},
         "昆仑山": {"terms": ("昆仑山",), "unit": "bottle500", "price_cents": 400, "note": "昆仑山550ml单瓶"},
-        "屈臣氏": {"terms": ("屈臣氏",), "unit": "bottle500", "price_cents": 300, "note": "屈臣氏蒸馏水500ml单瓶"},
+        "屈臣氏": {"terms": ("屈臣氏",), "unit": "bottle500", "price_cents": 400, "note": "屈臣氏蒸馏水500ml单瓶"},
         "冰露":   {"terms": ("冰露",), "unit": "bottle500", "price_cents": 120, "note": "冰露550ml单瓶"},
         "纯水乐": {"terms": ("纯水乐",), "unit": "bottle500", "price_cents": 150, "note": "纯水乐550ml单瓶"},
-        "泉阳泉": {"terms": ("泉阳泉",), "unit": "bottle500", "price_cents": 200, "note": "泉阳泉500ml单瓶"},
+        "泉阳泉": {"terms": ("泉阳泉",), "unit": "bottle500", "price_cents": 250, "note": "泉阳泉500ml单瓶"},
         "卓玛泉": {"terms": ("卓玛泉",), "unit": "bottle500", "price_cents": 300, "note": "卓玛泉西藏冰川水单瓶"},
     },
     "rice": {
@@ -193,9 +197,9 @@ BRAND_REFERENCE_CONFIG = {
         "恒大兴安": {"terms": ("恒大兴安",), "unit": "kg", "price_cents": 1500, "note": "恒大兴安大米约15元/kg"},
     },
     "flour": {
-        "金沙河": {"terms": ("金沙河",), "unit": "kg", "price_cents": 400, "note": "金沙河家用面粉约4元/kg"},
-        "五得利": {"terms": ("五得利",), "unit": "kg", "price_cents": 400, "note": "五得利面粉约4元/kg"},
-        "中裕":   {"terms": ("中裕",), "unit": "kg", "price_cents": 600, "note": "中裕面粉约6元/kg"},
+        "金沙河": {"terms": ("金沙河",), "unit": "kg", "price_cents": 600, "note": "金沙河家用面粉约4元/kg"},
+        "五得利": {"terms": ("五得利",), "unit": "kg", "price_cents": 800, "note": "五得利面粉约4元/kg"},
+        "中裕":   {"terms": ("中裕",), "unit": "kg", "price_cents": 800, "note": "中裕面粉约6元/kg"},
         "金龙鱼": {"terms": ("金龙鱼",), "unit": "kg", "price_cents": 700, "note": "金龙鱼面粉约7元/kg"},
         "福临门": {"terms": ("福临门",), "unit": "kg", "price_cents": 700, "note": "福临门面粉约7元/kg"},
         "河套":   {"terms": ("河套",), "unit": "kg", "price_cents": 1500, "note": "河套雪花粉高端约15元/kg"},
@@ -203,17 +207,17 @@ BRAND_REFERENCE_CONFIG = {
         "新良":   {"terms": ("新良",), "unit": "kg", "price_cents": 800, "note": "新良低筋/高筋粉约8元/kg"},
         "展艺":   {"terms": ("展艺",), "unit": "kg", "price_cents": 700, "note": "展艺烘焙粉约7元/kg"},
         "风筝":   {"terms": ("风筝",), "unit": "kg", "price_cents": 400, "note": "风筝牌面粉约4元/kg"},
-        "古船":   {"terms": ("古船",), "unit": "kg", "price_cents": 500, "note": "古船面粉约5元/kg"},
-        "天山":   {"terms": ("天山",), "unit": "kg", "price_cents": 600, "note": "天山面粉约6元/kg"},
-        "香满园": {"terms": ("香满园",), "unit": "kg", "price_cents": 700, "note": "香满园面粉约7元/kg"},
+        "古船":   {"terms": ("古船",), "unit": "kg", "price_cents": 600, "note": "古船面粉约5元/kg"},
+        "天山":   {"terms": ("天山",), "unit": "kg", "price_cents": 1300, "note": "天山面粉约6元/kg"},
+        "香满园": {"terms": ("香满园",), "unit": "kg", "price_cents": 900, "note": "香满园面粉约7元/kg"},
         "中粮":   {"terms": ("中粮",), "unit": "kg", "price_cents": 700, "note": "中粮面粉约7元/kg"},
     },
     "cooking_oil": {
         "金龙鱼": {"terms": ("金龙鱼",), "unit": "liter", "price_cents": 1500, "note": "金龙鱼调和油5L约75元"},
-        "鲁花":   {"terms": ("鲁花",), "unit": "liter", "price_cents": 2400, "note": "鲁花5S花生油5L约120元"},
+        "鲁花":   {"terms": ("鲁花",), "unit": "liter", "price_cents": 3600, "note": "鲁花5S花生油5L约120元"},
         "福临门": {"terms": ("福临门",), "unit": "liter", "price_cents": 1300, "note": "福临门食用油约13元/L"},
         "多力":   {"terms": ("多力",), "unit": "liter", "price_cents": 2000, "note": "多力葵花籽油约20元/L"},
-        "胡姬花": {"terms": ("胡姬花",), "unit": "liter", "price_cents": 2000, "note": "胡姬花古法花生油约20元/L"},
+        "胡姬花": {"terms": ("胡姬花",), "unit": "liter", "price_cents": 3000, "note": "胡姬花古法花生油约20元/L"},
         "刀唛":   {"terms": ("刀唛", "knife"), "unit": "liter", "price_cents": 3000, "note": "刀唛花生油约30元/L"},
         "西王":   {"terms": ("西王",), "unit": "liter", "price_cents": 1600, "note": "西王玉米油约16元/L"},
         "九三":   {"terms": ("九三",), "unit": "liter", "price_cents": 1500, "note": "九三非转基因豆油约15元/L"},
@@ -230,13 +234,13 @@ BRAND_REFERENCE_CONFIG = {
         "超能":   {"terms": ("超能",), "unit": "kg", "price_cents": 1500, "note": "超能洗衣液3kg约45元"},
         "威露士": {"terms": ("威露士",), "unit": "kg", "price_cents": 2000, "note": "威露士洗衣液3kg约60元"},
         "奥妙":   {"terms": ("奥妙",), "unit": "kg", "price_cents": 1500, "note": "奥妙洗衣液3kg约45元"},
-        "汰渍":   {"terms": ("汰渍", "tide"), "unit": "kg", "price_cents": 1500, "note": "汰渍洗衣液3kg约45元"},
+        "汰渍":   {"terms": ("汰渍", "tide"), "unit": "kg", "price_cents": 2500, "note": "汰渍洗衣液3kg约45元"},
         "碧浪":   {"terms": ("碧浪", "ariel"), "unit": "kg", "price_cents": 2000, "note": "碧浪洗衣液3kg约60元"},
         "雕牌":   {"terms": ("雕牌",), "unit": "kg", "price_cents": 1200, "note": "雕牌洗衣液3kg约36元"},
         "卫新":   {"terms": ("卫新",), "unit": "kg", "price_cents": 1500, "note": "卫新洗衣液3kg约45元"},
         "花王":   {"terms": ("花王", "kao"), "unit": "kg", "price_cents": 3000, "note": "花王洗衣液3kg约90元"},
         "狮王":   {"terms": ("狮王", "lion"), "unit": "kg", "price_cents": 3000, "note": "狮王洗衣液3kg约90元"},
-        "白猫":   {"terms": ("白猫",), "unit": "kg", "price_cents": 1000, "note": "白猫洗衣液3kg约30元"},
+        "白猫":   {"terms": ("白猫",), "unit": "kg", "price_cents": 1300, "note": "白猫洗衣液3kg约30元"},
         "妈妈壹选": {"terms": ("妈妈壹选",), "unit": "kg", "price_cents": 1800, "note": "妈妈壹选洗衣液3kg约54元"},
         "好爸爸": {"terms": ("好爸爸",), "unit": "kg", "price_cents": 1800, "note": "好爸爸洗衣液3kg约54元"},
         "开米":   {"terms": ("开米",), "unit": "kg", "price_cents": 2000, "note": "开米洗衣液3kg约60元"},
@@ -249,6 +253,46 @@ BRAND_REFERENCE_CONFIG = {
 # 以上视为"贵过市场价"（划线虚高/引流小规格）。1.2x 容忍渠道价差：整箱
 # 真品折算单价 ≈ 零售市场价（1.0-1.2 倍）放行，尝鲜小规格折算单价 2-3 倍
 # 拦截。
+BRAND_OVERPRICE_K = 1.2
+
+# ---------------------------------------------------------------------------
+# 细分品类豁免词表（品牌判据只在"标准品类"上生效）
+# ---------------------------------------------------------------------------
+# 背景：品牌标准市场价是按普通标准品类口径维护的（纸=普通100抽包、水=常规
+# 500ml 瓶、米面=普通公斤、油=调和/普通品类、洗衣液=常规公斤）。乳霜纸/悬挂
+# 式/婴儿柔巾、苏打水、花生/橄榄/山茶油、烘焙/全麦面粉、杂粮/礼盒米、浓缩
+# 洗衣液等细分品类单价系统性高于普通品类，若用普通标准价判定会误伤真品。
+# 命中豁免词 → 品牌判据直接跳过（这些品类价格透明、假优惠少，且③④层已拦
+# 低价小件/划线虚高）。标准品类（普通抽纸、矿泉水、调和/大豆/菜籽油、家用
+# 面粉、普通大米、常规洗衣液）仍严格用品牌标准价判据。
+BRAND_EXEMPT_TERMS = {
+    "paper": ("乳霜", "云柔", "柔巾", "婴儿", "宝宝", "护理", "悬挂", "挂抽",
+              "壁挂", "提挂", "加厚", "4层", "5层", "6层", "厚实", "压花",
+              "擦手", "厨房纸", "多康", "商用", "商务", "湿厕", "可冲散",
+              "溶易抽", "黑金", "高端", "进口", "XL", "大尺寸", "加量"),
+    "water": ("苏打", "气泡", "含气", "咖啡", "茶饮", "果味", "迷你", "儿童",
+              "碱性", "电解", "体验"),
+    "rice": ("杂粮", "糙米", "低GI", "黑米", "红米", "紫米", "胚芽", "有机",
+             "礼盒", "特等", "臻选", "贡米", "五常", "香米", "长粒香",
+             "茉莉香米", "皇家", "组合", "粮油", "小袋"),
+    "flour": ("全麦", "黑麦", "麦麸", "烘焙", "面包", "自发", "预拌", "杂粮",
+              "瑞雪", "麦芯", "尚品", "雪花", "臻选", "有机", "淀粉", "澄面",
+              "虾饺", "小袋", "石磨", "面筋粉", "谷朊粉", "六星", "七星",
+              "八星", "九星", "金典", "冀南香", "沙粒", "wonder"),
+    "cooking_oil": ("花生", "橄榄", "山茶", "茶油", "菜籽油", "初榨", "胡麻",
+                    "亚麻", "核桃", "芝麻", "葡萄籽", "红花", "芥花", "牛油果",
+                    "葵花籽", "葵花仁", "玉米", "大豆油", "稻米油", "米糠油",
+                    "二酯"),
+    "laundry_detergent": ("浓缩", "凝珠", "手洗", "内衣", "婴儿", "宝宝",
+                          "敏感", "孕妇", "香氛", "精油", "大师", "香护",
+                          "除菌", "消毒", "袋装", "快洗"),
+}
+
+# 小规格瓶装溢价系数（water：280-410ml 小瓶单 ml 价高于 500-570ml 标准瓶，
+# 折算 500ml 后系统性偏高；统一放宽到该系数再比，避免小瓶装真优惠误伤；
+# 尝鲜 348ml×2 ¥10.01 折算 ¥7.19 仍远超 2.80×1.4×1.2=¥4.70 照拦）。
+SMALL_SPEC_BRAND_K = {"water": 1.4}
+
 BRAND_OVERPRICE_K = 1.2
 
 
@@ -286,9 +330,32 @@ def spec_unit_price_cents(title, final_cents):
     specs = {}
     for m in _SPEC_RE.finditer(title):
         value = float(m.group(1))
-        family = _SPEC_UNIT.get(m.group(2).lower())
+        unit = m.group(2).lower()
+        if unit in ("g", "克"):
+            value /= 1000.0
+        elif unit == "斤":
+            value *= 0.5
+        family = _SPEC_UNIT.get(unit)
         if family is not None:
             specs[family] = max(specs.get(family, 0.0), value)
+    kg_times_hit = False
+    for m in _TIMES_RE.finditer(title):
+        value = float(m.group(1))
+        unit = m.group(2).lower()
+        n = float(m.group(3))
+        family = _SPEC_UNIT.get(unit)
+        if family is not None and n > 1:
+            if unit in ("g", "克"):
+                value /= 1000.0
+            elif unit == "斤":
+                value *= 0.5
+            specs[family] = max(specs.get(family, 0.0), value * n)
+            if family == "kg":
+                kg_times_hit = True
+    for m in _PACK_TIMES_RE.finditer(title):
+        n = float(m.group(3))
+        if n > 1:
+            specs["pack"] = max(specs.get("pack", 0.0), float(m.group(1)) * n)
     box = _BOX_RE.search(title)
     bag = _BAG_RE.search(title)
     if not specs:
@@ -302,7 +369,10 @@ def spec_unit_price_cents(title, final_cents):
     pack = specs.get("pack")
     sheet = specs.get("sheet")
     if kg and kg > 0:
-        total = kg * bag_n * (bottle or 1.0)
+        if kg_times_hit:
+            total = kg
+        else:
+            total = kg * bag_n * (bottle or 1.0)
         return ("kg", int(final_cents / total))
     if liter and liter > 0:
         total = liter * (bottle or 1.0)
@@ -322,6 +392,31 @@ def spec_unit_price_cents(title, final_cents):
     return None
 
 
+_PACK_TIMES_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(包|提)\s*[x×*]\s*(\d+(?:\.\d+)?)")
+
+
+def bulk_kg_or_none(title):
+    """Total bulk mass in kg parsed from a title, or None when unparseable.
+    Supports kg/斤/g/克 with optional ×N multipliers ("5kg×2袋", "500g*10").
+    Used only for small-pack premium exemption in flour (<5kg) and laundry
+    (<2kg): 小包装单价系统性高于大包装，普通标准价判据会误伤真品。"""
+    total = 0.0
+    has = False
+    for m in re.finditer(
+            r"(\d+(?:\.\d+)?)\s*(kg|斤|g|克)\s*(?:[x×*]\s*(\d+(?:\.\d+)?))?",
+            title, re.IGNORECASE):
+        value = float(m.group(1))
+        unit = m.group(2).lower()
+        n = float(m.group(3)) if m.group(3) else 1.0
+        if unit in ("g", "克"):
+            value /= 1000.0
+        elif unit == "斤":
+            value *= 0.5
+        total = max(total, value * n)
+        has = True
+    return total if has else None
+
+
 def is_brand_market_overpriced(topic, title, final_cents):
     """Whether a branded item's standard-unit price is ABOVE the brand's
     standard market price (user: 优惠价金额只要小于等于品牌标准市场价；品牌品
@@ -333,6 +428,8 @@ def is_brand_market_overpriced(topic, title, final_cents):
     brand = brand_from_title(title, topic)
     if brand is None:
         return False
+    if any(term in title for term in BRAND_EXEMPT_TERMS.get(topic, ())):
+        return False
     priced = spec_unit_price_cents(title, final_cents)
     if priced is None:
         return False
@@ -343,7 +440,20 @@ def is_brand_market_overpriced(topic, title, final_cents):
     standard = spec.get("price_cents")
     if not isinstance(standard, int):
         return False
-    return unit_price > int(standard * BRAND_OVERPRICE_K)
+    if topic == "flour":
+        bulk = bulk_kg_or_none(title)
+        if bulk is not None and bulk < 5.0:
+            return False
+    elif topic == "laundry_detergent":
+        bulk = bulk_kg_or_none(title)
+        if bulk is not None and bulk < 2.0:
+            return False
+    factor = SMALL_SPEC_BRAND_K.get(topic, 1.0)
+    if topic == "paper" and unit_label == "pack100":
+        sm = re.search(r"(\d+(?:\.\d+)?)\s*抽", title)
+        if sm and float(sm.group(1)) < 100.0:
+            factor = max(factor, 1.3)
+    return unit_price > int(standard * factor * BRAND_OVERPRICE_K)
 
 
 def small_spec_limits(title):
