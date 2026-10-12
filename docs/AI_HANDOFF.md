@@ -151,7 +151,7 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
   - `services/product_search.py`：`promotion_admission` 第 5 层排除（reason 优惠价高于品牌标准市场价）+ `official_promotion_discount` 参考价差/单券/完整路径三候选接入。
 - 验证：尝鲜百岁山 348ml×2 ¥10.01 → 500ml 折算 ¥7.19 > ¥2.80×1.2 拦（准入层+去优惠化层双拦）；整箱真品全放——百岁山 570ml×24 ¥23.59/¥63.9/¥92.52、维达 100抽24包 ¥49.9（单包 ¥2.08 < ¥3.00×1.2）、KUB ¥13.11/包（≈可优比 ¥12×1.2 边界放）、柴火五常米 ¥40/kg、十月稻田 ¥20/kg、龙稻 ¥30/kg、金龙鱼 5L、蓝月亮 3kg×2。公网回放：price_low 全量大品、discount_high 全真品、搜百岁山 5 条全整箱、搜维达 57 条全整箱/大规格。
 - 测试：`BrandMarketReferenceTests` 12 项（折算乘法/优先级/纯单瓶描述 None + 品牌判据正反例）；全量 394 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。
-- 维护说明：新增品牌 → 同时在 `BRAND_TERMS[topic]` 加品牌词、`BRAND_STANDARD_PRICES[topic]` 加标准市场价（分）。标准单位口径：water 500ml 瓶、paper 100 抽包、rice/flour 公斤、oil 升、laundry 公斤。
+- 维护说明（配置全面化 `BRAND_REFERENCE_CONFIG`，95 品牌，2026-10-13 ⑩/⑪ 后）：**唯一配置源** `services/discount_calibration.py::BRAND_REFERENCE_CONFIG`——每品牌 `{"terms": (品牌词/别名…), "unit": 标准单位, "price_cents": 市场价分, "note": 说明}`。新增/改品牌只改这张表：terms 越长者优先（"华润五丰"先于"五丰"）；unit 必须与折算引擎输出一致（bottle500/bottle/kg/liter/pack100/pack），商品折算单位与配置单位不同则不比（保守放行）；price_cents 单位分。标准单位口径：water=500ml 瓶(bottle500)、paper=100 抽包(pack100)、rice/flour=公斤(kg)、cooking_oil=升(liter)、laundry_detergent=公斤(kg)。
 
 ## 5.3 2026-10-12 登录页"保持登录状态"
 

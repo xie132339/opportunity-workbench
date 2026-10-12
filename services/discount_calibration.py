@@ -115,55 +115,136 @@ _SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(抽|张|片|包|提|瓶|支|粒|ml|�
 _BOX_RE = re.compile(r"(\d+(?:\.\d+)?)\s*箱")
 _BAG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*袋")
 
-# 主流家用品牌词典（维护性数据，随主题关键词同步维护，非业务阈值）。
-# 品牌标准市场参考价 = 人工维护表（用户明确"维护这样的数据肯定能有的"）；
-# 单位为该主题的标准售卖单位市场价（用户：一件/一瓶/一包），跨主题品牌
-# （金龙鱼/福临门）按主题分列。初始值按主流渠道零售常识设定，**可在
-# BRAND_STANDARD_PRICES 直接增改**；判据只拦"折算标准单位到手价明显高于
-# 品牌标准市场价"（系数 BRAND_OVERPRICE_K），低规格引流/划线虚高被拦，
-# 整箱大促折算单价 ≤ 标准市场价则永远放行。
-BRAND_TERMS = {
-    "paper": ("维达", "清风", "洁柔", "心相印", "植护", "漫花", "丹娜丝", "怡飘",
-              "卡布", "可优比", "全棉时代", "得宝", "斑布", "顺清柔", "理文"),
-    "water": ("百岁山", "农夫山泉", "怡宝", "康师傅", "娃哈哈", "景田", "恒大冰泉",
-              "依云", "昆仑山", "屈臣氏"),
-    "rice": ("柴火大院", "十月稻田", "龙稻", "福临门", "金龙鱼", "北大荒", "香满园",
-             "孟乍隆", "华润五丰"),
-    "flour": ("金沙河", "五得利", "中裕", "金龙鱼", "福临门", "河套", "塞北雪", "新良", "展艺"),
-    "cooking_oil": ("金龙鱼", "鲁花", "福临门", "多力", "胡姬花", "刀唛", "西王",
-                    "九三", "长寿花", "欧丽薇兰", "千岛源"),
-    "laundry_detergent": ("蓝月亮", "立白", "超能", "威露士", "奥妙", "汰渍", "碧浪",
-                          "雕牌", "卫新", "花王", "狮王", "白猫"),
-}
-BRAND_STANDARD_PRICES = {
+# =============================================================================
+# 品牌标准市场参考配置（正式配置数据，随主题关键词同步维护，非业务阈值）
+# =============================================================================
+# 用户要求："增加品牌的产品进行参考，一件/一瓶/一包这样的数据，优惠价金额
+# 小于等于品牌标准市场价、小于市场价才算真优惠。这个你是知道的要进行维护"。
+# 本表是唯一配置源：品牌词（含别名）→ 标准售卖单位 → 标准市场价（分）。
+#
+# 维护规则：
+#   * terms  ：标题中出现的品牌词/别名（越长者优先匹配，如"华润五丰"优于"五丰"）。
+#   * unit   ：标准售卖单位，必须与规格折算引擎 spec_unit_price_cents 的
+#              输出单位一致（bottle500=500ml瓶 / bottle=瓶 / kg=公斤 /
+#              liter=升 / pack100=100抽包 / pack=包）；商品折算单位与配置
+#              单位不同则不比（保守放行）。
+#   * price_cents：该品牌该单位的市场价（单位：分，整数）。初始值按主流
+#              渠道零售常识设定，随渠道变化直接在此增改。
+#   * note   ：规格/备注说明（纯文档，不影响逻辑）。
+# 判据：折算标准单位到手价 > price_cents × BRAND_OVERPRICE_K(1.2) →
+# 划线虚高/引流小规格，从默认列表排除、不产生优惠额；≤ 则真优惠放行。
+# 未知品牌 / 无规格可折算 / 无标准价 → 永不拦截（不误伤真实捡漏）。
+# =============================================================================
+BRAND_REFERENCE_CONFIG = {
     "paper": {
-        "维达": 300, "清风": 250, "洁柔": 300, "心相印": 280, "植护": 150, "漫花": 150,
-        "丹娜丝": 150, "怡飘": 150, "卡布": 1200, "可优比": 1200, "全棉时代": 600,
-        "得宝": 300, "斑布": 200, "顺清柔": 150, "理文": 150,
+        "维达":   {"terms": ("维达", "vinda"), "unit": "pack100", "price_cents": 300, "note": "维达超韧/棉韧抽纸单包(100抽)零售"},
+        "清风":   {"terms": ("清风",), "unit": "pack100", "price_cents": 250, "note": "清风原木纯品单包(100抽)"},
+        "洁柔":   {"terms": ("洁柔",), "unit": "pack100", "price_cents": 300, "note": "洁柔Face/立体美单包(100抽)"},
+        "心相印": {"terms": ("心相印",), "unit": "pack100", "price_cents": 280, "note": "心相印茶语经典单包(100抽)"},
+        "植护":   {"terms": ("植护",), "unit": "pack100", "price_cents": 150, "note": "植护低价抽纸单包"},
+        "漫花":   {"terms": ("漫花",), "unit": "pack100", "price_cents": 150, "note": "漫花低价抽纸单包"},
+        "丹娜丝": {"terms": ("丹娜丝",), "unit": "pack100", "price_cents": 150, "note": "丹娜丝悬挂式抽纸单提折算"},
+        "怡飘":   {"terms": ("怡飘",), "unit": "pack100", "price_cents": 150, "note": "怡飘乳霜纸单包"},
+        "卡布":   {"terms": ("卡布",), "unit": "pack100", "price_cents": 1200, "note": "卡布婴童乳霜纸单包(80抽级)"},
+        "可优比": {"terms": ("可优比",), "unit": "pack100", "price_cents": 1200, "note": "可优比婴童云柔巾单包"},
+        "全棉时代": {"terms": ("全棉时代",), "unit": "pack100", "price_cents": 600, "note": "全棉时代棉柔巾单包"},
+        "得宝":   {"terms": ("得宝", "tempo"), "unit": "pack100", "price_cents": 300, "note": "得宝抽纸单包"},
+        "斑布":   {"terms": ("斑布",), "unit": "pack100", "price_cents": 200, "note": "斑布竹浆抽纸单包"},
+        "顺清柔": {"terms": ("顺清柔",), "unit": "pack100", "price_cents": 150, "note": "顺清柔抽纸单包"},
+        "理文":   {"terms": ("理文",), "unit": "pack100", "price_cents": 150, "note": "理文本色抽纸单包"},
+        "洁云":   {"terms": ("洁云",), "unit": "pack100", "price_cents": 200, "note": "洁云抽纸单包"},
+        "妮飘":   {"terms": ("妮飘", "nepia"), "unit": "pack100", "price_cents": 400, "note": "妮飘鼻贵族单包(100抽)"},
+        "舒洁":   {"terms": ("舒洁", "kleenex"), "unit": "pack100", "price_cents": 250, "note": "舒洁抽纸单包"},
+        "惠寻":   {"terms": ("惠寻",), "unit": "pack100", "price_cents": 150, "note": "惠寻低价抽纸单包"},
+        "京东京造": {"terms": ("京东京造", "京造"), "unit": "pack100", "price_cents": 250, "note": "京东京造抽纸单包"},
+        "喵满分": {"terms": ("喵满分",), "unit": "pack100", "price_cents": 150, "note": "喵满分低价抽纸单包"},
+        "悦适":   {"terms": ("悦适",), "unit": "pack100", "price_cents": 150, "note": "悦适抽纸单包"},
+        "德宝":   {"terms": ("德宝",), "unit": "pack100", "price_cents": 400, "note": "德宝进口单包(100抽)"},
     },
     "water": {
-        "百岁山": 280, "农夫山泉": 180, "怡宝": 180, "康师傅": 150, "娃哈哈": 180,
-        "景田": 150, "恒大冰泉": 200, "依云": 1000, "昆仑山": 400, "屈臣氏": 300,
+        "百岁山": {"terms": ("百岁山",), "unit": "bottle500", "price_cents": 280, "note": "百岁山570ml单瓶零售约3元"},
+        "农夫山泉": {"terms": ("农夫山泉",), "unit": "bottle500", "price_cents": 180, "note": "农夫山泉550ml单瓶零售约2元"},
+        "怡宝":   {"terms": ("怡宝", "cestbon"), "unit": "bottle500", "price_cents": 180, "note": "怡宝555ml单瓶零售约2元"},
+        "康师傅": {"terms": ("康师傅",), "unit": "bottle500", "price_cents": 150, "note": "康师傅550ml单瓶"},
+        "娃哈哈": {"terms": ("娃哈哈",), "unit": "bottle500", "price_cents": 180, "note": "娃哈哈596ml单瓶"},
+        "景田":   {"terms": ("景田",), "unit": "bottle500", "price_cents": 150, "note": "景田百岁山之外的景田水"},
+        "恒大冰泉": {"terms": ("恒大冰泉",), "unit": "bottle500", "price_cents": 200, "note": "恒大冰泉500ml单瓶"},
+        "依云":   {"terms": ("依云", "evian"), "unit": "bottle500", "price_cents": 1000, "note": "依云330ml进口单瓶"},
+        "昆仑山": {"terms": ("昆仑山",), "unit": "bottle500", "price_cents": 400, "note": "昆仑山550ml单瓶"},
+        "屈臣氏": {"terms": ("屈臣氏",), "unit": "bottle500", "price_cents": 300, "note": "屈臣氏蒸馏水500ml单瓶"},
+        "冰露":   {"terms": ("冰露",), "unit": "bottle500", "price_cents": 120, "note": "冰露550ml单瓶"},
+        "纯水乐": {"terms": ("纯水乐",), "unit": "bottle500", "price_cents": 150, "note": "纯水乐550ml单瓶"},
+        "泉阳泉": {"terms": ("泉阳泉",), "unit": "bottle500", "price_cents": 200, "note": "泉阳泉500ml单瓶"},
+        "卓玛泉": {"terms": ("卓玛泉",), "unit": "bottle500", "price_cents": 300, "note": "卓玛泉西藏冰川水单瓶"},
     },
     "rice": {
-        "柴火大院": 4000, "十月稻田": 3000, "龙稻": 4000, "福临门": 1200, "金龙鱼": 1200,
-        "北大荒": 1200, "香满园": 1000, "孟乍隆": 3000, "华润五丰": 1500,
+        "柴火大院": {"terms": ("柴火大院",), "unit": "kg", "price_cents": 4000, "note": "柴火大院有机五常米约40元/kg"},
+        "十月稻田": {"terms": ("十月稻田",), "unit": "kg", "price_cents": 3000, "note": "十月稻田五常米约30元/kg"},
+        "龙稻":   {"terms": ("龙稻",), "unit": "kg", "price_cents": 4000, "note": "龙稻五常米高端约40元/kg"},
+        "福临门": {"terms": ("福临门",), "unit": "kg", "price_cents": 1200, "note": "福临门东北大米约12元/kg"},
+        "金龙鱼": {"terms": ("金龙鱼",), "unit": "kg", "price_cents": 1200, "note": "金龙鱼大米约12元/kg"},
+        "北大荒": {"terms": ("北大荒",), "unit": "kg", "price_cents": 1200, "note": "北大荒大米约12元/kg"},
+        "香满园": {"terms": ("香满园",), "unit": "kg", "price_cents": 1000, "note": "香满园大米约10元/kg"},
+        "孟乍隆": {"terms": ("孟乍隆",), "unit": "kg", "price_cents": 3000, "note": "孟乍隆泰国香米约30元/kg"},
+        "华润五丰": {"terms": ("华润五丰", "五丰"), "unit": "kg", "price_cents": 1500, "note": "华润五丰大米约15元/kg"},
+        "金健":   {"terms": ("金健",), "unit": "kg", "price_cents": 1000, "note": "金健大米约10元/kg"},
+        "乔府大院": {"terms": ("乔府大院",), "unit": "kg", "price_cents": 3000, "note": "乔府大院五常米约30元/kg"},
+        "裕道府": {"terms": ("裕道府",), "unit": "kg", "price_cents": 3000, "note": "裕道府五常米约30元/kg"},
+        "恒大兴安": {"terms": ("恒大兴安",), "unit": "kg", "price_cents": 1500, "note": "恒大兴安大米约15元/kg"},
     },
     "flour": {
-        "金沙河": 400, "五得利": 400, "中裕": 600, "金龙鱼": 700, "福临门": 700,
-        "河套": 1500, "塞北雪": 1000, "新良": 800, "展艺": 700,
+        "金沙河": {"terms": ("金沙河",), "unit": "kg", "price_cents": 400, "note": "金沙河家用面粉约4元/kg"},
+        "五得利": {"terms": ("五得利",), "unit": "kg", "price_cents": 400, "note": "五得利面粉约4元/kg"},
+        "中裕":   {"terms": ("中裕",), "unit": "kg", "price_cents": 600, "note": "中裕面粉约6元/kg"},
+        "金龙鱼": {"terms": ("金龙鱼",), "unit": "kg", "price_cents": 700, "note": "金龙鱼面粉约7元/kg"},
+        "福临门": {"terms": ("福临门",), "unit": "kg", "price_cents": 700, "note": "福临门面粉约7元/kg"},
+        "河套":   {"terms": ("河套",), "unit": "kg", "price_cents": 1500, "note": "河套雪花粉高端约15元/kg"},
+        "塞北雪": {"terms": ("塞北雪",), "unit": "kg", "price_cents": 1000, "note": "塞北雪面粉约10元/kg"},
+        "新良":   {"terms": ("新良",), "unit": "kg", "price_cents": 800, "note": "新良低筋/高筋粉约8元/kg"},
+        "展艺":   {"terms": ("展艺",), "unit": "kg", "price_cents": 700, "note": "展艺烘焙粉约7元/kg"},
+        "风筝":   {"terms": ("风筝",), "unit": "kg", "price_cents": 400, "note": "风筝牌面粉约4元/kg"},
+        "古船":   {"terms": ("古船",), "unit": "kg", "price_cents": 500, "note": "古船面粉约5元/kg"},
+        "天山":   {"terms": ("天山",), "unit": "kg", "price_cents": 600, "note": "天山面粉约6元/kg"},
+        "香满园": {"terms": ("香满园",), "unit": "kg", "price_cents": 700, "note": "香满园面粉约7元/kg"},
+        "中粮":   {"terms": ("中粮",), "unit": "kg", "price_cents": 700, "note": "中粮面粉约7元/kg"},
     },
     "cooking_oil": {
-        "金龙鱼": 1500, "鲁花": 2400, "福临门": 1300, "多力": 2000, "胡姬花": 2000,
-        "刀唛": 3000, "西王": 1600, "九三": 1500, "长寿花": 1800, "欧丽薇兰": 3000,
-        "千岛源": 3000,
+        "金龙鱼": {"terms": ("金龙鱼",), "unit": "liter", "price_cents": 1500, "note": "金龙鱼调和油5L约75元"},
+        "鲁花":   {"terms": ("鲁花",), "unit": "liter", "price_cents": 2400, "note": "鲁花5S花生油5L约120元"},
+        "福临门": {"terms": ("福临门",), "unit": "liter", "price_cents": 1300, "note": "福临门食用油约13元/L"},
+        "多力":   {"terms": ("多力",), "unit": "liter", "price_cents": 2000, "note": "多力葵花籽油约20元/L"},
+        "胡姬花": {"terms": ("胡姬花",), "unit": "liter", "price_cents": 2000, "note": "胡姬花古法花生油约20元/L"},
+        "刀唛":   {"terms": ("刀唛", "knife"), "unit": "liter", "price_cents": 3000, "note": "刀唛花生油约30元/L"},
+        "西王":   {"terms": ("西王",), "unit": "liter", "price_cents": 1600, "note": "西王玉米油约16元/L"},
+        "九三":   {"terms": ("九三",), "unit": "liter", "price_cents": 1500, "note": "九三非转基因豆油约15元/L"},
+        "长寿花": {"terms": ("长寿花",), "unit": "liter", "price_cents": 1800, "note": "长寿花玉米油约18元/L"},
+        "欧丽薇兰": {"terms": ("欧丽薇兰", "olivoil"), "unit": "liter", "price_cents": 3000, "note": "欧丽薇兰橄榄油约30元/L"},
+        "千岛源": {"terms": ("千岛源",), "unit": "liter", "price_cents": 3000, "note": "千岛源山茶油约30元/L"},
+        "金鼎":   {"terms": ("金鼎",), "unit": "liter", "price_cents": 1400, "note": "金鼎食用油约14元/L"},
+        "鹰唛":   {"terms": ("鹰唛",), "unit": "liter", "price_cents": 1800, "note": "鹰唛花生油约18元/L"},
+        "骆驼唛": {"terms": ("骆驼唛",), "unit": "liter", "price_cents": 1800, "note": "骆驼唛花生油约18元/L"},
     },
     "laundry_detergent": {
-        "蓝月亮": 2000, "立白": 1500, "超能": 1500, "威露士": 2000, "奥妙": 1500,
-        "汰渍": 1500, "碧浪": 2000, "雕牌": 1200, "卫新": 1500, "花王": 3000,
-        "狮王": 3000, "白猫": 1000,
+        "蓝月亮": {"terms": ("蓝月亮",), "unit": "kg", "price_cents": 2000, "note": "蓝月亮洗衣液3kg约60元"},
+        "立白":   {"terms": ("立白",), "unit": "kg", "price_cents": 1500, "note": "立白洗衣液3kg约45元"},
+        "超能":   {"terms": ("超能",), "unit": "kg", "price_cents": 1500, "note": "超能洗衣液3kg约45元"},
+        "威露士": {"terms": ("威露士",), "unit": "kg", "price_cents": 2000, "note": "威露士洗衣液3kg约60元"},
+        "奥妙":   {"terms": ("奥妙",), "unit": "kg", "price_cents": 1500, "note": "奥妙洗衣液3kg约45元"},
+        "汰渍":   {"terms": ("汰渍", "tide"), "unit": "kg", "price_cents": 1500, "note": "汰渍洗衣液3kg约45元"},
+        "碧浪":   {"terms": ("碧浪", "ariel"), "unit": "kg", "price_cents": 2000, "note": "碧浪洗衣液3kg约60元"},
+        "雕牌":   {"terms": ("雕牌",), "unit": "kg", "price_cents": 1200, "note": "雕牌洗衣液3kg约36元"},
+        "卫新":   {"terms": ("卫新",), "unit": "kg", "price_cents": 1500, "note": "卫新洗衣液3kg约45元"},
+        "花王":   {"terms": ("花王", "kao"), "unit": "kg", "price_cents": 3000, "note": "花王洗衣液3kg约90元"},
+        "狮王":   {"terms": ("狮王", "lion"), "unit": "kg", "price_cents": 3000, "note": "狮王洗衣液3kg约90元"},
+        "白猫":   {"terms": ("白猫",), "unit": "kg", "price_cents": 1000, "note": "白猫洗衣液3kg约30元"},
+        "妈妈壹选": {"terms": ("妈妈壹选",), "unit": "kg", "price_cents": 1800, "note": "妈妈壹选洗衣液3kg约54元"},
+        "好爸爸": {"terms": ("好爸爸",), "unit": "kg", "price_cents": 1800, "note": "好爸爸洗衣液3kg约54元"},
+        "开米":   {"terms": ("开米",), "unit": "kg", "price_cents": 2000, "note": "开米洗衣液3kg约60元"},
+        "洁霸":   {"terms": ("洁霸", "attack"), "unit": "kg", "price_cents": 1800, "note": "洁霸洗衣液3kg约54元"},
+        "绿伞":   {"terms": ("绿伞",), "unit": "kg", "price_cents": 1200, "note": "绿伞洗衣液3kg约36元"},
     },
 }
+
 # 品牌单品参考判据系数：折算标准单位到手价高于该品牌标准市场价达该倍数
 # 以上视为"贵过市场价"（划线虚高/引流小规格）。1.2x 容忍渠道价差：整箱
 # 真品折算单价 ≈ 零售市场价（1.0-1.2 倍）放行，尝鲜小规格折算单价 2-3 倍
@@ -172,14 +253,17 @@ BRAND_OVERPRICE_K = 1.2
 
 
 def brand_from_title(title, topic):
-    """Longest brand term present in a title for a managed topic (or None)."""
+    """Longest brand term (incl. aliases) present in a title for a managed
+    topic, from BRAND_REFERENCE_CONFIG (or None).  English aliases match
+    case-insensitively; longer terms win ("华润五丰" over "五丰")."""
     if not title:
         return None
-    terms = BRAND_TERMS.get(topic) or ()
+    lowered = title.lower()
     best = None
-    for term in terms:
-        if term in title and (best is None or len(term) > len(best)):
-            best = term
+    for brand, spec in (BRAND_REFERENCE_CONFIG.get(topic) or {}).items():
+        for term in spec.get("terms") or ():
+            if term.lower() in lowered and (best is None or len(term) > len(best)):
+                best = term
     return best
 
 
@@ -253,7 +337,10 @@ def is_brand_market_overpriced(topic, title, final_cents):
     if priced is None:
         return False
     unit_label, unit_price = priced
-    standard = (BRAND_STANDARD_PRICES.get(topic) or {}).get(brand)
+    spec = (BRAND_REFERENCE_CONFIG.get(topic) or {}).get(brand)
+    if not isinstance(spec, dict) or spec.get("unit") != unit_label:
+        return False
+    standard = spec.get("price_cents")
     if not isinstance(standard, int):
         return False
     return unit_price > int(standard * BRAND_OVERPRICE_K)
