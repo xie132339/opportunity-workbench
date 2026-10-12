@@ -45,6 +45,8 @@ class CalibrationEstimatorTests(unittest.TestCase):
             CREATE TABLE opportunities(id INTEGER PRIMARY KEY, event_id INTEGER, source_id INTEGER);
         """)
         connection.execute("INSERT INTO sources VALUES(1,'淘宝店抽纸优惠搜索','taobao_alliance')")
+        # 官方来源命名（纸品）也必须纳入同一主题校准
+        connection.execute("INSERT INTO sources VALUES(2,'淘宝生活品·纸品优惠搜索','taobao_alliance')")
         # 200 条正常促销（promo 3-30 元，降幅 20%-60%）+ 4 条明显假货（>90%）
         rows = []
         for i in range(200):
@@ -55,9 +57,13 @@ class CalibrationEstimatorTests(unittest.TestCase):
         for promo, reserve in ((299, 19900), (690, 69900), (7300, 69900), (18830, 101600)):
             rows.append((1, json.dumps({"taobao_alliance_offer": {
                 "promotion_price_cents": promo, "reserve_price_cents": reserve}})))
+        for i in range(50):
+            promo = 500 + i * 100
+            rows.append((2, json.dumps({"taobao_alliance_offer": {
+                "promotion_price_cents": promo, "reserve_price_cents": promo * 2}})))
         connection.executemany("INSERT INTO events(source_id,metadata_json) VALUES(?,?)", rows)
         for i in range(1, len(rows) + 1):
-            connection.execute("INSERT INTO opportunities(event_id,source_id) VALUES(?,1)", (i,))
+            connection.execute("INSERT INTO opportunities(event_id,source_id) VALUES(?,?)", (i, 1 if i <= 204 else 2))
         calibration = dc.calibrate(connection)
         self.assertIn("paper", calibration)
         payload = calibration["paper"]

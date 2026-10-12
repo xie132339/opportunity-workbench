@@ -112,16 +112,21 @@ def calibrate(db):
     per-bin ratio/drop caps, global caps, sample counts and a timestamp.
     """
     from services.taobao_living_topics import CORE_LIVING_TOPICS
-    topics = {topic.key: topic.keyword for topic in CORE_LIVING_TOPICS}
-    keyword_clause = " OR ".join("s.name LIKE ?" for _ in topics)
-    params = [f"%{keyword}%" for keyword in topics.values()]
+    # Match both the topic name ("纸品") and the original keyword ("抽纸") so
+    # official production source naming ("淘宝生活品·纸品优惠搜索") is collected.
+    clauses, params = [], []
+    for topic in CORE_LIVING_TOPICS:
+        for needle in (topic.name, topic.keyword):
+            clauses.append("s.name LIKE ?")
+            params.append(f"%{needle}%")
+    keyword_clause = " OR ".join(clauses)
     rows = db.execute(f"""SELECT s.name AS source_name, e.metadata_json
         FROM opportunities o JOIN events e ON e.id = o.event_id
         JOIN sources s ON s.id = o.source_id
         WHERE s.method = 'taobao_alliance' AND ({keyword_clause})
         AND length(e.metadata_json) > 2""", params).fetchall()
 
-    by_topic = {key: [] for key in topics}
+    by_topic = {topic.key: [] for topic in CORE_LIVING_TOPICS}
     for row in rows:
         topic = topic_key(row["source_name"])
         if topic is None:
