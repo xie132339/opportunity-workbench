@@ -373,6 +373,26 @@ def promotion_admission(row, assessment):
                 and promotion_cents > ceiling):
             return dict(eligible=False, tier='promotion_clue',
                         reason='推广价超出当前生活品主题合理上界，仅作来源审计，不作为默认优惠展示')
+        # 引流/划线虚高假优惠：不进入默认列表（仅来源审计）。覆盖所有联盟
+        # 来源商品（六主题当前全量覆盖）：尝鲜/首单/试用等形态词、低价统一价
+        # 聚集、低价小件（P15 线内）、深划线+到手价在市场正常价带。
+        title = row.get('title') or ''
+        if discount_calibration.has_trial_gating_marker(title):
+            return dict(eligible=False, tier='promotion_clue',
+                        reason='引流小规格/首单试用 SKU（尝鲜/新客/小样等），不作为默认优惠展示')
+        if isinstance(promotion_cents, int) and not isinstance(promotion_cents, bool):
+            if discount_calibration.is_gated_price(topic, promotion_cents):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='低价引流统一价（首单/新人补贴价），不作为默认优惠展示')
+            if discount_calibration.is_low_value_small_item(topic, promotion_cents):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='低价小件（主题推广价 P15 线内），不作为默认优惠展示')
+            reserve = (evidence or {}).get('reserve_price_cents')
+            if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promotion_cents
+                    and discount_calibration.is_market_band_fake_discount(
+                        topic, promotion_cents, (reserve - promotion_cents) / reserve)):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='划线虚高（到手价在市场正常价带内），不作为默认优惠展示')
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)
                 and quote['amount_cents'] > 0 and evidence):

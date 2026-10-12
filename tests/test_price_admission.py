@@ -306,3 +306,48 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('整单 ¥10.00',detail)
         self.assertIn('整单声称价算术均摊 · 不代表该SKU商家单价',detail)
         self.assertIn('¥5.00',detail)
+
+
+class AllianceTrafficAdmissionTests(unittest.TestCase):
+    """默认优惠列表准入：引流/划线虚高假优惠不出现，真品保留。"""
+
+    def test_alliance_traffic_and_markup_items_excluded_from_default_list(self):
+        from datetime import datetime, timezone, timedelta
+        from services import discount_calibration as dc
+        from services.product_search import promotion_admission
+        from test_taobao_alliance import sample_item
+
+        now = datetime(2026, 10, 13, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+
+        def mk(title, reserve, promo, amount=None):
+            src = sample_item(now, reserve=reserve, promotion=promo, coupon="0.00", threshold="0.00")
+            return {
+                'promotional_candidate': True,
+                'source_method': 'taobao_alliance',
+                'source_name': '淘宝生活品·纸品优惠搜索',
+                'title': title,
+                'display_quote': {'kind': 'official_promotion_observation',
+                                  'amount_cents': amount if amount is not None else int(float(promo) * 100)},
+                'metadata_json': json.dumps({'taobao_alliance_source_fields': src}),
+            }
+
+        dc.set_calibration({'paper': {
+            'price_ceiling_cents': 35600, 'high_log': 3.0, 'bins': [],
+            'global_ratio_cap': 0.90, 'global_drop_cap': 10000,
+            'gated_prices': [201], 'low_price_floor': 400,
+            'market_band_low': 401, 'market_band_high': 1179, 'deep_drop_threshold': 0.916,
+            'sample_count': 100, 'calibrated_at': '2026-01-01T00:00:00+00:00'}})
+        try:
+            # 引流形态词（尝鲜小规格）→ 不进入默认列表
+            self.assertFalse(promotion_admission(mk('【尝鲜】百岁山348ml2瓶便携', '19.90', '10.01'), {})['eligible'])
+            # 低价统一价聚集（¥2.01）→ 排除
+            self.assertFalse(promotion_admission(mk('大包原木抽纸整箱批', '9.90', '2.01'), {})['eligible'])
+            # P15 低价小件（¥2.39 便携纸）→ 排除
+            self.assertFalse(promotion_admission(mk('植护乳霜纸便携装', '15.70', '2.39'), {})['eligible'])
+            # 深划线 + 到手价在市场正常价带（¥8.5 省95%）→ 排除
+            self.assertFalse(promotion_admission(mk('加厚抽纸整箱实惠装', '170.00', '8.50'), {})['eligible'])
+            # 真品整箱/大提保留
+            self.assertTrue(promotion_admission(mk('KUB可优比婴儿云柔巾80抽18包', '699.00', '188.90', amount=18890), {})['eligible'])
+            self.assertTrue(promotion_admission(mk('漫花6大提悬挂式抽纸巾整箱批', '37.90', '7.90', amount=790), {})['eligible'])
+        finally:
+            dc.set_calibration(None)
