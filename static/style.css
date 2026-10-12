@@ -196,6 +196,7 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 
 /* Phone layout keeps the normal routes and forms while giving primary actions a fixed tab bar. */
 .mobile-tabbar{display:none}
+.affiliate-web-fallback{display:none}
 .home-guide{margin:0 0 16px}.home-guide>summary,.advanced-filters>summary,.search-summary-info>summary,.source-status-help>summary{display:none}
 .advanced-filters{grid-column:1/-1;margin:0}.advanced-filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 .advanced-filter-grid label{min-width:0}
@@ -225,6 +226,7 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
   .mobile-tabbar>a,.mobile-more>summary{display:flex;min-height:50px;align-items:center;justify-content:center;flex-direction:column;gap:1px;padding:3px 1px;border-radius:8px;color:var(--muted);font-size:11px;font-weight:600;text-align:center;text-decoration:none;line-height:1.2}
   .mobile-tabbar>a>span:first-child,.mobile-more>summary>span:first-child{font-size:21px;line-height:1}
   .mobile-tabbar a[aria-current="page"]{background:#e7f2f0;color:var(--accent)}
+  .affiliate-web-fallback{display:inline-block;margin-left:8px;font-size:12px}
   .mobile-more{position:relative;margin:0}.mobile-more>summary{list-style:none}.mobile-more>summary::-webkit-details-marker{display:none}
   .mobile-more[open]>summary{background:#e7f2f0;color:var(--accent)}
   .mobile-more-panel{position:absolute;right:0;bottom:calc(100% + 8px);width:min(280px,calc(100vw - 24px));max-height:65vh;overflow:auto;display:grid;padding:6px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px #102d3d30}
