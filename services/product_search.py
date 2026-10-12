@@ -259,7 +259,7 @@ def official_promotion_discount(row):
         promotion_cents = evidence.get('promotion_price_cents')
         rate = (reference_drop / reference_cents
                 if isinstance(reference_cents, int) and reference_cents > 0 else None)
-        if (not discount_calibration.is_low_value_small_item(topic, promotion_cents)
+        if (not discount_calibration.is_low_value_small_item(topic, promotion_cents, title)
                 and not discount_calibration.is_market_band_fake_discount(topic, promotion_cents, rate)):
             candidates.append(dict(
                 amount_cents=reference_drop,
@@ -280,7 +280,7 @@ def official_promotion_discount(row):
         rate = (coupon_drop / promotion_cents
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
-                and not discount_calibration.is_low_value_small_item(topic, final_cents)
+                and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
                 and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
             candidates.append(dict(
                 amount_cents=coupon_drop,
@@ -301,7 +301,7 @@ def official_promotion_discount(row):
         rate = (path_drop / promotion_cents
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
-                and not discount_calibration.is_low_value_small_item(topic, final_cents)
+                and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
                 and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
             candidates.append(dict(
                 amount_cents=path_drop,
@@ -384,7 +384,7 @@ def promotion_admission(row, assessment):
             if discount_calibration.is_gated_price(topic, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='低价引流统一价（首单/新人补贴价），不作为默认优惠展示')
-            if discount_calibration.is_low_value_small_item(topic, promotion_cents):
+            if discount_calibration.is_low_value_small_item(topic, promotion_cents, title):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='低价小件（主题推广价 P15 线内），不作为默认优惠展示')
             reserve = (evidence or {}).get('reserve_price_cents')

@@ -277,3 +277,37 @@ class CalibrationTopicKeyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SmallSpecLimitsTests(unittest.TestCase):
+    def test_small_spec_limits_distinguish_portable_from_bulk(self):
+        from services import discount_calibration as dc
+        # 便携小件：所有量纲均小
+        self.assertTrue(dc.small_spec_limits('益初乳霜纸婴儿云柔巾保湿纸巾擦鼻30抽宝宝用抽纸巾'))
+        self.assertTrue(dc.small_spec_limits('【尝鲜】百岁山348ml*2瓶'))
+        # 量大真品：任一量纲大 → 不拦
+        self.assertFalse(dc.small_spec_limits('KUB可优比婴儿云柔巾80抽18包'))
+        self.assertFalse(dc.small_spec_limits('聪妈抽纸悬挂式1000张加大加厚家用实惠装'))
+        self.assertFalse(dc.small_spec_limits('百岁山570ml*24瓶整箱'))
+        self.assertFalse(dc.small_spec_limits('漫花400纸巾抽纸可选30包整箱家用'))
+        # 无规格或空标题 → 不按规格拦
+        self.assertFalse(dc.small_spec_limits(''))
+        self.assertFalse(dc.small_spec_limits('大包原木抽纸实惠装'))
+
+    def test_spec_route_uses_median_price_and_preserves_bulk(self):
+        from services import discount_calibration as dc
+        payload = {'low_price_floor': 400, 'price_p50_cents': 790, 'sample_count': 10,
+                   'calibrated_at': '2026-01-01T00:00:00+00:00'}
+        dc.set_calibration({'paper': payload})
+        try:
+            # 小规格 + 低于主题中位价 → 小件
+            self.assertTrue(dc.is_low_value_small_item('paper', 440, '益初乳霜纸30抽宝宝用'))
+            # 小规格但价高于中位 → 不拦（可能真是高端小件）
+            self.assertFalse(dc.is_low_value_small_item('paper', 1000, '乳霜纸30抽宝宝用'))
+            # 量大（1000张）→ 不拦，即使价格低
+            self.assertFalse(dc.is_low_value_small_item('paper', 619, '聪妈抽纸悬挂式1000张家用'))
+            # 无规格 → 走 P15 线
+            self.assertTrue(dc.is_low_value_small_item('paper', 201))
+            self.assertFalse(dc.is_low_value_small_item('paper', 790))
+        finally:
+            dc.set_calibration(None)

@@ -26,6 +26,7 @@ import collections
 import json
 import math
 import os
+import re
 import sqlite3
 from decimal import Decimal
 
@@ -87,6 +88,48 @@ GATED_MIN_COUNT = 5
 # estimated from the corpus, never hard-coded.
 MARKET_BAND_MAD_K = 1.0
 DEEP_DROP_QUANTILE = 0.90
+
+# Small-specification upper limits per unit family (physical goods attributes,
+# not discount thresholds): a "一瓶一包几块钱" item the user rejects as traffic
+# (30抽便携装, 2瓶尝鲜, 348ml小瓶) is small in EVERY measured spec, while a
+# genuine bulk deal (400抽30包, 570ml*24瓶, 4.5L*2) exceeds at least one limit
+# and is never gated.  Only combined with a low price (< topic median) does a
+# small spec become a low-value small item.
+SMALL_SPEC_LIMITS = {
+    "sheet": 200,      # 抽 / 张 / 片
+    "pack": 6,         # 包 / 提
+    "bottle": 6,       # 瓶 / 支 / 粒
+    "ml": 500,         # ml / 毫升
+    "liter": 1.5,      # L / 升
+    "kg": 2,           # kg / 斤
+}
+_SPEC_UNIT = {
+    "抽": "sheet", "张": "sheet", "片": "sheet",
+    "包": "pack", "提": "pack",
+    "瓶": "bottle", "支": "bottle", "粒": "bottle",
+    "ml": "ml", "毫升": "ml",
+    "L": "liter", "升": "liter",
+    "kg": "kg", "斤": "kg",
+}
+_SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(抽|张|片|包|提|瓶|支|粒|ml|毫升|L|升|kg|斤)", re.IGNORECASE)
+
+
+def small_spec_limits(title):
+    """Whether a title describes a small-specification item in every measured
+    unit (e.g. "30抽宝宝用" or "348ml*2瓶").  Titles with a large unit (整箱/
+    30包/24瓶/1000张) return False so bulk deals are never gated; titles with
+    no extractable spec return False as well."""
+    if not title:
+        return False
+    seen = {}
+    for m in _SPEC_RE.finditer(title):
+        value = float(m.group(1))
+        family = _SPEC_UNIT.get(m.group(2).lower())
+        if family is not None:
+            seen[family] = max(seen.get(family, 0.0), value)
+    if not seen:
+        return False
+    return all(value < SMALL_SPEC_LIMITS[family] for family, value in seen.items())
 
 
 def has_trial_gating_marker(title):
@@ -279,6 +322,7 @@ def calibrate(db):
             "global_drop_cap": global_drop,
             "gated_prices": _gated_promo_prices(promo_values[topic]),
             "low_price_floor": int(_quantile(promo_cents, 0.15)) if promo_cents else None,
+            "price_p50_cents": median_cents,
             "market_band_low": int(median_cents - MARKET_BAND_MAD_K * mad_cents) if promo_cents else None,
             "market_band_high": int(median_cents + MARKET_BAND_MAD_K * mad_cents) if promo_cents else None,
             "deep_drop_threshold": round(_quantile([r for _lp, r, _d in pairs if r is not None], DEEP_DROP_QUANTILE), 4)
@@ -303,19 +347,27 @@ def _gated_promo_prices(promo_values):
                   if n >= GATED_MIN_COUNT and p < median)
 
 
-def is_low_value_small_item(topic, cents):
-    """Whether a final price is a low-value small-item price (topic P15).
+def is_low_value_small_item(topic, cents, title=None):
+    """Whether a final price is a low-value small-item price.
 
     Cheap single packs / single bottles (a 2-yuan tissue pack, a 5-yuan flour
     bag) are not "real bargains with big savings" for the user even when the
-    strikethrough looks deep; they must not surface a discount amount.  The
-    floor is estimated from the corpus (P15 of promotion prices), never
-    hard-coded, and only the discount identity is dropped — the listing stays
-    on the default list with its promotion price shown.
+    strikethrough looks deep; they must not surface a discount amount.  Two
+    data-driven routes:
+      * spec route (title carries a spec): small in every measured unit
+        (30抽/348ml*2瓶) AND below the topic median price → small item.  Bulk
+        deals (400抽30包/24瓶/1000张) exceed a unit limit and are never gated.
+      * price route (no spec): below the corpus P15 floor of promotion prices.
+    The floors are estimated from the corpus, never hard-coded, and only the
+    discount identity is dropped — the listing stays on the default list with
+    its promotion price shown.
     """
     if not isinstance(cents, int) or isinstance(cents, bool) or cents <= 0:
         return False
     payload = get_calibration().get(topic) or {}
+    if small_spec_limits(title):
+        median = payload.get("price_p50_cents")
+        return isinstance(median, int) and cents < median
     floor = payload.get("low_price_floor")
     return isinstance(floor, int) and cents < floor
 
