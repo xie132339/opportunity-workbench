@@ -90,6 +90,17 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 真实数据回放（本机 10.4 万条）：被拦但保留 纸 2634 / 水 360 / 米 155 / 面 423 / 油 114 / 洗衣液 569；荒谬移除 纸 229 / 水 71 / 米 24 / 面 31 / 洗衣液 6；无信号普通商品仍排除（纸 1539 等）。页面回放：KUB 乳霜纸在列表（推广价展示、无优惠标签、含"参考价过高"说明），威露士 2997 不在列表，`sort=discount_high` TOP 优惠额全为真品（596.9/595.99/595.9）。
 - 测试：`test_parse_item_inflated_reference_drop_is_not_a_promotion_signal` 扩展断言被拦后仍有准入信号；新增 `test_has_current_promotion_signal_keeps_reference_gap_but_excludes_plain_items`；全量 383 项唯一失败仍为既有基线。文档：契约规则 6 增补"保真优先"条目。
 
+## 5.2e 2026-10-12 品类词过滤解霸榜 + 豁免区全局降幅界 + 移动端折扣率标签
+
+- 背景：用户最新痛点"找不到真正优惠的数据"。诊断（/tmp/diag.txt）发现头号原因是**主题关键词误命中非本品类商品霸榜**：大米主题 TOP 优惠额第一是"科颜氏大米小麦洗发露"（优惠 ¥5601、推广 ¥399、降幅 93%）、"Reiss 大米色条纹服饰"（¥828）、另一科颜氏（¥600）——品类与主题不符，却因标题含主题词被采集、因高价豁免区放行产生巨额优惠额霸榜，用户看不到真优惠。
+- 修复（提交 `bf2f4dc`，已推 GitHub 并部署 ECS）：
+  - `services/discount_calibration.py`：新增 `TOPIC_CATEGORY_TERMS`（六主题 include 强词/exclude 干扰词）+ `_GENERIC_INTERFERING_TERMS` + `category_matches(topic,title)`（无主题/未知/空标题返回 True 不设卡；管理主题需命中 include 且不含 exclude/通用干扰词）；
+  - `services/product_search.py::official_promotion_discount`：参考价差候选新增 `category_ok` 条件（import 已在第 8 行）；
+  - `judge_drop` 豁免区（high_log 以上）：新增全局降幅界——`ratio > global_ratio_cap` 即拦（reason"降幅超过该主题全局可信上界"），消灭豁免区 90%+ 划线虚高（拦洗发露 93%，保留低氘水 61%/山茶油 55-68%）；
+  - `routes/search.py`：`build_row` 新增 `mobile_discount_rate`（参考价差 basis 直接用官方 rate_basis_points，券/路径按 before/after 现算）；`templates/_mobile_offer.html` 移动端卡片显示"省 X%"。
+- 验证：本机真实回放——品类错配过滤 339 条，可信价差 TOP12 全真品（山茶油 5L/低氘水/秋味坊/赣江/PDO 橄榄油/KUB 整箱）；大米主题官方优惠 TOP 十月稻田 50kg ¥1000/33%、龙稻 5kg ¥300/62.5%、柴火 5kg ¥200/71.4% 全真米。公网 ECS 回放：科颜氏/Reiss 0 出现、"省 X%"与"在淘宝 App 打开"按钮正常。测试：新增 `test_category_matches_blocks_look_alike_products` + 豁免区全局界扩展用例；全量 384 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。部署：`git merge --ff-only origin/feature/bootstrap` + `systemctl restart opportunity-workbench-web opportunity-workbench-worker`；品类过滤不改变校准表数据，refresh_if_stale 照常管新鲜度。
+- 词表维护：品类词是维护性词典（非业务阈值），主题关键词新增采集词时需同步检查 `TOPIC_CATEGORY_TERMS` 的 include/exclude 是否覆盖新品类边界。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
