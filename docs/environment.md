@@ -18,6 +18,10 @@ bash scripts/workbench.sh restart
 
 网页入口：<http://127.0.0.1:5002/>。脚本先安全停止本工作区自身的网页和淘宝 worker，再以当前工作树启动两者，并检查 `/health`。它只会处理命令和工作目录均匹配本项目的进程，不会为了夺取端口停止别的应用。worker 只扫描到期来源；来源扫描状态以 `/sources` 页面和数据库中的最近 `source_scan_runs` 为准。
 
+## 本地登录
+
+网页和操作接口需要登录；`/health` 仅供本机启动脚本检查。初始账户为 `admin`，初始密码由部署者按源码默认值使用。需要自行管理时，在忽略的 `.env` 设置 `WORKBENCH_ADMIN_USERNAME` 和 `WORKBENCH_ADMIN_PASSWORD` 后重启服务；不要把实际密码提交到 Git。
+
 ```bash
 bash scripts/workbench.sh status
 bash scripts/workbench.sh stop

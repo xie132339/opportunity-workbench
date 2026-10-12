@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · 多平台机会工作台</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-card">
+      <h1>多平台机会工作台</h1>
+      <p class="muted">请登录后使用商品搜索、渠道配置和官方活动功能。</p>
+      {% with messages = get_flashed_messages(with_categories=true) %}{% for category,message in messages %}<div class="message {{ category }}">{{ message }}</div>{% endfor %}{% endwith %}
+      <form method="post" class="stack">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <label>账户<input name="username" autocomplete="username" required autofocus></label>
+        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+        <button type="submit">登录</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

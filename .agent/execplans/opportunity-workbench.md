@@ -139,3 +139,22 @@
 ### Remaining external evidence boundary
 
 当前尚未填入真实、有效的双11或618活动 ID/活动商品物料 ID。页面、数据结构和规则已就绪，但不能将夹具排序称为真实节日活动结果；录入官方公告中的当前 ID 后，必须以实际返回的会场和物料完成 AC-09 回放。
+
+## 2026-10-12 本机访问登录门
+
+### Purpose and observable outcome
+
+本机工作台页面和操作接口必须先登录；未登录访问会进入登录页，登录成功后返回原目标页面。健康检查保持为本机启动脚本使用，不能因网页登录而失效。
+
+### Implementation
+
+- 新增 `services/local_auth.py`，集中处理默认账户、环境变量覆盖、会话状态、常量时间凭据校验和安全站内回跳。
+- 新增 `routes/auth.py` 与登录模板；登录和退出均保留现有 CSRF 校验。
+- 应用请求钩子只放行登录、静态资源和 `/health`；其它页面与操作接口未登录时重定向到 `/login`。
+- `.env` 可覆盖 `WORKBENCH_ADMIN_USERNAME`、`WORKBENCH_ADMIN_PASSWORD`，真实密码继续留在本机忽略文件。
+
+### Validation and evidence
+
+1. `tests.test_local_auth`：未登录重定向、健康检查、默认登录、错误密码、外部跳转拒绝和退出回锁共 5 项通过。
+2. `unittest discover -s tests`：343 项通过；现有业务路由测试使用的测试客户端自动建立测试会话，生产请求不受该测试适配器影响。
+3. 重启本机网页与 worker 后，实际 HTTP 回放确认 `/` 未登录为 302、`/health` 为 200、提交登录表单后 `/sources` 为 200。

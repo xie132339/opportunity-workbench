@@ -8,7 +8,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from flask import Flask, abort, request, session
+from flask import Flask, abort, redirect, request, session, url_for
+from flask.testing import FlaskClient
 
 ROOT = Path(__file__).resolve().parent
 
@@ -39,11 +40,27 @@ from services.opportunity_analysis import (CHECKOUT_WINDOW, RECENT_WINDOW, estim
     freshness_state, freshness_label, resale_assessment, is_evidence_candidate,
     is_current_notice, notice_rows)
 from services.alert_dispatch import dispatch_verified_alerts
+from services.local_auth import sign_in, signed_in
+
+
+class WorkbenchTestClient(FlaskClient):
+    """Keep existing business-route tests focused while production stays gated."""
+
+    def __init__(self, *args, authenticated=True, **kwargs):
+        self._authenticated = authenticated
+        super().__init__(*args, **kwargs)
+
+    def open(self, *args, **kwargs):
+        if self._authenticated:
+            with self.session_transaction() as stored_session:
+                sign_in(stored_session, "test-user")
+        return super().open(*args, **kwargs)
 
 
 def create_app():
     application = Flask(__name__)
     application.secret_key = os.environ.get("WORKBENCH_SECRET") or secrets.token_hex(32)
+    application.test_client_class = WorkbenchTestClient
 
     @application.template_filter("cn_time")
     def cn_time(value):
@@ -60,7 +77,9 @@ def create_app():
     application.add_template_filter(freshness_label, "freshness")
 
     @application.before_request
-    def csrf_protection():
+    def access_control_and_csrf_protection():
+        if request.endpoint not in {"login", "health", "static"} and not signed_in(session):
+            return redirect(url_for("login", next=request.full_path.rstrip("?")))
         if request.method == "POST" and request.form.get("csrf") != session.get("csrf"):
             abort(400, "Invalid form token")
 
@@ -68,7 +87,7 @@ def create_app():
     def common():
         from autoreview import offer_summary as summarize_offer
         token = session.setdefault("csrf", secrets.token_urlsafe(24))
-        return {"csrf": token, "money": money, "profit": estimated_profit, "review_labels": REVIEW_LABELS,
+        return {"csrf": token, "current_user": session.get("workbench_user"), "money": money, "profit": estimated_profit, "review_labels": REVIEW_LABELS,
                 "offer_summary": summarize_offer, "resource_labels": RESOURCE_LABELS, "topic_labels": TOPIC_LABELS,
                 "product_subcategory": product_subcategory, "paper_package_prices": paper_package_prices}
 

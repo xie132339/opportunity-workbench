@@ -1,0 +1,18 @@
+[Unit]
+Description=Opportunity Workbench SQLite backup
+After=opportunity-workbench-web.service
+
+[Service]
+Type=oneshot
+User=workbench
+Group=workbench
+WorkingDirectory=__APP_ROOT__
+EnvironmentFile=/etc/opportunity-workbench/workbench.env
+Environment=WORKBENCH_DB=/var/lib/opportunity-workbench/workbench.sqlite3
+Environment=WORKBENCH_BACKUP_DIR=/var/lib/opportunity-workbench/backups
+ExecStart=__APP_ROOT__/.venv/bin/python -B deploy/aliyun/scripts/backup_sqlite.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/opportunity-workbench
