@@ -80,10 +80,14 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         # 绝对荒谬保护：付款 9.9 元、优惠 55 元（降幅 84.7%）仍属划线虚高
         self.assertFalse(plausible(6490, 990)[0])
         self.assertFalse(plausible(6990, 690)[0])      # 付款 6.9 元、优惠 63 元
-        # 真实促销不受影响：5 折、7 折、以及 1 折清仓边界（0.90）均保留
+        # 85% 及以上降幅均拦截：KUB 乳霜纸 参考699→69.9（90%）、柴火大米 参考699→73（89.6%）
+        self.assertFalse(plausible(69900, 6990)[0])
+        self.assertFalse(plausible(69900, 7300)[0])
+        self.assertFalse(plausible(10000, 1500)[0])    # 恰 85% 也拦
+        # 真实促销不受影响：5 折、7 折、84% 内深折扣保留
         self.assertTrue(plausible(10000, 5000)[0])
         self.assertTrue(plausible(10000, 3000)[0])
-        self.assertTrue(plausible(10000, 1000)[0])
+        self.assertTrue(plausible(10000, 1600)[0])     # 84% 降幅
 
     def test_parse_item_inflated_reference_drop_is_not_a_promotion_signal(self):
         record = parse_item(sample_item(self.now, reserve="199.00", promotion="2.90"), now=self.now)

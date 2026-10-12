@@ -60,10 +60,10 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 ## 5.2 2026-10-12 假优惠与荒谬单价拦截
 
 - 背景：淘宝联盟 `reserve_price` 是商家自设划线价，可任意虚高，产生大量"一包纸优惠几百元、付款几块钱"的假优惠；生活品关键词还误命中几千上万的工业设备/荒谬组合价。
-- 规则 1（参考价差合理性）：`services/taobao_alliance.py::reference_drop_plausibility` 判定划线价差不可信的情形——降幅超过参考价 90%（`drop*10 > reserve*9`）、参考价超过推广价 20 倍、或推广价低于 10 元且优惠额超过 50 元。`parse_item` 的 `price_drop` 信号、`services/product_search.py::official_promotion_discount` 的参考价差候选共用该门控；存量数据在展示层即时生效（`validated_offer` 运行时重算）。保留审计字段 `reference_drop_plausible/reference_drop_reason`，snippet 追加"参考价过高，未据此认定优惠"。
+- 规则 1（参考价差合理性）：`services/taobao_alliance.py::reference_drop_plausibility` 判定划线价差不可信的情形——降幅达到参考价 85% 或以上（含边界；2026-10-12 用户反馈"优惠力度大的都是假的"后由 90% 收紧至 85%，拦截恰好九折 KUB 乳霜纸 629 元、89.5% 柴火大米 626 元类）、参考价超过推广价 20 倍、或推广价低于 10 元且优惠额超过 50 元。`parse_item` 的 `price_drop` 信号、`services/product_search.py::official_promotion_discount` 的参考价差候选共用该门控；存量数据在展示层即时生效（`validated_offer` 运行时重算）。保留审计字段 `reference_drop_plausible/reference_drop_reason`，snippet 追加"参考价过高，未据此认定优惠"。
 - 规则 2（生活品主题单价上界）：`services/taobao_living_topics.py::TOPIC_PRICE_CEILING_CENTS`（纸品 300/饮用水 400/大米 500/面粉 400/食用油 2000/洗衣液 300 元）+ `living_topic_ceiling_cents(source_name)`（按核心主题关键词匹配来源名，自定义来源不拦）；`promotion_admission` 淘宝分支对超上界推广价返回 `eligible=False, tier='promotion_clue'`，reason 注明"合理上界"，仅来源审计。
-- 真实数据回放（100,707 条）：假优惠（优惠>50 元且付款<10 元）1661 条 **100% 拦截**；旧降价信号 56,407 条中新规则判定不可信 2,977 条；超主题上界 486 条（其中 115 条原为优惠信号被拦出默认列表）。高端真品（山茶油 5L 1308 元、橄榄油 3L 616 元）在上界内不受影响。
-- 测试：新增 6 项专项（合理性边界、解析信号、官方优惠额、准入拦截、真品不误伤）；全量 `unittest discover -s tests` 372 项，唯一失败为既有 `test_single_item_price_is_not_rendered_twice`（基线同样失败）。文档：`docs/current-product-contract.md` 第 3 节新增价格规则 6/7 与准入表"可解释的当前优惠信号"表述；`docs/core-acceptance.md` 增补 2026-10-12 拦截验收记录。
+- 真实数据回放（100,707 条）：假优惠（优惠>50 元且付款<10 元）1661 条 **100% 拦截**；旧降价信号 58,156 条中新规则判定不可信 4,689 条（含 85–90% 区间 1,636 条与恰好 90% 边界 131 条）；超主题上界 486 条（其中 115 条原为优惠信号被拦出默认列表）。收紧后默认列表优惠额 TOP 全为真品（山茶油礼盒、五常大米 20 斤、PDO 橄榄油、低氘水 12 瓶）；coupon 形态大额假优惠 0 条。高端真品（山茶油 5L 1308 元、橄榄油 3L 616 元）在上界内不受影响。
+- 测试：新增 6 项专项（合理性边界、解析信号、官方优惠额、准入拦截、真品不误伤），后按用户反馈将 90% 边界收紧至 85%（含恰 85%，新增 KUB/柴火场景断言）；全量 `unittest discover -s tests` 374 项，唯一失败为既有 `test_single_item_price_is_not_rendered_twice`（基线同样失败）。文档：`docs/current-product-contract.md` 第 3 节新增价格规则 6/7 与准入表"可解释的当前优惠信号"表述；`docs/core-acceptance.md` 增补 2026-10-12 拦截验收记录。
 
 ## 5.3 2026-10-12 登录页"保持登录状态"
 

@@ -34,7 +34,7 @@ PROMOTION_SIGNAL_FIELDS = (
 # A price-drop signal that relies on it is only explainable when the drop stays
 # within a plausible range; otherwise the drop is kept for audit but never
 # presented as an official discount amount.
-REFERENCE_DROP_MAX_RATIO = 0.90  # drop / reserve must be <= 90% (10%+ remaining price)
+REFERENCE_DROP_MAX_RATIO = 0.85  # drop/reserve must be < 85%; 85%+ strikethrough on household items is inflated (merchants exploit 90%/89.5% edges)
 REFERENCE_MAX_MARKUP = 20        # reserve / promotion must be <= 20x
 
 
@@ -54,8 +54,8 @@ def reference_drop_plausibility(reserve_cents, promotion_cents):
     # "save" over 50 yuan (e.g. 6.26 yuan tissues with a 53-yuan strikethrough).
     if promotion_cents < 1000 and drop > 5000:
         return False, "低价值商品优惠额超过50元，划线价作为优惠证据不可信"
-    if drop * 10 > reserve_cents * 9:  # drop / reserve > 0.90
-        return False, "降幅超过参考价90%，参考价作为划线价不可信"
+    if drop * 20 >= reserve_cents * 17:  # drop / reserve >= 0.85（含边界；生活品低于1.5折的划线基本为虚高）
+        return False, "降幅达到参考价85%或以上，参考价作为划线价不可信"
     if reserve_cents > promotion_cents * REFERENCE_MAX_MARKUP:
         return False, "参考价超过推广价20倍，参考价作为划线价不可信"
     return True, ""
