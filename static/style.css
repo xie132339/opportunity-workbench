@@ -191,3 +191,5 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 .calc-result { border-left:4px solid #0d7776; padding:12px; background:#eaf6f2; margin:14px 0; }
 .calc-error { color:#a62828; }
 .calc-import { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+
+.shop-offer-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}.shop-offer-card{border:1px solid var(--line,#dce5eb);border-radius:12px;padding:16px;min-width:0}.shop-offer-card h3{margin:8px 0}.shop-offer-card p{overflow-wrap:anywhere}.shop-offer-price{font-size:26px;color:#0b706e}.shop-offer-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:14px 0}.shop-offer-card details{margin-top:12px}

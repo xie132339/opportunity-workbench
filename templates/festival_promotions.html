@@ -3,6 +3,21 @@
 {% block content %}
 <h1>节日大促</h1>
 <p class="muted">选好商品，算清优惠，再去淘宝核对下单。</p>
+<section class="card" id="shop-offers">
+  <h2>本轮优先看的店铺优惠</h2>
+  <p class="muted">关注大米、抽纸、面粉；从最新采集中比较同组商品。以下为当前优惠，未确认双11专属。</p>
+  {% if shop_offers %}<div class="shop-offer-grid">
+  {% for product in shop_offers %}<article class="shop-offer-card">
+    <small>{{ product.category }} · {{ product.updated_at }} 更新（北京时间）</small>
+    <h3>{{ product.shop }}</h3><p>{{ product.title }}</p>
+    <p><strong class="shop-offer-price">{{ money(product.price_cents) }}</strong> <span>接口预估</span></p>
+    <p>推广价 {{ money(product.before_cents) }}{% for step in product.steps %} − {{ step.title }} {{ money(step.discount_cents) }}{% endfor %}</p>
+    <div class="shop-offer-actions"><a class="button" href="{{ product.url }}" target="_blank" rel="noopener noreferrer">去店铺看商品 ↗</a><a href="{{ url_for('festival_promotions', product_id=product.id) }}#calculator">加入组合计算</a></div>
+    <details><summary>优惠条件与详情</summary>{% for step in product.steps %}<p>{{ step.title }}：{{ step.description }}</p>{% endfor %}<p>本路径最早到期：{{ product.end_at }}</p><p>标题规格、可领券资格及运费须在淘宝核对；未核实实际结算。</p><a href="{{ url_for('opportunity', opportunity_id=product.id) }}">查看采集记录</a></details>
+  </article>{% endfor %}</div>
+  <small>按本轮关注范围及接口预估价筛选，不代表全网最低。入口为本项目联盟推广链接。</small>
+  {% else %}<p>当前没有仍有效且条件可复算的推荐，下一轮采集后自动更新。</p>{% endif %}
+</section>
 <section class="card">
   <h2>发现淘宝联盟官方促销物料</h2>
   <p class="muted">从官方推广者物料列表读取当前账号可用的促销商品物料。返回的物料不一定属于双11；先核对名称和有效期，再手动归入节日。商品物料 ID 只用于商品采集，不会当成活动会场 ID。</p>

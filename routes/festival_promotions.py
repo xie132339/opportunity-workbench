@@ -9,7 +9,7 @@ from db import connect
 from routes.common import go
 from services.festival_promotions import (festival_options,
                                           create_festival_material_feed,
-                                          list_festivals)
+                                          list_festivals, recommended_shop_offers)
 from services.festival_optimizer import calculate_basket, example_basket, import_product
 from services.taobao_alliance import (TaobaoAllianceAPIError,
                                       TaobaoAllianceConfigurationError,
@@ -19,6 +19,7 @@ from services.taobao_alliance import (TaobaoAllianceAPIError,
 def festival_promotions():
     with connect() as db:
         festivals = list_festivals(db)
+        shop_offers = recommended_shop_offers(db)
     result, error, imported, payload = None, "", None, None
     try:
         if request.method == "POST":
@@ -39,7 +40,7 @@ def festival_promotions():
     except (ValueError, TypeError, OverflowError) as exc:
         error = str(exc)[:240]
     return render_template("festival_promotions.html", festivals=festivals,
-                           festival_options=festival_options(), basket_result=result,
+                           festival_options=festival_options(), shop_offers=shop_offers, basket_result=result,
                            basket_error=error, basket_payload=payload, basket_import=imported)
 
 

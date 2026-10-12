@@ -11,7 +11,7 @@ import scanner
 from app import app
 from services.festival_promotions import (create_festival, festival_products,
                                           create_festival_material_feed,
-                                          list_festivals, savings_plan_for_row)
+                                          list_festivals, savings_plan_for_row, recommended_shop_offers)
 from services.taobao_alliance import parse_item, search_config
 
 
@@ -129,6 +129,37 @@ class FestivalPromotionTests(unittest.TestCase):
             products = festival_products(conn, festival, now=now)
         self.assertEqual(products["direct"], [])
         self.assertEqual(len(products["bundle"]), 1)
+
+    def test_shop_recommendations_use_current_prices_and_have_actions(self):
+        now = datetime.now(CHINA)
+        festival = self._festival()
+        with db.connect() as conn:
+            conn.execute("UPDATE sources SET url='https://eco.taobao.com/router/rest?q=大米' WHERE id=?", (festival['source_id'],))
+        rows = []
+        for item_id, reduction in [('801', 10), ('802', 20)]:
+            item = self._item(now, item_id, reserve='100', promotion='100')
+            item.update(title='金龙鱼金玉稻香五常大米5kg', shop_title='天猫超市',
+                final_promotion_price=str(100-reduction), final_promotion_path=[{
+                    'promotion_title':'限时直降', 'promotion_desc':'直降', 'promotion_fee':str(reduction),
+                    'promotion_start_time':int((now-timedelta(hours=1)).timestamp()*1000),
+                    'promotion_end_time':int((now+timedelta(hours=1)).timestamp()*1000)}])
+            rows.append(parse_item(item, now=now))
+        with patch('scanner.taobao_alliance_rows', return_value=rows):
+            scanner.scan_source(festival['source_id'])
+        with db.connect() as conn:
+            result = recommended_shop_offers(conn, now=now)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]['price_cents'], 8000)
+        html = app.test_client().get('/festival-promotions').get_data(as_text=True)
+        self.assertIn('本轮优先看的店铺优惠', html)
+        self.assertIn('天猫超市', html)
+        self.assertIn('去店铺看商品', html)
+        self.assertIn('product_id=', html)
+        self.assertIn('/opportunities/', html)
+        with db.connect() as conn:
+            self.assertEqual(recommended_shop_offers(conn, now=now+timedelta(hours=2)), [])
+            conn.execute('UPDATE sources SET enabled=0 WHERE id=?', (festival['source_id'],))
+            self.assertEqual(recommended_shop_offers(conn, now=now), [])
 
     def test_entry_page_explains_the_rule_without_creating_fake_festival_data(self):
         page = app.test_client().get("/festival-promotions")

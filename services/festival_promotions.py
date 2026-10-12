@@ -330,3 +330,69 @@ def refresh_festival(festival_id, *, env=None, now=None):
     if not row:
         raise ValueError("节日大促不存在")
     return refresh_campaign(row["campaign_id"], env=env, now=now)
+
+
+# 本轮用户关注的商品范围；价格、优惠、店铺入口均来自当前采集记录。
+SHOP_SPOTLIGHTS = (
+    ('大米', '天猫超市', ('金龙鱼', '金玉稻香', '五常', '5kg'), ('油',)),
+    ('抽纸', '清风个人洗护旗舰店', ('清风', '悬挂', '250抽'), ()),
+    ('面粉', '雪健旗舰店', ('雪健', '全麦', '2.5kg'), ()),
+)
+
+
+def recommended_shop_offers(db, now=None):
+    """Bounded, read-only shortlist. No live API call on page navigation."""
+    from datetime import timezone, timedelta
+    result = []
+    for category, shop, terms, excluded in SHOP_SPOTLIGHTS:
+        conditions = ' AND '.join(['o.title LIKE ?'] * len(terms) + ['o.title NOT LIKE ?'] * len(excluded))
+        # Reuse each living-topic source and its indexed current-event range.
+        from urllib.parse import parse_qs, urlparse
+        source_ids = [r['id'] for r in db.execute(
+            "SELECT id,url FROM sources WHERE enabled=1 AND method='taobao_alliance'")
+            if category in parse_qs(urlparse(r['url']).query).get('q', [''])[0]]
+        rows = []
+        for source_id in source_ids:
+            rows.extend(db.execute("""SELECT o.id,o.title,o.url,e.metadata_json,e.last_seen_at
+                FROM events e INDEXED BY idx_events_source_last_seen
+                JOIN opportunities o ON o.event_id=e.id JOIN sources s ON s.id=e.source_id
+                WHERE e.source_id=? AND e.last_seen_at>=datetime('now','-120 minutes')
+                  AND o.status!='ignored' AND """ + conditions + """
+                  AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
+                  AND e.last_seen_at>=datetime(s.last_success,'-2 minutes')
+                  AND json_valid(e.metadata_json)
+                  AND json_extract(e.metadata_json,'$.taobao_alliance_offer.shop_title')=?
+                ORDER BY e.last_seen_at DESC,o.id DESC LIMIT 30""",
+                [source_id, *['%' + t + '%' for t in terms],
+                 *['%' + t + '%' for t in excluded], shop]).fetchall())
+        rows.sort(key=lambda r: (r['last_seen_at'], r['id']), reverse=True)
+        candidates, seen = [], set()
+        for record in rows:
+            row = dict(record)
+            offer = validated_offer_for_row(row, now=now)
+            if not offer or offer.get('shop_title') != shop:
+                continue
+            identity = offer['item_id']
+            if identity in seen:
+                continue
+            seen.add(identity)
+            # Reference/list-price differences alone do not qualify as a recommendation.
+            path = offer.get('promotion_path') or {}
+            if not path.get('complete') or path['known_discount_cents'] < 500:
+                continue
+            parts = path['components']
+            if any(term in row['title'] + ' '.join(p['description'] for p in parts)
+                   for term in ('88VIP', '新人', '新客', 'U先', '省钱卡')):
+                continue
+            collected = datetime.fromisoformat(row['last_seen_at'])
+            if collected.tzinfo is None:
+                collected = collected.replace(tzinfo=timezone.utc)
+            candidates.append(dict(row, category=category, shop=shop,
+                price_cents=path['estimate_cents'], before_cents=offer['promotion_price_cents'],
+                saving_cents=path['known_discount_cents'], steps=parts,
+                end_at=min(p['end_at'] for p in parts),
+                updated_at=collected.astimezone(timezone(timedelta(hours=8))).strftime('%m-%d %H:%M')))
+        if candidates:
+            candidates.sort(key=lambda r: (r['price_cents'], -r['saving_cents'], -r['id']))
+            result.append(candidates[0])
+    return result
