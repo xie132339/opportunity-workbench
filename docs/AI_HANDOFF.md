@@ -52,6 +52,11 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 4. 涉及页面时，以真实手机场景确认标题、价格、优惠价和详情可读；推广链接唤端和佣金归因需要实体手机及联盟回执，不以协议代码推定成功。
 5. 每个修复关联 `docs/core-acceptance.md` 的 AC/缺陷，记录实际验证与未验证边界；产品规则变化先改 `docs/current-product-contract.md`。未完成核心闭环时，不把局部修复宣布为全部完成。
 
+## 5.1 2026-10-12 手机端列表"在淘宝 App 打开"按钮
+
+- 手机 offer 卡片（`templates/_mobile_offer.html`）在"详情"旁新增"在淘宝 App 打开"按钮，仅当该行携带官方淘宝联盟推广链接（`row.affiliate_promotion`，`s.click.taobao.com`）时显示；复用 `static/mobile.js` 的 `data-app-promotion` 唤端路径（手机端 `tbopen://` + 网页备用）。无联盟入口的来源不显示该按钮。
+- 验证：新增渲染测试通过；专项 60 项、全量 368 项中 1 个**既有失败**（`test_single_item_price_is_not_rendered_twice`，stash 基线同样失败，与本改动无关）；本机 5002 与 ECS `/application` 均已加载该改动；ECS HEAD `5090068`，公网登录后 `q=抽纸` 页面按钮出现 100 处、`data-app-promotion` 与 `s.click.taobao.com` 锚点各 200 处。实体手机唤端与佣金归因仍需实体机回放。
+
 ## 6. 安全与交付
 
 不要将本机 `.env`、服务器 `.runtime/workbench.env`、App Secret、管理员密码、会话密钥或数据库写进交接文档、终端输出或 Git。远端操作优先按已安装的 `alibabacloud-workbench-cli` Skill 和 `docs/deployment-aliyun-ecs.md`；仅在用户当前明确授权的范围内变更外部系统。GitHub 分支当前比本机落后，下一位 AI 不能只拉取远端再宣称拿到最新代码。若需发布，先核对当前凭据、分支、差异、ECS 状态和用户意图。
