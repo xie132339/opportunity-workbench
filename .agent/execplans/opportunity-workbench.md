@@ -189,7 +189,7 @@
 - [x] 路由回归覆盖发现、二次官方校验、失效物料拒绝且不写库、有效物料建立定时来源与 CSRF；专项 75 项、全量 349 项通过；`git diff --check` 通过。
 - [x] 重新启动本地网页及 worker，并从宿主机命名空间实测 `/health` 为 200、登录页为 200、节日页未登录重定向为 302；当前服务继续运行。
 - [ ] 因官方物料名称未明确双11，AC-09 的节日归属仍由运营者按官方公告确认；未确认前不把候选写入正式库或标称双11。
-- [ ] 在本地分支提交并推送代码与文档。
+- [x] 提交并推送代码与文档：`7d3bc49 feat: discover official holiday promotion materials`，分支 `feature/bootstrap`。
 
 ### Evidence and decisions
 
