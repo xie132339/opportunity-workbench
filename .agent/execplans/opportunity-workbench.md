@@ -172,7 +172,8 @@
 - [x] 更新安装与 ECS 部署文档；页面按钮保留为人工补齐入口。
 - [x] 测试新数据库自动有六个已启用主题、重复初始化不增行、旧纸品来源迁移、淘宝扫描只处理测试配置。
 - [x] 全量 `unittest discover -s tests`：344 项通过；`git diff --check` 通过。
-- [ ] 提交并推送 `feature/bootstrap`，再经 Workbench CLI 部署到 `/application`，检查在线 `/sources` 六主题及 worker 状态。
+- [x] 提交并推送 `feature/bootstrap`：`38dbef5`。
+- [ ] 经 Workbench CLI 部署到 `/application`，检查在线 `/sources` 六主题及 worker 状态。当前不复用此前在工具异常输出中暴露的 AccessKey；轮换并更新 Workbench CLI 凭据后继续。
 
 ### Boundary
 
