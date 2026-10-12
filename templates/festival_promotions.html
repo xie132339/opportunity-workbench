@@ -3,6 +3,24 @@
 {% block content %}
 <h1>节日大促</h1>
 <p class="muted">选好商品，算清优惠，再去淘宝核对下单。</p>
+<section class="card" id="double11-official">
+  <h2>2026 双十一 · 官方活动与参加办法</h2>
+  {% if double11 and double11.rules %}
+  <p>活动时间：{{ double11.rules.start }} 至 {{ double11.rules.end }}（北京时间）<small>官方规则同步 {{ double11.rules_synced_at|cn_time }} · <a href="{{ double11_rule_url }}" target="_blank" rel="noopener noreferrer">核对官方规则 ↗</a></small></p>
+  <p>参加前：{{ double11.rules.eligibility }}活动开始后，从淘宝客活动会场进入；当前尚无可核实的 2026 会场入口。</p>
+  <div class="shop-offer-grid">{% for activity in double11.rules.activities[:4] %}<article class="shop-offer-card"><h3>{{ activity.name }}</h3><p>{{ activity.action }}</p><small>依据：官方规则“{{ activity.heading }}”</small></article>{% endfor %}</div>
+  <details><summary>其他官方玩法（{{ double11.rules.activities|length - 4 }} 项）</summary><div class="shop-offer-grid">{% for activity in double11.rules.activities[4:] %}<article class="shop-offer-card"><h3>{{ activity.name }}</h3><p>{{ activity.action }}</p><small>依据：官方规则“{{ activity.heading }}”</small></article>{% endfor %}</div></details>
+  <p><strong>优惠怎么叠：</strong>{{ double11.rules.stacking }} 个人红包金额、门槛及适用商品以本人权益和结算页为准。{% if double11.rules.phase2_pending %}二阶段使用时间官方尚未公布。{% endif %}</p>
+  {% else %}<p>2026 双十一规则尚未同步成功。<a href="{{ double11_rule_url }}" target="_blank" rel="noopener noreferrer">查看官方规则 ↗</a></p>{% endif %}
+  {% if double11 %}
+    {% if double11.rules_error %}<small>规则最近同步失败：{{ double11.rules_error }}；当前显示上次成功快照。</small>{% endif %}
+    <h3>官方活动商品物料</h3>
+    <p>官方接口同步 {{ double11.materials_synced_at|cn_time }}：商品物料 {{ double11.products_total if double11.products_total is not none else '待统计' }} 个、权益物料 {{ double11.rights_total if double11.rights_total is not none else '待统计' }} 个。名称标注 2026 双十一的候选 {{ double11.materials|selectattr('current_year')|list|length }} 个；需核对官方公告或人工确认归属后，才加入定时商品采集。</p>
+    {% for material in double11.materials %}<p>{{ material.material_name }} · 物料 {{ material.material_id }} · {{ material.start_time or '时间未返回' }} 至 {{ material.end_time or '时间未返回' }}<small>{{ '名称标注2026双十一，归属仍待核实' if material.current_year else '未标明2026归属，仅作候选，不算今年活动商品' }}</small></p>{% endfor %}
+    {% if not double11.materials %}<p>官方接口本轮没有返回名称含双十一的商品物料。</p>{% endif %}
+    {% if double11.materials_error %}<small>物料最近同步失败：{{ double11.materials_error }}；当前显示上次成功快照。</small>{% endif %}
+  {% endif %}
+</section>
 <section class="card" id="shop-offers">
   <h2>本轮优先看的店铺优惠</h2>
   <p class="muted">关注大米、抽纸、面粉；从最新采集中比较同组商品。以下为当前优惠，未确认双11专属。</p>

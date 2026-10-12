@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import flash, render_template, request
 
 from db import connect
+from services.double11_sync import snapshot as double11_snapshot, RULE_URL as DOUBLE11_RULE_URL
 from routes.common import go
 from services.festival_promotions import (festival_options,
                                           create_festival_material_feed,
@@ -20,6 +21,7 @@ def festival_promotions():
     with connect() as db:
         festivals = list_festivals(db)
         shop_offers = recommended_shop_offers(db)
+        double11 = double11_snapshot(db)
     result, error, imported, payload = None, "", None, None
     try:
         if request.method == "POST":
@@ -40,7 +42,8 @@ def festival_promotions():
     except (ValueError, TypeError, OverflowError) as exc:
         error = str(exc)[:240]
     return render_template("festival_promotions.html", festivals=festivals,
-                           festival_options=festival_options(), shop_offers=shop_offers, basket_result=result,
+                           festival_options=festival_options(), shop_offers=shop_offers,
+                           double11=double11, double11_rule_url=DOUBLE11_RULE_URL, basket_result=result,
                            basket_error=error, basket_payload=payload, basket_import=imported)
 
 

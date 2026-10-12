@@ -121,6 +121,21 @@ CREATE INDEX IF NOT EXISTS idx_festival_material_feeds_year
   ON festival_material_feeds(festival_year,festival_code,id DESC);
 """
 
+FESTIVAL_OFFICIAL_SNAPSHOT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS festival_official_snapshots (
+ festival_code TEXT NOT NULL,
+ festival_year INTEGER NOT NULL,
+ rules_json TEXT NOT NULL DEFAULT '',
+ materials_json TEXT NOT NULL DEFAULT '',
+ rules_synced_at TEXT,
+ materials_synced_at TEXT,
+ rules_error TEXT NOT NULL DEFAULT '',
+ materials_error TEXT NOT NULL DEFAULT '',
+ last_attempt TEXT,
+ PRIMARY KEY(festival_code,festival_year)
+);
+"""
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_scan_runs (
@@ -420,6 +435,7 @@ def initialize_festival_promotions(db):
     """Create holiday configuration without changing campaign or product history."""
     db.executescript(FESTIVAL_PROMOTION_SCHEMA)
     db.executescript(FESTIVAL_MATERIAL_SCHEMA)
+    db.executescript(FESTIVAL_OFFICIAL_SNAPSHOT_SCHEMA)
 
 
 def ensure_link_resolution_product_page_column(db=None):

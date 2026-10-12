@@ -748,20 +748,20 @@ def fetch_activity_info(activity_material_id, *, http_get=None, env=None, now=No
     }
 
 
-def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=None):
-    """List official promotion-product materials exposed to this promoter.
+def fetch_promoter_material_ids(*, material_type=1, http_get=None, env=None, now=None, report=None):
+    """List promotion materials by documented type: 1 product or 2 entitlement.
 
-    The returned material IDs identify product feeds, not activity halls.  The
-    caller must keep them distinct from ``activity_material_id`` and let an
-    operator choose which official material belongs to a holiday.
+    These IDs are not activity hall IDs. Only type 1 may become a product feed.
     """
+    if material_type not in (1, 2):
+        raise ValueError("官方物料类型仅支持商品或权益")
     page_size = 100
     page_no = 1
     materials = []
     seen = set()
     total_count = None
     while page_no <= 100:
-        query = {"page_no": page_no, "subject": 1, "material_type": 1,
+        query = {"page_no": page_no, "subject": 1, "material_type": material_type,
                  "page_size": page_size}
         payload = _request_top_payload(
             MATERIAL_IDS_METHOD,
@@ -771,12 +771,14 @@ def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=Non
         response = payload.get("tbk_optimus_tou_material_ids_get_response")
         data = response.get("data") if isinstance(response, dict) else None
         page = data.get("tou_materials") if isinstance(data, dict) else None
-        if not isinstance(page, list):
-            raise TaobaoAllianceAPIError("淘宝联盟物料列表未返回 tou_materials", "schema_mismatch")
         try:
             total_count = int(response.get("total_count"))
         except (TypeError, ValueError, AttributeError):
             total_count = None
+        if page is None and total_count == 0:
+            page = []
+        if not isinstance(page, list):
+            raise TaobaoAllianceAPIError("淘宝联盟物料列表未返回 tou_materials", "schema_mismatch")
         accepted = 0
         for item in page:
             if not isinstance(item, dict):
@@ -784,7 +786,7 @@ def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=Non
             material_id = str(item.get("material_id") or "").strip()
             if (not re.fullmatch(r"[0-9]{1,24}", material_id)
                     or material_id in seen
-                    or str(item.get("material_type")) != "1"
+                    or str(item.get("material_type")) != str(material_type)
                     or str(item.get("subject")) != "1"):
                 continue
             seen.add(material_id)
@@ -792,7 +794,7 @@ def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=Non
             material = {
                 "material_id": material_id,
                 "material_name": re.sub(r"\s+", " ", str(item.get("material_name") or "")).strip()[:160],
-                "material_type": 1,
+                "material_type": material_type,
                 "subject": 1,
                 "start_time": item.get("start_time"),
                 "end_time": item.get("end_time"),
@@ -809,7 +811,7 @@ def fetch_promoter_material_ids(*, http_get=None, env=None, now=None, report=Non
         page_no += 1
     if report is not None:
         report.update(endpoint=API_ENDPOINT, method=MATERIAL_IDS_METHOD,
-                      subject=1, material_type=1, pages=page_no,
+                      subject=1, material_type=material_type, pages=page_no,
                       total_count=total_count, returned_count=len(materials))
     return materials
 

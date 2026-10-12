@@ -114,6 +114,17 @@ class TaobaoCampaignTests(unittest.TestCase):
         self.assertEqual(materials[0]["start_time"], "2026-10-10 00:00:00")
         self.assertEqual(report["returned_count"], 1)
 
+    def test_official_rights_material_zero_response_is_empty(self):
+        payload = {"tbk_optimus_tou_material_ids_get_response": {"total_count": 0}}
+        captured = {}
+        def request(method, params, **_kwargs):
+            captured.update(json.loads(params["material_query"]))
+            return payload
+        with patch("services.taobao_alliance._request_top_payload", side_effect=request):
+            rows = fetch_promoter_material_ids(material_type=2, env=self.env)
+        self.assertEqual(rows, [])
+        self.assertEqual(captured["material_type"], 2)
+
     def test_refresh_and_date_only_window_do_not_claim_an_unproven_active_time(self):
         with db.connect() as conn:
             campaign_id = create_campaign(conn, name="十一官方会场", activity_material_id="987654321", env=self.env)

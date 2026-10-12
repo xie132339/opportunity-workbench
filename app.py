@@ -112,12 +112,16 @@ def complete_taobao_syncs(source_results):
 
 def run_taobao_cycle():
     """Collect official Taobao material and audit every synchronized record."""
+    from services.double11_sync import refresh as refresh_double11
+    double11 = refresh_double11(due_only=True)
     campaigns = refresh_due_campaigns(env=os.environ)
     sources = scan_all(due_only=True, method="taobao_alliance")
     backlog = review_taobao_backlog()
-    if not campaigns and not sources and not backlog["selected"]:
+    if not campaigns and not sources and not backlog["selected"] and not double11:
         return {}
     result = {"sources": sources, "review_backlog": backlog}
+    if double11:
+        result["double11"] = double11
     if campaigns:
         result["campaigns"] = campaigns
     if sources:

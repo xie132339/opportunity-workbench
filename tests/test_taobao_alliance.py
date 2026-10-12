@@ -1040,7 +1040,8 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         detail_result = {"counts": {"conditional": 1}, "probed": 1,
                          "target_opportunity_ids": [opportunity_id],
                          "probed_opportunity_ids": [opportunity_id]}
-        with patch.object(application_module, "scan_all", return_value=scan_result) as scan, \
+        with patch("services.double11_sync.refresh", return_value=None), \
+             patch.object(application_module, "scan_all", return_value=scan_result) as scan, \
              patch.object(application_module, "run_cycle", return_value=detail_result) as detail:
             result = application_module.run_taobao_cycle()
         self.assertEqual(result["sources"], scan_result)
@@ -1060,7 +1061,8 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         self.assertIn("SKU详情：permission_unavailable", page)
 
     def test_scheduled_taobao_cycle_skips_detail_when_no_source_is_due(self):
-        with patch.object(application_module, "scan_all", return_value=[]) as scan, \
+        with patch("services.double11_sync.refresh", return_value=None), \
+             patch.object(application_module, "scan_all", return_value=[]) as scan, \
              patch.object(application_module, "review_taobao_backlog", return_value={"selected": 0, "counts": {}}), \
              patch.object(application_module, "run_cycle") as detail:
             self.assertEqual(application_module.run_taobao_cycle(), {})
@@ -1069,7 +1071,8 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
 
     def test_scheduled_taobao_cycle_continues_bounded_unreviewed_backlog(self):
         backlog = {"selected": 2, "counts": {"observed": 2}}
-        with patch.object(application_module, "scan_all", return_value=[]) as scan, \
+        with patch("services.double11_sync.refresh", return_value=None), \
+             patch.object(application_module, "scan_all", return_value=[]) as scan, \
              patch.object(application_module, "review_taobao_backlog", return_value=backlog) as review, \
              patch.object(application_module, "run_cycle") as detail:
             result = application_module.run_taobao_cycle()
