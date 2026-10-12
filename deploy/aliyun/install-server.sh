@@ -27,10 +27,10 @@ fi
 python3.12 -m venv "${APP_ROOT}/.venv"
 "${APP_ROOT}/.venv/bin/python" -m pip install --upgrade pip
 "${APP_ROOT}/.venv/bin/python" -m pip install -r "${APP_ROOT}/requirements.txt"
-chown -R root:"${APP_USER}" "${APP_ROOT}"
-chmod -R g-w "${APP_ROOT}"
 install -d -o "${APP_USER}" -g "${APP_USER}" -m 0750 "${APP_ROOT}/.runtime"
 install -d -o "${APP_USER}" -g "${APP_USER}" -m 0750 "${APP_ROOT}/.runtime/backups"
+find "${APP_ROOT}" -mindepth 1 -maxdepth 1 ! -name .runtime -exec chown -R root:"${APP_USER}" {} +
+find "${APP_ROOT}" -mindepth 1 -maxdepth 1 ! -name .runtime -exec chmod -R g-w {} +
 
 for unit in opportunity-workbench-web.service opportunity-workbench-worker.service opportunity-workbench-backup.service; do
   sed "s|__APP_ROOT__|${APP_ROOT}|g" "${SERVICE_DIR}/${unit}" > "/etc/systemd/system/${unit}"
