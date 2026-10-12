@@ -1,5 +1,7 @@
 # 文档入口与优先级
 
+同一台电脑上的新 AI 接手时，先看[本机 AI 交接](AI_HANDOFF.md)，再按下面的优先级核对现行资料和当前运行状态。
+
 1. [当前产品契约](current-product-contract.md) 是唯一能够定义产品范围、数据准入、价格口径与捡漏结论的文件。
 2. [产品概述](product-overview.md)、[需求](requirements.md)、[来源](sources.md)、[实施 AC](core-implementation-ac.md)、[当前验收](core-acceptance.md) 和 [运行环境](environment.md) 只能解释或验证该契约。
 3. 本目录其余专题文档只能作为实现参考，不能推翻当前产品契约。
