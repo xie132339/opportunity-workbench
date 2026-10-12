@@ -75,6 +75,14 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 真实数据回放（六主题 103,135 条，有划线 57,511 条）：拦 4,169（高价 63 + 降幅 3,709 + 优惠额 397；纸 2,563/水 371/米 162/面 408/油 109/洗衣液 556）。关键假货全拦：KUB 69.9→699、柴火 73→699、袁谷 188.3→1016、百岁山 37.1→300、42 元面粉 88%、碾米机 1380、威露士 2997。关键真品全保留：康泽泉低氘水 358、山茶油礼盒 1498、依云 108.9、赣江 2L 茶油 208、食刻橄榄油 54.9。本机页面回放（`q=抽纸/大米/食用油/饮用水/洗衣液&sort=discount_high`）：KUB/柴火优惠从排序消失，各主题 TOP 优惠额全为真品（纸 596.9/米 499/油 960/水 169.2/洗衣液 293.5）。
 - 测试：`tests/test_discount_calibration.py` 8 项（quantile/bin 映射、calibrate 估计、箱界判定、premium 豁免、种子回退与旧规则等价、价格上界种子、refresh 重算、topic 映射）；全量 `unittest discover -s tests` 382 项，唯一失败仍为既有 `test_single_item_price_is_not_rendered_twice`（基线失败）。文档：契约第 3 节规则 6/7 重写为自适应描述；`core-acceptance.md` 增补 2026-10-12 自适应收尾验收。提交与部署：`git diff --check` 通过后提交推送，ECS `/application` 快进并重启 web+worker，公网登录回放同本机。
 
+## 5.2c 2026-10-12 生产部署修正（自适应校准落地三连修）
+
+- **Gunicorn(wsgi:app) 不经过 app.py main()**：ECS web 进程从未建表/校准，公网实际是固定种子兜底。修复：`create_app()` 启动即 `refresh_if_stale(connection)`（表空/过期则自行校准落盘并加载）；worker 每小时刷新不变。触发方式：`systemctl restart` 后 web 首次启动即全量校准。
+- **生产库路径**：systemd 注入 `Environment=WORKBENCH_DB=/application/.runtime/workbench.sqlite3`（**不是** `/application/data/workbench.sqlite3`）。手工 exec 脚本若不 source `.runtime/workbench.env` 会连错库（data/ 是开发/旧数据 57MB，生产库约 33MB）；验证/回放脚本必须显式带 `WORKBENCH_DB=...` 或 `set -a; . .runtime/workbench.env; set +a`。
+- **官方来源命名**：生产库来源名为"淘宝生活品·纸品优惠搜索"（本地开发为"淘宝店抽纸优惠搜索"）。`topic_key` 与 `calibrate` 的 LIKE 收集均改为 name（纸品）+keyword（抽纸）双匹配；否则 paper 主题永远无校准回退种子。
+- **校准快照对账（prod `.runtime/workbench.sqlite3`）**：6 主题 sample paper 11252 / water 3440 / rice 2691 / flour 5531 / cooking_oil 3605 / laundry 6515；paper global_ratio_cap 0.8995、high 豁免线 ¥100。生产判定复核（WORKBENCH_DB 注入后）：KUB 拦（86% 界）、柴火拦（81%）、袁谷拦（81%）、百岁山拦（80%）、威露士荒谬高价拦、低氘水 358 放、5 折放。公网回放：五主题 TOP 优惠额全为真品，KUB/柴火无优惠。
+- 部署操作：ECS `git fetch && git merge --ff-only origin/feature/bootstrap` → `sqlite3 delete from discount_calibration`（强制重建；表新鲜时 refresh 会跳过）→ `systemctl restart opportunity-workbench-web opportunity-workbench-worker` → health + 公网回放。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
