@@ -25,7 +25,8 @@ try:
         raise SystemExit(f"backup integrity check failed: {check}")
     temporary.replace(target)
 finally:
-    temporary.unlink(missing_ok=True)
+    for path in (temporary, Path(f"{temporary}-shm"), Path(f"{temporary}-wal")):
+        path.unlink(missing_ok=True)
 
 digest = hashlib.sha256(target.read_bytes()).hexdigest()
 print(f"backup={target} bytes={target.stat().st_size} sha256={digest}")
