@@ -128,6 +128,17 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 验证：真品全放（KUB ¥188.9 带外、整箱水 ¥92.52 带外、五常米 ¥200 带外、悬挂纸 ¥7.9 降幅 79%<paper P90 界 91.6%）；深划线+市场价全拦（¥8.5 省95%、¥40 省80%、¥35 省82%）。本机库新增拦截 0（组合已被前层消化），判据单测保障、生产漂移后自动生效。公网回放：百岁山 7 条全整箱、price_low 全量大整箱、TOP 全真品。全量 389 项唯一失败仍为既有基线。
 - 部署要点：新增 `market_band_low/high`/`deep_drop_threshold` 校准字段，**生产部署必须重校准**（DELETE discount_calibration + WORKBENCH_DB/PYTHONPATH 注入 + base64 通道）。生产口径：paper 带 ¥4.01-11.79 深降幅 0.916；water ¥23.9-54.1 0.717；rice ¥19.7-59.9 0.800；flour ¥12.93-38.27 0.708；oil ¥49-150.8 0.667；laundry ¥15.8-44 0.799。
 
+## 5.2h 2026-10-13 默认列表准入四层排除（所有产品不要出现引流假优惠）
+
+- 背景：用户"是针对所有产品不要出现上面的数据"——引流/划线虚高假优惠不只是去掉优惠标签，**整个商品都不应出现在默认列表**。已核实本机 114843 条/生产 36178 条联盟记录 100% 归属六主题（非主题=0），"所有产品"即全部联盟商品；默认 view=offers 已按 `public_offer_eligible` 过滤列表。
+- 修复（提交 `9dc433f` + `8412587`，已推 GitHub、已部署 ECS、生产库已重校准）：
+  - `services/product_search.py::promotion_admission` taobao_alliance 分支在荒谬单价上界检查后新增**四层排除**，任一命中 → `eligible=False, tier='promotion_clue'`（仅来源审计，默认列表消失）：
+    ① `has_trial_gating_marker(title)`（引流形态词）；② `is_gated_price(topic, promo)`（低价统一价聚集）；③ `is_low_value_small_item(topic, promo, title)`（低价小件）；④ `is_market_band_fake_discount(topic, promo, (reserve-promo)/reserve)`（深划线+市场价带）。
+  - `services/discount_calibration.py`：**规格量判据**（数据驱动）——`SMALL_SPEC_LIMITS` 按量纲（抽/张/片<200、包/提<6、瓶/支/粒<6、ml<500、L/升<1.5、kg/斤<2，物理商品属性非优惠阈值）识别便携小件：`small_spec_limits(title)` 提取标题规格量，**所有量纲均小于上限**才算小规格（任一大量纲如 400抽30包/24瓶/1000张 → 不拦，量大真品永不误伤）；`is_low_value_small_item` 双通道：**有规格 → 小规格且低于主题推广价 P50（`price_p50_cents`）**；**无规格 → 低于 P15 线**（原行为不变）。`calibrate` 落盘 `price_p50_cents`。
+  - 去优惠化层（official_promotion_discount 参考价差/单券/完整路径）同步传 title，两层行为一致。
+- 验证：本机/公网 price_low 引流小件消失（¥4.40 30抽便携装、尝鲜百岁山 348ml×2 从列表消失），剩余 ¥5.29 400抽30包/¥6.19 1000张/¥7.9 悬挂纸/¥6.66 500张全为量大真品；discount_high TOP8 全真品（KUB ¥188.9、龙稻五常米 ¥300、十月稻田 ¥1000、格兰杰洗衣液）；搜百岁山 6 条全整箱。新增测试：AllianceTrafficAdmissionTests（准入四层正反例）+ SmallSpecLimitsTests（便携 vs 量大、双通道）；全量 391 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。
+- 部署要点：新增校准字段 `price_p50_cents`，**生产必须重校准**（DELETE discount_calibration + WORKBENCH_DB/PYTHONPATH 注入 + base64 通道；`echo $B64` 不要写成 `\$B64`，否则远端收到空脚本）。生产口径（10-13 重校准）：paper floor ¥4.00 p50 ¥7.90；water ¥21.05/¥39.00；rice ¥16.90/¥39.00；flour ¥9.90/¥25.00；oil ¥35.20/¥99.90；laundry ¥10.80/¥29.90。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
