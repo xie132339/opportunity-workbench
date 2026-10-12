@@ -304,11 +304,13 @@ def brand_from_title(title, topic):
         return None
     lowered = title.lower()
     best = None
+    best_brand = None
     for brand, spec in (BRAND_REFERENCE_CONFIG.get(topic) or {}).items():
         for term in spec.get("terms") or ():
             if term.lower() in lowered and (best is None or len(term) > len(best)):
                 best = term
-    return best
+                best_brand = brand
+    return best_brand
 
 
 def spec_unit_price_cents(title, final_cents):

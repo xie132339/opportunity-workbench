@@ -5,6 +5,10 @@
     <span><small>优惠价</small><b>{% if row.mobile_discount_cents is not none %}{{ '约 ' if row.mobile_discount_estimated else '' }}{{ money(row.mobile_discount_cents) }}{% else %}—{% endif %}</b></span>
     {% if row.mobile_discount_rate is not none %}<span class="mobile-offer-rate">省 {{ '%.1f'|format(row.mobile_discount_rate / 100) }}%</span>{% endif %}
   </div>
+  {% set maintained=row.maintained_baseline|default({}) %}
+  {% if maintained.state in ('maintained_bargain','maintained_low','maintained_below_typical','maintained_regular','maintained_high') %}
+  <div class="mobile-offer-baseline maintained-band {{ maintained.state }}">{{ maintained.label }} · {{ money(maintained.current_unit_cents) }}/{{ maintained.unit_label }}</div>
+  {% endif %}
   <div class="mobile-offer-actions">
     {% if row.affiliate_promotion %}
     <a class="mobile-offer-open" data-app-promotion href="{{ row.affiliate_promotion.url }}" target="_blank" rel="noopener noreferrer">在淘宝 App 打开</a>

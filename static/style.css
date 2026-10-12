@@ -274,3 +274,4 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
   .mobile-offer-actions .affiliate-web-fallback{font-size:12px;color:var(--muted)}
   .mobile-offer-detail{font-weight:700}
 }
+.mobile-offer-baseline{padding:4px 2px 0;font-size:12px}
