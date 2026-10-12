@@ -139,6 +139,20 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 验证：本机/公网 price_low 引流小件消失（¥4.40 30抽便携装、尝鲜百岁山 348ml×2 从列表消失），剩余 ¥5.29 400抽30包/¥6.19 1000张/¥7.9 悬挂纸/¥6.66 500张全为量大真品；discount_high TOP8 全真品（KUB ¥188.9、龙稻五常米 ¥300、十月稻田 ¥1000、格兰杰洗衣液）；搜百岁山 6 条全整箱。新增测试：AllianceTrafficAdmissionTests（准入四层正反例）+ SmallSpecLimitsTests（便携 vs 量大、双通道）；全量 391 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。
 - 部署要点：新增校准字段 `price_p50_cents`，**生产必须重校准**（DELETE discount_calibration + WORKBENCH_DB/PYTHONPATH 注入 + base64 通道；`echo $B64` 不要写成 `\$B64`，否则远端收到空脚本）。生产口径（10-13 重校准）：paper floor ¥4.00 p50 ¥7.90；water ¥21.05/¥39.00；rice ¥16.90/¥39.00；flour ¥9.90/¥25.00；oil ¥35.20/¥99.90；laundry ¥10.80/¥29.90。
 
+## 5.2i 2026-10-13 品牌标准市场价判据（优惠价小于等于品牌单品市场价才算真优惠）
+
+- 背景：用户"如果能增加品牌的产品进行参考，一件/一瓶/一包这样的数据进行参照……优惠价金额只要按照优惠小于等于这些，小于市场价就行，这个你是知道的要进行维护"——用**品牌标准售卖单位的市场价**做参照：折算标准单位到手价 > 品牌标准市场价 = 划线虚高/引流小规格。
+- 修复（提交 `7d2ba24`，已推 GitHub、已部署 ECS；**纯常量表改动，无需重校准**）：
+  - `services/discount_calibration.py`：
+    - `BRAND_TERMS` 品牌词表（六主题主流家用品牌，维护性词典）；
+    - `BRAND_STANDARD_PRICES` 品牌标准市场价表（分；water=500ml瓶、paper=100抽包、rice/flour=kg、oil=L、laundry=kg；**用户可直接增改**，初始值按主流零售常识）；
+    - `spec_unit_price_cents(title, cents)` 规格折算引擎：`_BOX_RE/_BAG_RE` 乘法（箱×瓶/包、袋×kg、瓶×升），优先级 kg > L > 500ml瓶 > 瓶 > 100抽包 > 包；**纯单瓶描述（570ml/瓶）不折算**（否则把整箱价当单瓶价误判）；
+    - `is_brand_market_overpriced(topic, title, final_cents)`：折算单价 > 标准市场价×`BRAND_OVERPRICE_K(1.2)` → 真；未知品牌/无规格/无标准价永不拦。
+  - `services/product_search.py`：`promotion_admission` 第 5 层排除（reason 优惠价高于品牌标准市场价）+ `official_promotion_discount` 参考价差/单券/完整路径三候选接入。
+- 验证：尝鲜百岁山 348ml×2 ¥10.01 → 500ml 折算 ¥7.19 > ¥2.80×1.2 拦（准入层+去优惠化层双拦）；整箱真品全放——百岁山 570ml×24 ¥23.59/¥63.9/¥92.52、维达 100抽24包 ¥49.9（单包 ¥2.08 < ¥3.00×1.2）、KUB ¥13.11/包（≈可优比 ¥12×1.2 边界放）、柴火五常米 ¥40/kg、十月稻田 ¥20/kg、龙稻 ¥30/kg、金龙鱼 5L、蓝月亮 3kg×2。公网回放：price_low 全量大品、discount_high 全真品、搜百岁山 5 条全整箱、搜维达 57 条全整箱/大规格。
+- 测试：`BrandMarketReferenceTests` 12 项（折算乘法/优先级/纯单瓶描述 None + 品牌判据正反例）；全量 394 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。
+- 维护说明：新增品牌 → 同时在 `BRAND_TERMS[topic]` 加品牌词、`BRAND_STANDARD_PRICES[topic]` 加标准市场价（分）。标准单位口径：water 500ml 瓶、paper 100 抽包、rice/flour 公斤、oil 升、laundry 公斤。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
