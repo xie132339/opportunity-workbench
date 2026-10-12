@@ -116,6 +116,18 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 验证：本机重校准（DELETE discount_calibration→calibrate→save→load）：paper gated ¥1.41-2.20 等、water ¥2.11-6.30、laundry ¥2.01-3.61；`judge(paper 990→201)=False`、`judge(water 1990→1001)=False`；尝鲜百岁山 official=None。页面回放：搜"百岁山"23 条全整箱真记录（24 瓶 ¥92.52 省 53.5% 等）；price_low 小件引流清零、剩 ¥7.9 大提整箱；discount_high TOP8 全真品。公网 ECS：搜百岁山 10 条全整箱（旗舰店 570ml×24 ¥74.9 省 61.4%）、price_low 无小件、TOP 全真品大件。全量 388 项唯一失败仍为既有基线。
 - 部署要点：本改动新增 `gated_prices`/`low_price_floor` 校准字段，**生产部署必须重校准**（`DELETE FROM discount_calibration` + `WORKBENCH_DB=/application/.runtime/workbench.sqlite3 PYTHONPATH=/application .venv/bin/python -B -u <脚本>`，base64 通道；重启服务后 refresh_if_stale 在表新鲜时不会再重算）。生产口径 floor：paper 4.00/water 21.00/rice 17.76/flour 9.99/oil 35.88/laundry 10.90。
 
+## 5.2g 2026-10-13 第4层市场价带判据 + 引流形态词扩展（跟其他平台价格一样不算数）
+
+- 背景：用户强调"一定要去除引流的假优惠，最后算下来跟其他平台价格一样、相差就一两块钱，肯定不算数"。引流假优惠本质=到手价在市场正常价带内（划线虚高造优惠）。
+- 修复（提交 `a3f7243`，已推 GitHub、已部署 ECS、生产库已重校准）：
+  - `services/discount_calibration.py`：
+    - `MARKET_BAND_MAD_K=1.0` + `DEEP_DROP_QUANTILE=0.90`；`calibrate` 落盘 `market_band_low/high`（推广价中位数 ± 1.0×MAD，**用分值中位/MAD，勿用 log 值**——初版误用 log 中位数导致市场带≈0，已修）与 `deep_drop_threshold`（主题降幅 P90）；
+    - `is_market_band_fake_discount(topic, final_cents, ratio)`：`market_band_low <= final <= market_band_high 且 ratio >= deep_drop_threshold` → 假优惠（未知主题/非法入参返回 False）；
+    - `TRIAL_GATING_TERMS` 扩展：首购/首件/试吃/试喝/随身装/便携/迷你/U先/新人礼/首单礼金/免费领/1分钱；**移除 0.01/0.1元 数字子串词**（会误伤"¥10.01"标题）。
+  - `services/product_search.py::official_promotion_discount`：参考价差候选按推广价、单券按券后价、完整路径按路径预估，三个候选均新增 `is_market_band_fake_discount` 检查（与 is_gated_price / is_low_value_small_item 并列）。
+- 验证：真品全放（KUB ¥188.9 带外、整箱水 ¥92.52 带外、五常米 ¥200 带外、悬挂纸 ¥7.9 降幅 79%<paper P90 界 91.6%）；深划线+市场价全拦（¥8.5 省95%、¥40 省80%、¥35 省82%）。本机库新增拦截 0（组合已被前层消化），判据单测保障、生产漂移后自动生效。公网回放：百岁山 7 条全整箱、price_low 全量大整箱、TOP 全真品。全量 389 项唯一失败仍为既有基线。
+- 部署要点：新增 `market_band_low/high`/`deep_drop_threshold` 校准字段，**生产部署必须重校准**（DELETE discount_calibration + WORKBENCH_DB/PYTHONPATH 注入 + base64 通道）。生产口径：paper 带 ¥4.01-11.79 深降幅 0.916；water ¥23.9-54.1 0.717；rice ¥19.7-59.9 0.800；flour ¥12.93-38.27 0.708；oil ¥49-150.8 0.667；laundry ¥15.8-44 0.799。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
