@@ -1,0 +1,36 @@
+<section class="card" id="calculator">
+  <h2>优惠组合计算</h2>
+  <p>① 加入想买的商品　② 填券或红包　③ 比较预计付款。<a href="{{ url_for('festival_promotions', example=1) }}#calculator">看例子：两件 9 折再用红包</a></p>
+  <p class="muted">按所填规则和固定购买数量计算；金额均为预估。支持 8 种商品、12 条优惠。</p>
+  <form method="get" action="{{ url_for('festival_promotions') }}#calculator" class="calc-import"><label>导入已采集商品编号（商品详情网址末尾的数字）<input name="product_id" type="number" min="1" required></label><button class="secondary">导入商品与优惠</button></form>
+  {% if basket_error %}<p role="alert" class="calc-error">{{ basket_error }}</p>{% endif %}
+  {% if basket_result %}
+  <div class="calc-result" role="status">
+    {% if basket_result.example %}<strong>模拟示例 · 商品与红包金额均为虚构</strong>{% endif %}
+    <h3>当前清单方案最低预估 {{ money(basket_result.best.total_cents) }}，省 {{ money(basket_result.best.saving_cents) }}</h3>
+    <ol><li>按清单购买，不额外凑不需要的商品。</li><li>{% for step in basket_result.best.steps %}{{ step.name }}：减 {{ money(step.discount_cents) }}{% if not loop.last %} → {% endif %}{% else %}当前没有满足条件的已确认优惠。{% endfor %}</li><li>商品 {{ money(basket_result.best.goods_cents) }} + 运费 {{ money(basket_result.best.shipping_cents) }}；在淘宝确认同规格、资格和实付后下单。</li></ol>
+    <details><summary>比较其他方案与未使用原因</summary>
+      <p>计算时间：{{ basket_result.at }}；完整比较 {{ basket_result.evaluated }} 个可行组合。相同层级按表单顺序计算，按金额比例分摊到商品、余分按余数分配；改变订单分组、规则顺序或运费需重新计算。</p>
+      <ul>{% for alt in basket_result.alternatives %}<li>{{ money(alt.total_cents) }}：{% for step in alt.steps %}{{ step.name }}{% if not loop.last %} + {% endif %}{% else %}不用优惠{% endfor %}，多付 {{ money(alt.total_cents - basket_result.best.total_cents) }}</li>{% endfor %}</ul>
+      {% for ignored in basket_result.ignored %}<p>{{ ignored.name }}：{{ ignored.reason }}</p>{% endfor %}
+      <p>互斥或叠加关系未确认的重叠优惠不会一起使用。其余可用但未选的优惠已参与比较，未得到更低付款。全局最低价、账户结算及拆单方案未验证。</p>
+    </details>
+  </div>
+  {% endif %}
+  <form method="post" action="{{ url_for('festival_promotions') }}#calculator" id="basket-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="basket_json" id="basket-json">
+    <label>按什么时间计算（北京时间）<input type="datetime-local" id="basket-at" required></label>
+    <h3>想买的商品</h3><div id="basket-items"></div><button type="button" id="add-item" class="secondary">＋ 商品</button>
+    <h3>可用优惠</h3><p class="muted">同一张券只录一次；先单品券、再店铺、平台券，最后红包。官方完整路径整体择一，避免把已经扣过的券再减一次。</p>
+    <div id="basket-rules"></div><button type="button" id="add-rule" class="secondary">＋ 优惠券 / 红包</button>
+    <details><summary>确认额外叠加关系</summary><p>只有对应规则明确允许时才勾选。店铺优惠在同一子订单组内始终互斥；2026 双11超级红包按已核实规则与券叠加，最多 10 个，有门槛最多 1 个。</p><div id="basket-pairs"></div></details>
+    <p id="basket-draft-note" class="muted"></p><button>计算更省的组合</button> <button type="button" id="clear-basket" class="secondary">清空清单</button>
+  </form>
+  <details><summary>今年已核实的规则与简单例子</summary>
+    <p>两件各 ¥100：2 件 9 折付 ¥180；满 ¥200 减 ¥10 付 ¥190，选 9 折。若另有已领取、适用且未过期的 ¥5 无门槛超级红包，可再抵扣至 ¥175。例子中的商品、券与红包金额为模拟。</p>
+    <p>超级红包活动期 2026-10-15 10:00 至 11-13 23:59:50；每张红包以实际有效期和商品范围为准。未领取或只宣传“最高金额”的红包不计入；红包不抵运费、服务费。部分第二阶段细则仍待官方更新。</p>
+    <a href="https://1111.alimama.com/alimamamain/page_20211227_144813" target="_blank" rel="noopener noreferrer">2026 双11超级红包规则 ↗</a> · <a href="https://developer.alibaba.com/support/announcementDetail.htm?id=25828" target="_blank" rel="noopener noreferrer">店铺优惠互斥规则 ↗</a>
+  </details>
+</section>
+<script id="basket-initial" type="application/json">{{ {'payload': basket_payload, 'imported': basket_import}|tojson }}</script>
+<script src="{{ url_for('static', filename='festival-calculator.js') }}" defer></script>

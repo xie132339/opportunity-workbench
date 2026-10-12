@@ -1,5 +1,6 @@
 """Dedicated holiday-promotion entry for Double 11, 618 and similar events."""
 import os
+import json
 from datetime import datetime
 
 from flask import flash, render_template, request
@@ -9,6 +10,7 @@ from routes.common import go
 from services.festival_promotions import (festival_options,
                                           create_festival_material_feed,
                                           list_festivals)
+from services.festival_optimizer import calculate_basket, example_basket, import_product
 from services.taobao_alliance import (TaobaoAllianceAPIError,
                                       TaobaoAllianceConfigurationError,
                                       fetch_promoter_material_ids)
@@ -17,8 +19,28 @@ from services.taobao_alliance import (TaobaoAllianceAPIError,
 def festival_promotions():
     with connect() as db:
         festivals = list_festivals(db)
+    result, error, imported, payload = None, "", None, None
+    try:
+        if request.method == "POST":
+            raw = request.form.get("basket_json", "")
+            if len(raw) > 40000:
+                raise ValueError("清单过大，请保留最多 8 种商品、12 条优惠")
+            payload = json.loads(raw)
+            result = calculate_basket(payload)
+        elif request.args.get("example") == "1":
+            payload = example_basket()
+            result = calculate_basket(payload)
+        elif request.args.get("product_id"):
+            product_id = request.args["product_id"]
+            if not product_id.isdigit() or len(product_id) > 12:
+                raise ValueError("请填写商品详情页中的数字编号")
+            with connect() as db:
+                imported = import_product(db, int(product_id))
+    except (ValueError, TypeError, OverflowError) as exc:
+        error = str(exc)[:240]
     return render_template("festival_promotions.html", festivals=festivals,
-                           festival_options=festival_options())
+                           festival_options=festival_options(), basket_result=result,
+                           basket_error=error, basket_payload=payload, basket_import=imported)
 
 
 def festival_material_discover():
@@ -57,6 +79,6 @@ def festival_material_add():
 
 
 def register(app):
-    app.add_url_rule("/festival-promotions", endpoint="festival_promotions", view_func=festival_promotions, methods=["GET"])
+    app.add_url_rule("/festival-promotions", endpoint="festival_promotions", view_func=festival_promotions, methods=["GET", "POST"])
     app.add_url_rule("/festival-promotions/discover", endpoint="festival_material_discover", view_func=festival_material_discover, methods=["POST"])
     app.add_url_rule("/festival-promotions/materials", endpoint="festival_material_add", view_func=festival_material_add, methods=["POST"])

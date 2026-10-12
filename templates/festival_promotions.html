@@ -2,20 +2,13 @@
 {% block title %}节日大促 · 多平台机会工作台{% endblock %}
 {% block content %}
 <h1>节日大促</h1>
-<p class="muted">这是独立的节日优惠数据入口，只负责发现淘宝联盟商品物料、定时采集和按参与条件排序。活动会场维护保留在“官方活动”菜单，本页不重复配置会场 ID。</p>
+<p class="muted">选好商品，算清优惠，再去淘宝核对下单。</p>
 <section class="card">
   <h2>发现淘宝联盟官方促销物料</h2>
   <p class="muted">从官方推广者物料列表读取当前账号可用的促销商品物料。返回的物料不一定属于双11；先核对名称和有效期，再手动归入节日。商品物料 ID 只用于商品采集，不会当成活动会场 ID。</p>
   <form method="post" action="{{ url_for('festival_material_discover') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>查询当前官方促销物料</button></form>
 </section>
-<section class="card">
-  <h2>怎么组合更省</h2>
-  <p><strong>先看商品自己的优惠路径；能叠的按淘宝规则叠，互斥的只选省得更多的那个。</strong>商品路径和凑单估价来自 <a href="https://developer.alibaba.com/docs/api.htm?apiId=64758" target="_blank" rel="noopener noreferrer">淘宝联盟物料搜索 API ↗</a>。本页不读取你的个人券包和购物车。</p>
-  <details><summary>看一个简单例子</summary>
-    <p>两件商品各 ¥100：多件 9 折后 ¥180；店铺券“满 ¥200 减 ¥10”后 ¥190。按淘宝当前规则，这两种同店铺优惠不能在同一子订单重复叠加，所以选 9 折，付 ¥180；不能再把店铺券减一次算成 ¥170。</p>
-    <p class="muted">平台券、单品券是否还能叠，要看当前商品和活动规则；最后以淘宝购物车结算页为准。<a href="https://developer.alibaba.com/support/announcementDetail.htm?id=25828" target="_blank" rel="noopener noreferrer">淘宝规则说明 ↗</a></p>
-  </details>
-</section>
+{% include 'festival_calculator.html' %}
 {% if festivals %}{% for festival in festivals %}
 <section class="card">
   <h2>{{ festival.festival_name }} {{ festival.festival_year }} · {{ festival.campaign_name }}</h2>
@@ -26,9 +19,9 @@
   <p>此为既有官方会场记录；会场信息请到 <a href="{{ url_for('taobao_campaigns') }}">官方活动</a> 菜单维护。{% if festival.short_promotion_url or festival.promotion_url %}<a href="{{ festival.short_promotion_url or festival.promotion_url }}" target="_blank" rel="noopener noreferrer">进入官方会场 ↗</a>{% endif %}</p>
   {% endif %}
   {% if festival.products.direct %}<h3>可直接参与 · 按官方优惠优先</h3><div class="table-wrap"><table><thead><tr><th>商品</th><th>官方优惠</th><th>怎么用更省</th><th>入口</th></tr></thead><tbody>
-  {% for product in festival.products.direct %}<tr><td><strong>{{ product.title }}</strong><small>物料最近更新 {{ product.last_seen_at }}</small></td><td>{{ money(product.discount.amount_cents) }}{% if product.discount.rate_basis_points is not none %}<small>约 {{ '%.1f'|format(product.discount.rate_basis_points / 100) }}%</small>{% endif %}<small>{{ product.discount.basis }}</small></td><td><strong>{{ product.savings_plan.label }}</strong>{% if product.savings_plan.price_cents is not none %}<small>{{ product.savings_plan.price_label }} {{ money(product.savings_plan.price_cents) }}{% if product.savings_plan.saving_cents %}，这条路径省 {{ money(product.savings_plan.saving_cents) }}{% endif %}</small>{% endif %}<details><summary>查看怎么算</summary>{% for step in product.savings_plan.steps %}<small>{{ step }}</small>{% endfor %}<small>{{ product.savings_plan.note }}</small>{% if product.savings_plan.rounding_up %}<small>另一个凑单估价 {{ money(product.savings_plan.rounding_up.price_cents) }}：{{ product.savings_plan.rounding_up.description }}（接口预估）</small>{% endif %}</details></td><td><a href="{{ product.url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a></td></tr>{% endfor %}
+  {% for product in festival.products.direct %}<tr><td><strong>{{ product.title }}</strong><small>物料最近更新 {{ product.last_seen_at }}</small></td><td>{{ money(product.discount.amount_cents) }}{% if product.discount.rate_basis_points is not none %}<small>约 {{ '%.1f'|format(product.discount.rate_basis_points / 100) }}%</small>{% endif %}<small>{{ product.discount.basis }}</small></td><td><strong>{{ product.savings_plan.label }}</strong>{% if product.savings_plan.price_cents is not none %}<small>{{ product.savings_plan.price_label }} {{ money(product.savings_plan.price_cents) }}{% if product.savings_plan.saving_cents %}，这条路径省 {{ money(product.savings_plan.saving_cents) }}{% endif %}</small>{% endif %}<details><summary>查看怎么算</summary>{% for step in product.savings_plan.steps %}<small>{{ step }}</small>{% endfor %}<small>{{ product.savings_plan.note }}</small>{% if product.savings_plan.rounding_up %}<small>另一个凑单估价 {{ money(product.savings_plan.rounding_up.price_cents) }}：{{ product.savings_plan.rounding_up.description }}（接口预估）</small>{% endif %}</details></td><td><a href="{{ url_for('festival_promotions', product_id=product.id) }}#calculator">加入组合计算</a><br><a href="{{ product.url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a></td></tr>{% endfor %}
   </tbody></table></div>{% else %}<p>暂无满足单品规则的当前官方优惠商品。</p>{% endif %}
-  {% if festival.products.bundle %}<details><summary>需凑单后再核验（{{ festival.products.bundle|length }} 条）</summary><div class="table-wrap"><table><thead><tr><th>商品</th><th>还差金额</th><th>券与建议</th><th>入口</th></tr></thead><tbody>{% for product in festival.products.bundle %}<tr><td>{{ product.title }}</td><td>{% if product.participation.gap_cents %}{{ money(product.participation.gap_cents) }}{% else %}门槛字段不足{% endif %}</td><td><strong>{{ product.savings_plan.label }}</strong><small>{% for step in product.savings_plan.steps %}{{ step }}{% if not loop.last %}；{% endif %}{% endfor %}</small><small>{{ product.savings_plan.note }}</small></td><td><a href="{{ product.url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a></td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+  {% if festival.products.bundle %}<details><summary>需凑单后再核验（{{ festival.products.bundle|length }} 条）</summary><div class="table-wrap"><table><thead><tr><th>商品</th><th>还差金额</th><th>券与建议</th><th>入口</th></tr></thead><tbody>{% for product in festival.products.bundle %}<tr><td>{{ product.title }}</td><td>{% if product.participation.gap_cents %}{{ money(product.participation.gap_cents) }}{% else %}门槛字段不足{% endif %}</td><td><strong>{{ product.savings_plan.label }}</strong><small>{% for step in product.savings_plan.steps %}{{ step }}{% if not loop.last %}；{% endif %}{% endfor %}</small><small>{{ product.savings_plan.note }}</small></td><td><a href="{{ url_for('festival_promotions', product_id=product.id) }}#calculator">加入组合计算</a><br><a href="{{ product.url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a></td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
   {% if festival.products.unconfirmed_count %}<small>{{ festival.products.unconfirmed_count }} 条当前物料条件不足，未进入排序。</small>{% endif %}
   {% if festival.last_error %}<small>{{ festival.last_error }}</small>{% endif %}
 </section>
