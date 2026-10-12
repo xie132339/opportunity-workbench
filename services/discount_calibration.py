@@ -73,10 +73,20 @@ _GENERIC_INTERFERING_TERMS = ("洗发", "护发", "化妆", "护肤", "彩妆", 
 # carry a deep-looking strikethrough but are marketing traffic, not real
 # bargains: they must not produce a discount amount.
 TRIAL_GATING_TERMS = ("尝鲜", "首单", "新人", "新客", "试饮", "试用", "小样", "引流",
-                      "体验装", "一分购", "元购")
+                      "体验装", "一分购", "元购", "首购", "首件", "试吃", "试喝",
+                      "随身装", "便携", "迷你", "U先", "u先", "新人礼", "首单礼金",
+                      "免费领", "1分钱")
 # A promotion price shared verbatim by many distinct listings inside one topic's
 # low band is a first-order/unified subsidy price, not a market price.
 GATED_MIN_COUNT = 5
+# Market normal-price band: final price within median +/- k*MAD of the topic's
+# promotion prices means the deal is priced "like everywhere else" (user:
+# 跟其他平台价格一样 相差就一两块钱 肯定不算数).  Combined with a deep
+# strikethrough (>= topic P90 ratio) it means the merchant built the discount
+# from an inflated reference price — not a real bargain.  Both bounds are
+# estimated from the corpus, never hard-coded.
+MARKET_BAND_MAD_K = 1.0
+DEEP_DROP_QUANTILE = 0.90
 
 
 def has_trial_gating_marker(title):
@@ -258,6 +268,9 @@ def calibrate(db):
                 int(_quantile([d for _lp, _r, d in box], P)),
             ))
 
+        promo_cents = sorted(promo_values[topic])
+        median_cents = promo_cents[len(promo_cents) // 2]
+        mad_cents = _quantile([abs(x - median_cents) for x in promo_cents], 0.5)
         result[topic] = {
             "price_ceiling_cents": ceiling,
             "high_log": round(high_log, 4),
@@ -265,7 +278,11 @@ def calibrate(db):
             "global_ratio_cap": global_ratio,
             "global_drop_cap": global_drop,
             "gated_prices": _gated_promo_prices(promo_values[topic]),
-            "low_price_floor": int(_quantile(sorted(promo_values[topic]), 0.15)) if promo_values[topic] else None,
+            "low_price_floor": int(_quantile(promo_cents, 0.15)) if promo_cents else None,
+            "market_band_low": int(median_cents - MARKET_BAND_MAD_K * mad_cents) if promo_cents else None,
+            "market_band_high": int(median_cents + MARKET_BAND_MAD_K * mad_cents) if promo_cents else None,
+            "deep_drop_threshold": round(_quantile([r for _lp, r, _d in pairs if r is not None], DEEP_DROP_QUANTILE), 4)
+                if any(r is not None for _lp, r, _d in pairs) else None,
             "sample_count": len(pairs),
             "calibrated_at": _now_iso(),
         }
@@ -301,6 +318,28 @@ def is_low_value_small_item(topic, cents):
     payload = get_calibration().get(topic) or {}
     floor = payload.get("low_price_floor")
     return isinstance(floor, int) and cents < floor
+
+
+def is_market_band_fake_discount(topic, final_cents, ratio):
+    """Whether a deep strikethrough lands the final price inside the topic's
+    market normal-price band (median +/- k*MAD of promotion prices).
+
+    A final price priced "like everywhere else" plus a deep discount label is
+    an inflated-reference marketing trick, not a real bargain (user: 最后算下来
+    跟其他平台价格一样 相差就一两块钱 肯定不算数).  The band and the deep-drop
+    threshold are estimated from the corpus; unknown topics never gate.
+    """
+    if not isinstance(final_cents, int) or isinstance(final_cents, bool) or final_cents <= 0:
+        return False
+    if not isinstance(ratio, (int, float)) or not (0 < ratio < 1):
+        return False
+    payload = get_calibration().get(topic) or {}
+    low = payload.get("market_band_low")
+    high = payload.get("market_band_high")
+    deep = payload.get("deep_drop_threshold")
+    if not (isinstance(low, int) and isinstance(high, int) and isinstance(deep, float)):
+        return False
+    return low <= final_cents <= high and ratio >= deep
 
 
 CALIBRATION_SCHEMA = """

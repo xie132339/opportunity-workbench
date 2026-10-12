@@ -257,7 +257,10 @@ def official_promotion_discount(row):
             and reference_drop > 0):
         reference_cents = evidence.get('reserve_price_cents')
         promotion_cents = evidence.get('promotion_price_cents')
-        if not discount_calibration.is_low_value_small_item(topic, promotion_cents):
+        rate = (reference_drop / reference_cents
+                if isinstance(reference_cents, int) and reference_cents > 0 else None)
+        if (not discount_calibration.is_low_value_small_item(topic, promotion_cents)
+                and not discount_calibration.is_market_band_fake_discount(topic, promotion_cents, rate)):
             candidates.append(dict(
                 amount_cents=reference_drop,
                 rate_basis_points=(reference_drop * 10000 // reference_cents
@@ -274,8 +277,11 @@ def official_promotion_discount(row):
             and coupon_drop > 0):
         promotion_cents = evidence.get('promotion_price_cents')
         final_cents = evidence.get('quote_price_cents')
+        rate = (coupon_drop / promotion_cents
+                if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
-                and not discount_calibration.is_low_value_small_item(topic, final_cents)):
+                and not discount_calibration.is_low_value_small_item(topic, final_cents)
+                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
             candidates.append(dict(
                 amount_cents=coupon_drop,
                 rate_basis_points=(coupon_drop * 10000 // promotion_cents
@@ -292,8 +298,11 @@ def official_promotion_discount(row):
             and path_drop > 0):
         promotion_cents = evidence.get('promotion_price_cents')
         final_cents = promotion_path.get('estimate_cents')
+        rate = (path_drop / promotion_cents
+                if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
-                and not discount_calibration.is_low_value_small_item(topic, final_cents)):
+                and not discount_calibration.is_low_value_small_item(topic, final_cents)
+                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
             candidates.append(dict(
                 amount_cents=path_drop,
                 rate_basis_points=(path_drop * 10000 // promotion_cents
