@@ -22,6 +22,14 @@ def connect():
     try:
         yield db
         db.commit()
+        # A search result can be reused across page switches only while this
+        # process has not changed the underlying records.  Operator writes and
+        # in-process scanners must take effect on the next request, not after
+        # the navigation cache TTL.  The collector runs in another process, so
+        # its changes are still bounded by that short TTL.
+        if db.total_changes:
+            from services.search_result_cache import clear as clear_search_result_cache
+            clear_search_result_cache()
     except Exception:
         db.rollback()
         raise

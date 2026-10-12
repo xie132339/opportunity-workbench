@@ -1,7 +1,7 @@
 import unittest
 
 from services.search_diagnostics import summarize_search_funnel
-from services.source_provenance import annotate_search_sources
+from services.source_provenance import annotate_search_sources, build_search_source_index
 
 
 class SearchProvenanceTests(unittest.TestCase):
@@ -30,6 +30,16 @@ class SearchProvenanceTests(unittest.TestCase):
         self.assertIn("商品/活动目标链接相同", annotated[0]["source_provenance_reasons"])
         self.assertIn("来源独立性未证", annotated[0]["source_provenance_label"])
         self.assertEqual(annotated[2]["source_origins"][0]["url"], None)
+
+    def test_prebuilt_corpus_index_keeps_page_annotation_identical(self):
+        rows = [
+            {"source_id": 1, "title": "相同抽纸", "snippet": "券后 5 元", "url": "https://a.example/p"},
+            {"source_id": 2, "title": "相同抽纸", "snippet": "券后 5 元", "url": "https://b.example/p"},
+        ]
+        expected = annotate_search_sources(rows, rows)
+        actual = annotate_search_sources(rows[:1], rows, build_search_source_index(rows))
+        self.assertEqual(actual[0]["source_provenance_reasons"], expected[0]["source_provenance_reasons"])
+        self.assertEqual(actual[0]["source_channels"], expected[0]["source_channels"])
 
     def test_funnel_counts_currentness_reasons_without_reclassifying_records(self):
         matches = [

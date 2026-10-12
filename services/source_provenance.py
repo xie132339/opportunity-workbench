@@ -107,22 +107,31 @@ def _search_source_keys(row):
     return keys
 
 
-def annotate_search_sources(rows, corpus=None):
+def build_search_source_index(corpus):
+    """Build reusable provenance keys for one prepared search corpus."""
+    indexes_by_key = defaultdict(dict)
+    for row in corpus:
+        for key in _search_source_keys(row):
+            source_id = row.get("source_id")
+            if source_id is not None:
+                indexes_by_key[key][source_id] = row
+    return indexes_by_key
+
+
+def annotate_search_sources(rows, corpus=None, provenance_index=None):
     """Attach auditable source relationships without merging or dropping rows.
 
     Exact page/text/target overlap is stronger than a title-price-condition
     signature. Every relationship remains a candidate: no relationship proves
     that two channels copied one another or that their prices are independent.
     ``corpus`` lets a paginated result show matching sources outside its page.
+    A prepared search result may pass ``provenance_index`` to avoid rebuilding
+    the same complete-corpus index for every page.
     """
     rows = [dict(row) for row in rows]
-    corpus_rows = rows if corpus is None else corpus
-    indexes_by_key = defaultdict(dict)
-    for row in corpus_rows:
-        for key in _search_source_keys(row):
-            source_id = row.get("source_id")
-            if source_id is not None:
-                indexes_by_key[key][source_id] = row
+    indexes_by_key = provenance_index
+    if indexes_by_key is None:
+        indexes_by_key = build_search_source_index(rows if corpus is None else corpus)
 
     reason_labels = {
         "same_text": "标题与正文完全相同",

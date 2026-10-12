@@ -1,6 +1,7 @@
 """Search fresh source leads and optionally filter for comparison readiness."""
 from datetime import datetime, timezone
 from flask import render_template, request
+import db as database
 from db import connect
 from comparison import MAX_TARGET_IDS_FOR_PEER_EXPANSION, load_comparisons, assess_readiness
 from autoreview import classify_catalog_observation, offer_summary
@@ -12,7 +13,7 @@ from services.opportunity_analysis import is_current_notice, is_evidence_candida
 from services.source_freshness import CATALOG_LISTING_PARSERS
 from services.product_search import (listing_quote, quote_note,
                                      is_promotional_price_candidate, promotion_admission)
-from services.source_provenance import annotate_search_sources
+from services.source_provenance import annotate_search_sources, build_search_source_index
 from services.search_diagnostics import summarize_search_funnel
 from services.public_campaign import parse_public_campaign
 from services.marketplace_identity import (
@@ -20,6 +21,7 @@ from services.marketplace_identity import (
 )
 from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
 from services.taobao_alliance import validated_offer_for_row
+from services.search_result_cache import get as get_prepared_search, put as put_prepared_search
 
 
 def attach_offer_data(row, include_diagnostics=True):
@@ -73,6 +75,151 @@ def attach_search_marketplace(row, link_cache):
     if can_skip_alliance_link_enrichment(row):
         return attach_product_marketplace(row)
     return attach_product_marketplace(enrich_links(row, link_cache))
+
+
+def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
+                             show_archive, ready_only, priced_only, budget,
+                             sort_mode, maintained_baselines, funnel_scope_sql,
+                             funnel_scope_args):
+    """Prepare the complete result set once before page-specific rendering.
+
+    Promotion admission and comparison ordering apply to the whole matching
+    corpus.  Keeping this work here makes it explicit that page slicing is a
+    rendering concern, and lets the caller reuse this prepared result safely.
+    """
+    raw_rows = [dict(row) for row in db.execute(sql + order_by, args)]
+    rows_needing_link_enrichment = [
+        row for row in raw_rows if not can_skip_alliance_link_enrichment(row)
+    ]
+    link_cache = resolution_cache(db, rows_needing_link_enrichment)
+    all_rows = [attach_search_marketplace(row, link_cache) for row in raw_rows]
+    for row in all_rows:
+        row['display_topic'] = resource_topic(row.get('title', ''), row.get('source_category', ''))
+    if topic in TOPIC_LABELS:
+        all_rows = [row for row in all_rows if row['display_topic'] == topic]
+    marketplace_population_count = len(all_rows)
+    marketplace_unidentified_count = sum(row['marketplace_key'] == 'unknown' for row in all_rows)
+    marketplace_selected_count = sum(
+        marketplace_matches_filter(row['marketplace_key'], buy_platform)
+        for row in all_rows
+    )
+    if buy_platform != 'all':
+        all_rows = [row for row in all_rows if marketplace_matches_filter(row['marketplace_key'], buy_platform)]
+    if not show_archive:
+        # A live catalogue row may have an old saved ``missing_time`` result
+        # from the former post-only rule. Re-evaluate that row for display
+        # against its current successful snapshot; do not write it here.
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for row in all_rows:
+            row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
+            last_seen = row.get('last_seen_at') or ''
+            checked = row.get('review_checked_at') or ''
+            review_behind = bool(last_seen and checked and checked < last_seen)
+            if row['catalog_listing'] and (not row.get('auto_state') or row.get('auto_state') == 'missing_time' or review_behind):
+                result = classify_catalog_observation(row, now)
+                row['auto_state'] = result['state']
+                row['auto_reason'] = result['reason']
+                row['advertised_cents'] = result['advertised_cents']
+    else:
+        for row in all_rows:
+            row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
+    source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
+    for row in all_rows:
+        attach_offer_data(row, include_diagnostics=not source_comparison_deferred)
+        row['maintained_baseline'] = assess_maintained_baseline(
+            row, row['offer_brief'], row.get('display_quote'), maintained_baselines)
+    source_match_counts = {}
+    source_quote_counts = {}
+    for matched_row in all_rows:
+        source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+        if matched_row.get('display_quote'):
+            source_quote_counts[matched_row['source_id']] = source_quote_counts.get(matched_row['source_id'], 0) + 1
+    source_offer_count = candidate_pool_count = len(all_rows)
+    comparisons = ({} if source_comparison_deferred else
+                   (load_comparisons(db) if show_archive else load_comparisons(db, [row['id'] for row in all_rows])))
+    for row in all_rows:
+        row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
+    search_assessments = {
+        row['id']: assess_readiness(row, comparisons.get(row['id'], {}), row['offer_brief'])
+        for row in all_rows
+    }
+    for row in all_rows:
+        row['promotion_admission'] = promotion_admission(row, search_assessments.get(row['id']))
+        row['public_offer_eligible'] = row['promotion_admission']['eligible']
+    quality_counts = dict(
+        search_ready=sum(bool(value['search_ready']) for value in search_assessments.values()),
+        comparable=sum(bool(value['comparable']) for value in search_assessments.values()),
+        source_claim_low=sum(bool(value['source_claim_low']) for value in search_assessments.values()),
+        displayable_quote=sum(bool(row['display_quote']) for row in all_rows),
+        promotional_candidate=sum(bool(row.get('promotional_candidate')) for row in all_rows),
+        public_offer_eligible=sum(bool(row.get('public_offer_eligible')) for row in all_rows),
+        catalog_reference=sum(bool(row.get('catalog_reference')) for row in all_rows),
+        plain_price_reference=sum(bool(row.get('display_quote')) and not row.get('promotional_candidate')
+                                  and not row.get('catalog_reference') for row in all_rows),
+        unpriced=sum(not row.get('display_quote') for row in all_rows),
+    )
+    quality_counts['excluded'] = candidate_pool_count - quality_counts['search_ready']
+    unpriced_current_count = quality_counts['unpriced']
+    search_funnel = None
+    if funnel_scope_sql:
+        funnel_scope_rows = [dict(row) for row in db.execute(funnel_scope_sql, funnel_scope_args)]
+        search_funnel = summarize_search_funnel(funnel_scope_rows, all_rows)
+    provenance_corpus = all_rows
+    provenance_index = build_search_source_index(provenance_corpus)
+    if ready_only and not show_archive:
+        all_rows = [row for row in all_rows if search_assessments[row['id']]['search_ready']]
+        source_match_counts = {}
+        source_quote_counts = {}
+        for matched_row in all_rows:
+            source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+            if matched_row['display_quote']:
+                source_quote_counts[matched_row['source_id']] = source_quote_counts.get(matched_row['source_id'], 0) + 1
+    elif priced_only:
+        all_rows = [row for row in all_rows if row.get('public_offer_eligible')]
+    if budget is not None:
+        all_rows = [row for row in all_rows if row.get('display_quote') and row['display_quote'].get('kind') in {
+            'source_claim', 'official_promotion_observation'} and row['display_quote']['amount_cents'] <= budget]
+        source_match_counts = {}
+        source_quote_counts = {}
+        for matched_row in all_rows:
+            source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
+            source_quote_counts[matched_row['source_id']] = source_quote_counts.get(matched_row['source_id'], 0) + 1
+    if sort_mode == 'comparison':
+        all_rows.sort(key=lambda row: (row.get('maintained_baseline', {}).get('rank', 0),
+                                       comparisons.get(row['id'], {}).get('rank', 0), row['id']), reverse=True)
+    elif sort_mode == 'latest':
+        all_rows.sort(key=lambda row: (row.get('published_at') or row.get('last_seen_at') or '', row['id']), reverse=True)
+    elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
+        priced, unpriced = [], []
+        for row in all_rows:
+            brief = row['offer_brief']
+            quote = row.get('display_quote')
+            value = quote.get('amount_cents') if quote else None
+            if sort_mode == 'paper_unit_low':
+                selected_spec = brief.get('selected_spec')
+                paper = paper_package_prices(selected_spec, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind'] == 'source_claim' and selected_spec else None
+                value = paper.get('per_pack_cents') if paper else None
+            if value is None:
+                unpriced.append(row)
+            else:
+                row['_sort_price_cents'] = value
+                priced.append(row)
+        priced.sort(key=lambda row: (row['_sort_price_cents'], row.get('published_at') or row.get('last_seen_at') or '', row['id']),
+                    reverse=sort_mode == 'price_high')
+        for row in priced:
+            row.pop('_sort_price_cents', None)
+        all_rows = priced + unpriced
+    return dict(
+        all_rows=all_rows, comparisons=comparisons, search_assessments=search_assessments,
+        quality_counts=quality_counts, source_match_counts=source_match_counts,
+        source_quote_counts=source_quote_counts, source_offer_count=source_offer_count,
+        candidate_pool_count=candidate_pool_count, source_comparison_deferred=source_comparison_deferred,
+        unpriced_current_count=unpriced_current_count, search_funnel=search_funnel,
+        provenance_corpus=provenance_corpus, provenance_index=provenance_index,
+        marketplace_population_count=marketplace_population_count,
+        marketplace_unidentified_count=marketplace_unidentified_count,
+        marketplace_selected_count=marketplace_selected_count, total=len(all_rows),
+    )
 
 
 def index():
@@ -272,148 +419,50 @@ def index():
             source_offer_count=total
             comparisons=load_comparisons(db,[row['id'] for row in rows])
         else:
-            raw_rows=[dict(row) for row in db.execute(sql + order_by,args)]
-            rows_needing_link_enrichment = [
-                row for row in raw_rows if not can_skip_alliance_link_enrichment(row)
-            ]
-            link_cache=resolution_cache(db,rows_needing_link_enrichment)
-            all_rows = [attach_search_marketplace(row, link_cache) for row in raw_rows]
-            for row in all_rows:
-                row['display_topic']=resource_topic(row.get('title',''),row.get('source_category',''))
-            if topic in TOPIC_LABELS:
-                all_rows=[row for row in all_rows if row['display_topic']==topic]
-            marketplace_population_count = len(all_rows)
-            marketplace_unidentified_count = sum(row['marketplace_key'] == 'unknown' for row in all_rows)
-            marketplace_selected_count = sum(
-                marketplace_matches_filter(row['marketplace_key'], buy_platform)
-                for row in all_rows
+            # Page and layout are intentionally absent: admission, comparison
+            # and ordering are independent of the page being rendered. A write
+            # in this process clears the cache at transaction commit; writes
+            # from the separate collector process are bounded by its short TTL.
+            # Use DB_PATH rather than SQLite's file label: isolated test
+            # databases can share an internal label while still being distinct.
+            database_file = str(database.DB_PATH)
+            prepared_key = (
+                'standard-search-v3', database_file,
+                query, category, status, platform,
+                buy_platform, offer_filter, topic, resource, budget, sort_mode,
+                view_mode,
             )
-            if buy_platform != 'all':
-                all_rows = [row for row in all_rows
-                            if marketplace_matches_filter(row['marketplace_key'], buy_platform)]
-            if not show_archive:
-                # A live catalogue row may have an old saved ``missing_time``
-                # result from the former post-only rule. Re-evaluate that row
-                # for display against its current successful snapshot; do not
-                # write the refreshed result into the evidence ledger here.
-                now = datetime.now(timezone.utc).replace(tzinfo=None)
-                for row in all_rows:
-                    row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
-                    last_seen = row.get('last_seen_at') or ''
-                    checked = row.get('review_checked_at') or ''
-                    review_behind = bool(last_seen and checked and checked < last_seen)
-                    if row['catalog_listing'] and (not row.get('auto_state') or row.get('auto_state') == 'missing_time' or review_behind):
-                        result = classify_catalog_observation(row, now)
-                        row['auto_state'] = result['state']
-                        row['auto_reason'] = result['reason']
-                        row['advertised_cents'] = result['advertised_cents']
-            else:
-                for row in all_rows:
-                    row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
-            # Source comparison is intentionally deferred for broad result
-            # sets.  In that mode official structured evidence still decides
-            # admission, while textual diagnostics are created only after the
-            # final page is known.
-            source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
-            for row in all_rows:
-                attach_offer_data(row, include_diagnostics=not source_comparison_deferred)
-                row['maintained_baseline'] = assess_maintained_baseline(
-                    row, row['offer_brief'], row.get('display_quote'), maintained_baselines)
-            source_match_counts = {}
-            for matched_row in all_rows:
-                source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
-            # Keep every source record visible. Similar title/price text is not
-            # enough evidence to merge channels or merchants into one offer.
-            source_offer_count = candidate_pool_count = len(all_rows)
-            source_quote_counts={}
-            for matched_row in all_rows:
-                if matched_row.get('display_quote'):
-                    source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
-            # Source-to-source comparison is an optional diagnostic. It is not
-            # an admission gate for official Taobao promotions and it is not an
-            # input to the operator-maintained price bands. Avoid expanding a
-            # broad result set into one comparison graph per row on ordinary
-            # offer, current and archive browsing.
-            comparisons = ({} if source_comparison_deferred else
-                           (load_comparisons(db) if show_archive else
-                            load_comparisons(db, [row['id'] for row in all_rows])))
-            for row in all_rows:
-                row['catalog_listing'] = row.get('source_parser') in CATALOG_LISTING_PARSERS
-            search_assessments={row['id']:assess_readiness(row,comparisons.get(row['id'],{}),row['offer_brief']) for row in all_rows}
-            for row in all_rows:
-                row['promotion_admission'] = promotion_admission(
-                    row, search_assessments.get(row['id']))
-                row['public_offer_eligible'] = row['promotion_admission']['eligible']
-            quality_counts=dict(
-                search_ready=sum(bool(value['search_ready']) for value in search_assessments.values()),
-                comparable=sum(bool(value['comparable']) for value in search_assessments.values()),
-                source_claim_low=sum(bool(value['source_claim_low']) for value in search_assessments.values()))
-            quality_counts['displayable_quote']=sum(bool(row['display_quote']) for row in all_rows)
-            quality_counts['promotional_candidate']=sum(bool(row.get('promotional_candidate')) for row in all_rows)
-            quality_counts['public_offer_eligible']=sum(bool(row.get('public_offer_eligible')) for row in all_rows)
-            quality_counts['catalog_reference']=sum(bool(row.get('catalog_reference')) for row in all_rows)
-            quality_counts['plain_price_reference']=sum(bool(row.get('display_quote'))
-                and not row.get('promotional_candidate') and not row.get('catalog_reference') for row in all_rows)
-            quality_counts['unpriced']=sum(not row.get('display_quote') for row in all_rows)
-            quality_counts['excluded']=candidate_pool_count-quality_counts['search_ready']
-            unpriced_current_count=quality_counts['unpriced']
-            if funnel_scope_sql:
-                # Preserve the current-pool explanation without repeating the
-                # old whole-corpus resolver/marketplace/offer preparation.
-                funnel_scope_rows = [dict(row) for row in db.execute(
-                    funnel_scope_sql, funnel_scope_args)]
-                search_funnel = summarize_search_funnel(funnel_scope_rows, all_rows)
-            provenance_corpus = all_rows
-            if ready_only and not show_archive:
-                all_rows=[row for row in all_rows if search_assessments[row['id']]['search_ready']]
-                source_match_counts = {}
-                source_quote_counts={}
-                for matched_row in all_rows:
-                    source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
-                    if matched_row['display_quote']:
-                        source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
-            elif priced_only:
-                all_rows=[row for row in all_rows if row.get('public_offer_eligible')]
-            if budget is not None:
-                # A catalog/reference amount or unpromoted price claim is not a
-                # proven purchase opportunity and must not satisfy buy budget.
-                all_rows=[row for row in all_rows
-                          if row.get('display_quote') and row['display_quote'].get('kind') in {
-                              'source_claim', 'official_promotion_observation'}
-                          and row['display_quote']['amount_cents']<=budget]
-                source_match_counts={}
-                source_quote_counts={}
-                for matched_row in all_rows:
-                    source_match_counts[matched_row['source_id']]=source_match_counts.get(matched_row['source_id'],0)+1
-                    source_quote_counts[matched_row['source_id']]=source_quote_counts.get(matched_row['source_id'],0)+1
-            total=len(all_rows)
-            if sort_mode == 'comparison':
-                all_rows.sort(key=lambda r: (r.get('maintained_baseline',{}).get('rank',0),
-                                              comparisons.get(r['id'],{}).get('rank',0),r['id']), reverse=True)
-            elif sort_mode == 'latest':
-                all_rows.sort(key=lambda r: (r.get('published_at') or r.get('last_seen_at') or '', r['id']), reverse=True)
-            elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
-                priced, unpriced = [], []
-                for row in all_rows:
-                    brief = row['offer_brief']
-                    quote = row.get('display_quote')
-                    value = quote.get('amount_cents') if quote else None
-                    if sort_mode == 'paper_unit_low':
-                        selected_spec = brief.get('selected_spec')
-                        paper = paper_package_prices(selected_spec, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind']=='source_claim' and selected_spec else None
-                        value = paper.get('per_pack_cents') if paper else None
-                    if value is None:
-                        unpriced.append(row)
-                    else:
-                        row['_sort_price_cents'] = value
-                        priced.append(row)
-                priced.sort(key=lambda r: (r['_sort_price_cents'], r.get('published_at') or r.get('last_seen_at') or '', r['id']),
-                            reverse=sort_mode == 'price_high')
-                for row in priced:
-                    row.pop('_sort_price_cents', None)
-                all_rows = priced + unpriced
+            prepared = get_prepared_search(prepared_key)
+            if prepared is None:
+                prepared = prepare_standard_results(
+                    db, sql=sql, args=args, order_by=order_by, topic=topic,
+                    buy_platform=buy_platform, show_archive=show_archive,
+                    ready_only=ready_only, priced_only=priced_only, budget=budget,
+                    sort_mode=sort_mode, maintained_baselines=maintained_baselines,
+                    funnel_scope_sql=funnel_scope_sql, funnel_scope_args=funnel_scope_args,
+                )
+                put_prepared_search(prepared_key, prepared)
+            # Rows are copied only for the page renderer below.  The cache holds
+            # the prepared corpus unchanged until its short TTL expires.
+            all_rows = list(prepared['all_rows'])
+            comparisons = prepared['comparisons']
+            search_assessments = dict(prepared['search_assessments'])
+            quality_counts = dict(prepared['quality_counts'])
+            source_match_counts = dict(prepared['source_match_counts'])
+            source_quote_counts = dict(prepared['source_quote_counts'])
+            source_offer_count = prepared['source_offer_count']
+            candidate_pool_count = prepared['candidate_pool_count']
+            source_comparison_deferred = prepared['source_comparison_deferred']
+            unpriced_current_count = prepared['unpriced_current_count']
+            search_funnel = prepared['search_funnel']
+            provenance_corpus = prepared['provenance_corpus']
+            provenance_index = prepared['provenance_index']
+            marketplace_population_count = prepared['marketplace_population_count']
+            marketplace_unidentified_count = prepared['marketplace_unidentified_count']
+            marketplace_selected_count = prepared['marketplace_selected_count']
+            total = prepared['total']
             rows=all_rows[(page-1)*page_size:page*page_size]
-            rows=annotate_search_sources(rows, provenance_corpus)
+            rows=annotate_search_sources(rows, provenance_corpus, provenance_index)
             rows_needing_link_enrichment = [
                 row for row in rows if not can_skip_alliance_link_enrichment(row)
             ]
