@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}官方活动 · 多平台机会工作台{% endblock %}
+{% block content %}
+<h1>淘宝官方活动</h1>
+<p class="muted">活动会场和商品物料分开维护。会场 ID 仅核验官方活动名称、时间与推广入口；只有填写商品物料 ID 才会建立定时商品同步来源。会场链接不能当成单品报价或结算价。</p>
+<section class="card">
+  <h2>添加官方活动</h2>
+  <form method="post" action="{{ url_for('taobao_campaign_add') }}" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>活动名称<input name="name" required maxlength="64" placeholder="例如：十一官方会场"></label>
+    <label>官方活动 ID<input name="activity_material_id" required inputmode="numeric" pattern="[0-9]{1,24}" placeholder="公告或活动页给出的 activity_material_id"></label>
+    <label>商品物料 ID（可选）<input name="material_id" inputmode="numeric" pattern="[0-9]{1,24}" placeholder="仅填 material_id，才同步商品"></label>
+    <label>会场核验 / 商品同步间隔（分钟）<input name="interval_minutes" type="number" min="15" max="1440" value="60" required></label>
+    <div><button>保存并核验官方会场</button></div>
+  </form>
+  <p class="muted">不要把活动 ID 填到商品物料 ID。两者来自官方不同字段：前者调用活动信息接口，后者调用商品物料接口。只填活动 ID 时，本页只保留官方会场证据，不会生成商品记录。</p>
+</section>
+<section class="card">
+  <h2>已维护活动</h2>
+  {% if campaigns %}<div class="table-wrap"><table><thead><tr><th>活动</th><th>官方时间 / 状态</th><th>商品同步</th><th>官方入口</th><th>操作</th></tr></thead><tbody>
+  {% for campaign in campaigns %}<tr>
+    <td><strong>{{ campaign.page_name or campaign.name }}</strong><small>活动 ID {{ campaign.activity_material_id }} · {{ campaign.status }}</small></td>
+    <td>{{ campaign.page_start_time or '未返回' }}{% if campaign.page_end_time %} 至 {{ campaign.page_end_time }}{% endif %}<small>{{ campaign.window.label }}</small></td>
+    <td>{% if campaign.material_id %}物料 ID {{ campaign.material_id }}{% if campaign.source_id %}<small>来源 #{{ campaign.source_id }} · {{ campaign.source_status or '待首次同步' }}</small>{% endif %}{% else %}未绑定商品物料<small>不会生成商品</small>{% endif %}</td>
+    <td>{% if campaign.short_promotion_url or campaign.promotion_url %}<a href="{{ campaign.short_promotion_url or campaign.promotion_url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a>{% else %}未返回可用官方入口{% endif %}{% if campaign.promotion_copy %}<details><summary>查看手动推广文案</summary><pre>{{ campaign.promotion_copy }}</pre></details>{% endif %}</td>
+    <td><form method="post" action="{{ url_for('taobao_campaign_refresh',campaign_id=campaign.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">重新核验</button></form>{% if campaign.last_error %}<small>{{ campaign.last_error }}</small>{% endif %}</td>
+  </tr>{% endfor %}</tbody></table></div>{% else %}<p>尚未配置官方活动。请从淘宝联盟官方公告或活动推广页复制当前活动 ID。</p>{% endif %}
+</section>
+{% endblock %}

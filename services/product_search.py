@@ -3,6 +3,7 @@ import json
 import re
 import unicodedata
 from decimal import Decimal
+from urllib.parse import urlparse
 from services.taobao_alliance import (
     has_current_promotion_signal as taobao_has_current_promotion_signal,
     validated_offer_for_row as validated_taobao_alliance_offer,
@@ -211,6 +212,103 @@ def is_promotional_price_candidate(row, brief=None):
             and re.search(r'[-−]', formula.get('expression') or '')):
         return True
     return False
+
+
+def official_promotion_discount(row):
+    """Return one current, explainable Taobao Alliance discount amount.
+
+    The material feed can contain a reference-price reduction, a single coupon
+    illustration, and a promotion path at once. Their stackability is not
+    guaranteed, so select the largest individually explainable path instead of
+    adding values together. Revalidation keeps expired coupons and paths out.
+    """
+    if row.get('source_method') != 'taobao_alliance':
+        return None
+    evidence = validated_taobao_alliance_offer(row)
+    if not evidence:
+        return None
+
+    candidates = []
+    reference_drop = evidence.get('promotion_discount_cents')
+    if (evidence.get('price_drop_candidate') is True
+            and isinstance(reference_drop, int)
+            and not isinstance(reference_drop, bool)
+            and reference_drop > 0):
+        reference_cents = evidence.get('reserve_price_cents')
+        candidates.append(dict(
+            amount_cents=reference_drop,
+            rate_basis_points=(reference_drop * 10000 // reference_cents
+                               if isinstance(reference_cents, int) and reference_cents > 0 else None),
+            basis='推广价相对官方参考价差',
+            note='联盟物料中的当前推广价低于官方返回的参考价；参考价不是账号结算价。',
+        ))
+
+    coupon_drop = evidence.get('coupon_applied_cents')
+    if (evidence.get('quote_basis') == 'single_coupon_conditional_estimate'
+            and evidence.get('coupon_candidate') is True
+            and isinstance(coupon_drop, int)
+            and not isinstance(coupon_drop, bool)
+            and coupon_drop > 0):
+        promotion_cents = evidence.get('promotion_price_cents')
+        candidates.append(dict(
+            amount_cents=coupon_drop,
+            rate_basis_points=(coupon_drop * 10000 // promotion_cents
+                               if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
+            basis='单券条件试算减免',
+            note='当前券时间、库存与单件门槛可计算；账号资格和结算扣减仍未核实。',
+        ))
+
+    promotion_path = evidence.get('promotion_path') or {}
+    path_drop = promotion_path.get('known_discount_cents')
+    if (evidence.get('promotion_path_complete') is True
+            and isinstance(path_drop, int)
+            and not isinstance(path_drop, bool)
+            and path_drop > 0):
+        promotion_cents = evidence.get('promotion_price_cents')
+        candidates.append(dict(
+            amount_cents=path_drop,
+            rate_basis_points=(path_drop * 10000 // promotion_cents
+                               if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
+            basis='完整官方促销路径减免',
+            note='当前官方促销组件可完整复算；不与参考价差或券面额叠加。',
+        ))
+
+    return max(candidates, key=lambda candidate: candidate['amount_cents'], default=None)
+
+
+def meets_minimum_official_discount(row, minimum_cents):
+    """Whether an official offer meets the caller's minimum discount filter."""
+    if minimum_cents <= 0:
+        return True
+    discount = row.get('official_discount') or official_promotion_discount(row)
+    return bool(discount and discount['amount_cents'] >= minimum_cents)
+
+
+def affiliate_promotion(row):
+    """Return a current Alliance promotion link and its returned commission.
+
+    A material price is not itself a personal promotion link.  The UI may call
+    a link "我的联盟推广链接" only when the official material response returned
+    the signed Alliance redirect for the configured ad zone.  Commission is a
+    returned estimate, so a missing or malformed amount is displayed as zero
+    rather than reconstructed from a commission rate.
+    """
+    if row.get('source_method') != 'taobao_alliance':
+        return None
+    offer = validated_taobao_alliance_offer(row)
+    url = str(row.get('url') or '').strip()
+    parsed = urlparse(url)
+    if not (offer and offer.get('link_kind') == 'official_promotion_link'
+            and parsed.scheme == 'https' and parsed.hostname == 's.click.taobao.com'
+            and parsed.path):
+        return None
+    commission = offer.get('commission_amount_cents')
+    if not isinstance(commission, int) or isinstance(commission, bool) or commission < 0:
+        commission = 0
+    return {
+        'url': url,
+        'commission_amount_cents': commission,
+    }
 
 
 def promotion_admission(row, assessment):

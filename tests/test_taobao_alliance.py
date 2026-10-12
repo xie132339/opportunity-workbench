@@ -13,7 +13,7 @@ import autoreview
 import app as application_module
 from app import app
 from routes.search import can_skip_alliance_link_enrichment
-from services.product_search import is_promotional_price_candidate, listing_quote
+from services.product_search import affiliate_promotion, is_promotional_price_candidate, listing_quote
 from services.taobao_alliance import (
     API_ENDPOINT, TaobaoAllianceAPIError, TaobaoAllianceConfigurationError, _signature, configuration_error,
     fetch_rows, parse_item, search_config, validated_offer, validated_offer_for_row,
@@ -171,6 +171,24 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertEqual(evidence["quote_basis"], "single_coupon_conditional_estimate")
         self.assertEqual(evidence["coupon_applied_cents"], 200)
         self.assertIn("试算券后价¥8.00", row[3])
+
+    def test_official_discount_uses_one_explainable_path_without_stacking(self):
+        from services.product_search import official_promotion_discount
+
+        now = datetime.now(CHINA)
+        price_drop = parse_item(sample_item(now, reserve="10", promotion="8", coupon="2"), now=now)
+        discount = official_promotion_discount({
+            "source_method": "taobao_alliance", "metadata_json": json.dumps(price_drop[5]),
+        })
+        self.assertEqual(discount["amount_cents"], 200)
+        self.assertEqual(discount["basis"], "推广价相对官方参考价差")
+
+        coupon_only = parse_item(sample_item(now, reserve="10", promotion="10", coupon="2"), now=now)
+        discount = official_promotion_discount({
+            "source_method": "taobao_alliance", "metadata_json": json.dumps(coupon_only[5]),
+        })
+        self.assertEqual(discount["amount_cents"], 200)
+        self.assertEqual(discount["basis"], "单券条件试算减免")
 
     def test_quotes_survive_without_promotions_but_wrong_product_is_rejected(self):
         self.assertFalse(parse_item(sample_item(self.now, reserve="10", promotion="10", coupon=""), now=self.now)[5]["taobao_alliance_offer"]["price_drop_candidate"])
@@ -453,7 +471,9 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         from services.taobao_alliance import _rows_from_payload
         item = {
             "item_id": "opaque-new-id",
-            "publish_info": {"click_url": "//s.click.taobao.com/t?e=official-token"},
+            "publish_info": {"click_url": "//s.click.taobao.com/t?e=official-token",
+                             "income_info": {"commission_amount": "0.17", "commission_rate": "135"},
+                             "income_rate": "1.35", "commission_type": "COMMON"},
             "item_basic_info": {"title": "测试抽纸", "user_type": 0, "shop_title": "测试店"},
             "price_promotion_info": {"reserve_price": "10.00", "zk_final_price": "8.00"},
         }
@@ -463,6 +483,8 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertEqual(rows[0][0], "taobao:opaque-new-id")
         self.assertEqual(rows[0][2], "https://s.click.taobao.com/t?e=official-token")
         self.assertEqual(rows[0][5]["taobao_alliance_offer"]["link_kind"], "official_promotion_link")
+        self.assertEqual(rows[0][5]["taobao_alliance_offer"]["commission_amount_cents"], 17)
+        self.assertEqual(rows[0][5]["taobao_alliance_source_fields"]["commission_amount"], "0.17")
         self.assertEqual(validated_offer(rows[0][5], now=self.now)["quote_price_cents"], 800)
         self.assertIn("尚未独立核实跳转", rows[0][3])
         from services.marketplace_identity import attach_product_marketplace
@@ -479,6 +501,26 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         item["publish_info"]["click_url"] = "//s.click.taobao.com/t?e=official-token"
         item["item_id"] = "<invalid>"
         self.assertEqual(_rows_from_payload(payload, now=self.now), [])
+
+    def test_affiliate_promotion_uses_returned_amount_or_zero_without_rate_inference(self):
+        item = {
+            "item_id": "opaque-new-id",
+            "publish_info": {"click_url": "//s.click.taobao.com/t?e=official-token",
+                             "income_info": {"commission_amount": "0.17", "commission_rate": "135"}},
+            "item_basic_info": {"title": "测试抽纸", "user_type": 0, "shop_title": "测试店"},
+            "price_promotion_info": {"reserve_price": "10.00", "zk_final_price": "8.00"},
+        }
+        from services.taobao_alliance import _rows_from_payload
+        payload = {"tbk_dg_material_optional_upgrade_response": {"result_list": {"map_data": [item]}}}
+        record = _rows_from_payload(payload, now=self.now)[0]
+        row = {"source_method": "taobao_alliance", "url": record[2], "metadata_json": json.dumps(record[5])}
+        self.assertEqual(affiliate_promotion(row), {
+            "url": "https://s.click.taobao.com/t?e=official-token", "commission_amount_cents": 17,
+        })
+        item["publish_info"]["income_info"] = {"commission_rate": "135"}
+        record = _rows_from_payload(payload, now=self.now)[0]
+        row.update(url=record[2], metadata_json=json.dumps(record[5]))
+        self.assertEqual(affiliate_promotion(row)["commission_amount_cents"], 0)
 
     def test_current_official_promotion_path_is_a_lead_without_double_deduction(self):
         from services.taobao_alliance import _rows_from_payload
@@ -853,7 +895,9 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         self.assertEqual(quote["amount_cents"], 800)
         self.assertEqual(quote["kind"], "official_promotion_observation")
         self.assertTrue(is_promotional_price_candidate(display_row, {}))
-        page = app.test_client().get("/?q=抽纸&buy_platform=taobao").get_data(as_text=True)
+        page = app.test_client().get(
+            "/?q=抽纸&buy_platform=taobao&minimum_discount=0"
+        ).get_data(as_text=True)
         self.assertIn("测试抽纸 100抽*10包", page)
         self.assertIn("淘宝联盟官方推广价", page)
         clue_page = app.test_client().get(
@@ -862,6 +906,57 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         self.assertIn("淘宝联盟官方推广价", clue_page)
         self.assertNotIn("¥0.80/包", clue_page)  # Title size is not the selected priced variant.
         self.assertIn("800", str(evidence["quote_price_cents"]))
+
+    def test_default_minimum_discount_excludes_small_official_discounts(self):
+        now = datetime.now(CHINA)
+        small = sample_item(now, reserve="10", promotion="8", coupon="", item_id="123456781")
+        small["title"] = "小额优惠抽纸"
+        large = sample_item(now, reserve="15", promotion="8", coupon="", item_id="123456782")
+        large["title"] = "足额优惠抽纸"
+        rows = [parse_item(small, now=now), parse_item(large, now=now)]
+        with patch("scanner.taobao_alliance_rows", return_value=rows):
+            scanner.scan_source(self.source_id)
+
+        client = app.test_client()
+        default_page = client.get("/?q=优惠抽纸&buy_platform=taobao&layout=list").get_data(as_text=True)
+        self.assertIn('name="minimum_discount"', default_page)
+        self.assertIn('value="5"', default_page)
+        self.assertNotIn("小额优惠抽纸", default_page)
+        self.assertIn("足额优惠抽纸", default_page)
+        self.assertIn("优惠 ¥7.00", default_page)
+        self.assertNotIn("推广价相对官方参考价差", default_page)
+
+        custom_page = client.get(
+            "/?q=优惠抽纸&buy_platform=taobao&minimum_discount=2&layout=list"
+        ).get_data(as_text=True)
+        self.assertIn("小额优惠抽纸", custom_page)
+        self.assertIn("minimum_discount=2", custom_page)
+
+    def test_affiliate_commission_sort_uses_returned_amount_and_keeps_zero_in_order(self):
+        now = datetime.now(CHINA)
+        high = sample_item(now, item_id="affiliate-high")
+        high.pop("num_iid")
+        high.update(item_id="affiliate-high", item_url="https://s.click.taobao.com/t?e=high", commission_amount="0.80")
+        low = sample_item(now, item_id="affiliate-low")
+        low.pop("num_iid")
+        low.update(item_id="affiliate-low", item_url="https://s.click.taobao.com/t?e=low", commission_amount="0")
+        with patch("scanner.taobao_alliance_rows", return_value=[parse_item(high, now=now), parse_item(low, now=now)]):
+            scanner.scan_source(self.source_id)
+
+        client = app.test_client()
+        high_page = client.get(
+            "/?q=测试抽纸&buy_platform=taobao&view=current&layout=list&sort=commission_high"
+        ).get_data(as_text=True)
+        self.assertLess(high_page.index('href="/opportunities/1"'), high_page.index('href="/opportunities/2"'))
+        self.assertIn("联盟预估佣金排序；点击切换升序和降序", high_page)
+        self.assertIn("sort=commission_low", high_page)
+        self.assertIn("佣金 ¥0.80", high_page)
+        self.assertIn("佣金 ¥0.00", high_page)
+
+        low_page = client.get(
+            "/?q=测试抽纸&buy_platform=taobao&view=current&layout=list&sort=commission_low"
+        ).get_data(as_text=True)
+        self.assertLess(low_page.index('href="/opportunities/2"'), low_page.index('href="/opportunities/1"'))
 
     def test_new_promotion_link_keeps_old_observation_but_only_one_current_product(self):
         now = datetime.now(CHINA)
@@ -1164,7 +1259,9 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         self.assertEqual(saved['state'], 'observed')
         self.assertEqual(saved['advertised_cents'], 800)
         self.assertEqual(persisted['detail_api_attempts'][0]['method'], DETAIL_METHOD)
-        default_page = app.test_client().get('/?q=抽纸&buy_platform=taobao').get_data(as_text=True)
+        default_page = app.test_client().get(
+            '/?q=抽纸&buy_platform=taobao&minimum_discount=0'
+        ).get_data(as_text=True)
         self.assertIn('测试抽纸 100抽*10包', default_page)
         detail_page = app.test_client().get('/opportunities/1').get_data(as_text=True)
         self.assertIn('淘宝联盟 SKU 报价核验', detail_page)

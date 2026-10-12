@@ -60,6 +60,48 @@ CREATE INDEX IF NOT EXISTS idx_maintained_price_baselines_category
 """
 
 
+TAOBAO_CAMPAIGN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS taobao_campaigns (
+ id INTEGER PRIMARY KEY,
+ name TEXT NOT NULL,
+ activity_material_id TEXT NOT NULL UNIQUE,
+ material_id TEXT NOT NULL DEFAULT '',
+ source_id INTEGER UNIQUE REFERENCES sources(id),
+ interval_minutes INTEGER NOT NULL DEFAULT 60 CHECK(interval_minutes BETWEEN 15 AND 1440),
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ status TEXT NOT NULL DEFAULT 'pending',
+ page_name TEXT NOT NULL DEFAULT '',
+ page_start_time TEXT NOT NULL DEFAULT '',
+ page_end_time TEXT NOT NULL DEFAULT '',
+ promotion_url TEXT NOT NULL DEFAULT '',
+ short_promotion_url TEXT NOT NULL DEFAULT '',
+ response_json TEXT NOT NULL DEFAULT '{}',
+ last_checked TEXT,
+ last_success TEXT,
+ last_error TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_taobao_campaigns_due
+  ON taobao_campaigns(enabled,last_checked,interval_minutes);
+"""
+
+
+FESTIVAL_PROMOTION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS festival_promotions (
+ id INTEGER PRIMARY KEY,
+ festival_code TEXT NOT NULL,
+ festival_name TEXT NOT NULL,
+ festival_year INTEGER NOT NULL CHECK(festival_year BETWEEN 2020 AND 2100),
+ campaign_id INTEGER NOT NULL UNIQUE REFERENCES taobao_campaigns(id),
+ minimum_discount_cents INTEGER NOT NULL DEFAULT 500 CHECK(minimum_discount_cents >= 0),
+ participation_rule_version TEXT NOT NULL DEFAULT 'single-item-v1',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_festival_promotions_year
+  ON festival_promotions(festival_year,festival_code,id DESC);
+"""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_scan_runs (
  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES sources(id),
@@ -349,6 +391,16 @@ def initialize_maintained_price_baselines(db):
     db.executescript(MAINTAINED_PRICE_BASELINE_SCHEMA)
 
 
+def initialize_taobao_campaigns(db):
+    """Add official-event configuration without touching captured source history."""
+    db.executescript(TAOBAO_CAMPAIGN_SCHEMA)
+
+
+def initialize_festival_promotions(db):
+    """Create holiday configuration without changing campaign or product history."""
+    db.executescript(FESTIVAL_PROMOTION_SCHEMA)
+
+
 def ensure_link_resolution_product_page_column(db=None):
     """Add the current public-page result without rewriting existing link history."""
     if db is not None:
@@ -367,6 +419,8 @@ def initialize():
         ensure_link_resolution_product_page_column(db)
         initialize_benchmark_rules(db)
         initialize_maintained_price_baselines(db)
+        initialize_taobao_campaigns(db)
+        initialize_festival_promotions(db)
         provider_seeds = [
             ("smzdm_history", "什么值得买历史价格 API", "independent_index", "按商品URL的历史价格曲线；Price/FinalPrice字段", "需App Key与OAuth；历史索引不等于当前结算价", "https://openapi.zhidemai.com/pages/price/4.%E5%8E%86%E5%8F%B2%E4%BB%B7%E6%A0%BC%E6%9F%A5%E8%AF%A2API.html"),
             ("manmanbuy", "慢慢买", "independent_index", "历史价格与跨商城比价；当前可用 API 覆盖待合作核实", "公开介绍未提供本项目可直接调用的接口契约，需合作询价", "https://help.manmanbuy.com/"),

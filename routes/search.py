@@ -12,7 +12,9 @@ from services.money import cents
 from services.opportunity_analysis import is_current_notice, is_evidence_candidate, notice_rows
 from services.source_freshness import CATALOG_LISTING_PARSERS
 from services.product_search import (listing_quote, quote_note,
-                                     is_promotional_price_candidate, promotion_admission)
+                                     is_promotional_price_candidate, promotion_admission,
+                                     official_promotion_discount, meets_minimum_official_discount,
+                                     affiliate_promotion)
 from services.source_provenance import annotate_search_sources, build_search_source_index
 from services.search_diagnostics import summarize_search_funnel
 from services.public_campaign import parse_public_campaign
@@ -51,6 +53,8 @@ def attach_offer_data(row, include_diagnostics=True):
     row['catalog_reference']=bool(row['catalog_listing'] and row['display_quote']
                                   and row['display_quote'].get('kind')=='catalog_public')
     row['promotional_candidate']=is_promotional_price_candidate(row,brief)
+    row['official_discount'] = official_promotion_discount(row)
+    row['affiliate_promotion'] = affiliate_promotion(row)
     row['display_quote_note']=quote_note(brief)
     return row
 
@@ -79,7 +83,7 @@ def attach_search_marketplace(row, link_cache):
 
 def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
                              show_archive, ready_only, priced_only, budget,
-                             sort_mode, maintained_baselines, funnel_scope_sql,
+                             minimum_discount_cents, sort_mode, maintained_baselines, funnel_scope_sql,
                              funnel_scope_args):
     """Prepare the complete result set once before page-specific rendering.
 
@@ -153,6 +157,11 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
         displayable_quote=sum(bool(row['display_quote']) for row in all_rows),
         promotional_candidate=sum(bool(row.get('promotional_candidate')) for row in all_rows),
         public_offer_eligible=sum(bool(row.get('public_offer_eligible')) for row in all_rows),
+        minimum_discount_eligible=sum(
+            bool(row.get('public_offer_eligible'))
+            and meets_minimum_official_discount(row, minimum_discount_cents)
+            for row in all_rows
+        ),
         catalog_reference=sum(bool(row.get('catalog_reference')) for row in all_rows),
         plain_price_reference=sum(bool(row.get('display_quote')) and not row.get('promotional_candidate')
                                   and not row.get('catalog_reference') for row in all_rows),
@@ -175,7 +184,9 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
             if matched_row['display_quote']:
                 source_quote_counts[matched_row['source_id']] = source_quote_counts.get(matched_row['source_id'], 0) + 1
     elif priced_only:
-        all_rows = [row for row in all_rows if row.get('public_offer_eligible')]
+        all_rows = [row for row in all_rows
+                    if row.get('public_offer_eligible')
+                    and meets_minimum_official_discount(row, minimum_discount_cents)]
     if budget is not None:
         all_rows = [row for row in all_rows if row.get('display_quote') and row['display_quote'].get('kind') in {
             'source_claim', 'official_promotion_observation'} and row['display_quote']['amount_cents'] <= budget]
@@ -184,28 +195,53 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
         for matched_row in all_rows:
             source_match_counts[matched_row['source_id']] = source_match_counts.get(matched_row['source_id'], 0) + 1
             source_quote_counts[matched_row['source_id']] = source_quote_counts.get(matched_row['source_id'], 0) + 1
-    if sort_mode == 'comparison':
+    if sort_mode in ('discount_high', 'discount_rate_high'):
+        def official_discount_key(row):
+            discount = row.get('official_discount') or {}
+            amount = discount.get('amount_cents')
+            rate = discount.get('rate_basis_points')
+            valid = isinstance(amount, int) and not isinstance(amount, bool) and amount > 0
+            return (valid, amount if valid else 0,
+                    rate if isinstance(rate, int) and not isinstance(rate, bool) else -1,
+                    row.get('published_at') or row.get('last_seen_at') or '', row['id'])
+        if sort_mode == 'discount_high':
+            all_rows.sort(key=lambda row: (
+                official_discount_key(row)[0], official_discount_key(row)[1],
+                official_discount_key(row)[2], official_discount_key(row)[3], official_discount_key(row)[4]),
+                reverse=True)
+        else:
+            all_rows.sort(key=lambda row: (
+                official_discount_key(row)[0], official_discount_key(row)[2],
+                official_discount_key(row)[1], official_discount_key(row)[3], official_discount_key(row)[4]),
+                reverse=True)
+    elif sort_mode == 'comparison':
         all_rows.sort(key=lambda row: (row.get('maintained_baseline', {}).get('rank', 0),
                                        comparisons.get(row['id'], {}).get('rank', 0), row['id']), reverse=True)
     elif sort_mode == 'latest':
         all_rows.sort(key=lambda row: (row.get('published_at') or row.get('last_seen_at') or '', row['id']), reverse=True)
-    elif sort_mode in ('price_low', 'price_high', 'paper_unit_low'):
+    elif sort_mode in ('price_low', 'price_high', 'paper_unit_low',
+                       'commission_low', 'commission_high'):
         priced, unpriced = [], []
         for row in all_rows:
-            brief = row['offer_brief']
-            quote = row.get('display_quote')
-            value = quote.get('amount_cents') if quote else None
-            if sort_mode == 'paper_unit_low':
-                selected_spec = brief.get('selected_spec')
-                paper = paper_package_prices(selected_spec, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind'] == 'source_claim' and selected_spec else None
-                value = paper.get('per_pack_cents') if paper else None
+            if sort_mode in ('commission_low', 'commission_high'):
+                promotion = row.get('affiliate_promotion')
+                value = (promotion.get('commission_amount_cents')
+                         if isinstance(promotion, dict) else None)
+            else:
+                brief = row['offer_brief']
+                quote = row.get('display_quote')
+                value = quote.get('amount_cents') if quote else None
+                if sort_mode == 'paper_unit_low':
+                    selected_spec = brief.get('selected_spec')
+                    paper = paper_package_prices(selected_spec, brief.get('total_cents'), brief.get('quantity')) if quote and quote['kind'] == 'source_claim' and selected_spec else None
+                    value = paper.get('per_pack_cents') if paper else None
             if value is None:
                 unpriced.append(row)
             else:
                 row['_sort_price_cents'] = value
                 priced.append(row)
         priced.sort(key=lambda row: (row['_sort_price_cents'], row.get('published_at') or row.get('last_seen_at') or '', row['id']),
-                    reverse=sort_mode == 'price_high')
+                    reverse=sort_mode in ('price_high', 'commission_high'))
         for row in priced:
             row.pop('_sort_price_cents', None)
         all_rows = priced + unpriced
@@ -236,9 +272,8 @@ def index():
     topic = request.args.get('topic','')
     resource = request.args.get('resource','')
     budget_text = request.args.get("budget", "").strip()
-    sort_mode = request.args.get("sort", "comparison")
-    if sort_mode not in ("comparison", "latest", "price_low", "price_high", "paper_unit_low"):
-        sort_mode = "comparison"
+    minimum_discount_text = request.args.get("minimum_discount", "").strip()
+    requested_sort = request.args.get("sort", "").strip()
     layout_mode = request.args.get("layout", "list")
     if layout_mode not in ("list", "cards"):
         layout_mode = "list"
@@ -250,6 +285,10 @@ def index():
     view_mode = request.args.get("view") or "offers"
     if view_mode not in ("offers", "ready", "current", "all"):
         view_mode = "offers"
+    sort_mode = requested_sort or ("discount_high" if view_mode == "offers" else "comparison")
+    if sort_mode not in ("comparison", "latest", "price_low", "price_high", "paper_unit_low",
+                         "commission_low", "commission_high", "discount_high", "discount_rate_high"):
+        sort_mode = "discount_high" if view_mode == "offers" else "comparison"
     show_archive = view_mode == "all"
     ready_only = view_mode == "ready"
     priced_only = view_mode == "offers"
@@ -257,6 +296,11 @@ def index():
         budget = cents(budget_text) if budget_text else None
     except ValueError:
         budget = None
+    try:
+        minimum_discount_cents = cents(minimum_discount_text) if minimum_discount_text else 500
+    except ValueError:
+        minimum_discount_cents = 500
+    minimum_discount_text = str(minimum_discount_cents / 100).rstrip('0').rstrip('.')
     sql = """SELECT o.*,s.platform,s.category AS source_category,s.status AS source_status,s.method AS source_method,s.parser AS source_parser,
              s.enabled AS source_enabled,s.interval_minutes AS source_interval,s.name AS source_name,
              s.last_success AS source_last_success,
@@ -405,11 +449,17 @@ def index():
                 prepared['maintained_baseline'] = assess_maintained_baseline(
                     prepared, prepared['offer_brief'], prepared.get('display_quote'), maintained_baselines)
             total=len(prepared_candidates)
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            page_buttons = list(range(1, min(total_pages, 10) + 1))
             rows = prepared_candidates[(page - 1) * page_size:page * page_size]
             search_assessments={}
             quality_counts=dict(search_ready=0,comparable=0,source_claim_low=0,excluded=0,
                                 displayable_quote=sum(bool(row.get('display_quote')) for row in prepared_candidates),
                                 promotional_candidate=sum(bool(row.get('promotional_candidate')) for row in prepared_candidates),
+                                minimum_discount_eligible=sum(
+                                    meets_minimum_official_discount(row, minimum_discount_cents)
+                                    for row in prepared_candidates),
                                 catalog_reference=sum(bool(row.get('catalog_reference')) for row in prepared_candidates),
                                 plain_price_reference=sum(bool(row.get('display_quote')) and not row.get('promotional_candidate')
                                                           and not row.get('catalog_reference') for row in prepared_candidates),
@@ -427,9 +477,9 @@ def index():
             # databases can share an internal label while still being distinct.
             database_file = str(database.DB_PATH)
             prepared_key = (
-                'standard-search-v3', database_file,
+                'standard-search-v4', database_file,
                 query, category, status, platform,
-                buy_platform, offer_filter, topic, resource, budget, sort_mode,
+                buy_platform, offer_filter, topic, resource, budget, minimum_discount_cents, sort_mode,
                 view_mode,
             )
             prepared = get_prepared_search(prepared_key)
@@ -438,6 +488,7 @@ def index():
                     db, sql=sql, args=args, order_by=order_by, topic=topic,
                     buy_platform=buy_platform, show_archive=show_archive,
                     ready_only=ready_only, priced_only=priced_only, budget=budget,
+                    minimum_discount_cents=minimum_discount_cents,
                     sort_mode=sort_mode, maintained_baselines=maintained_baselines,
                     funnel_scope_sql=funnel_scope_sql, funnel_scope_args=funnel_scope_args,
                 )
@@ -461,6 +512,9 @@ def index():
             marketplace_unidentified_count = prepared['marketplace_unidentified_count']
             marketplace_selected_count = prepared['marketplace_selected_count']
             total = prepared['total']
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            page_buttons = list(range(1, min(total_pages, 10) + 1))
             rows=all_rows[(page-1)*page_size:page*page_size]
             rows=annotate_search_sources(rows, provenance_corpus, provenance_index)
             rows_needing_link_enrichment = [
@@ -527,9 +581,11 @@ def index():
                            marketplace_selected_count=marketplace_selected_count,
                            marketplace_unidentified_count=marketplace_unidentified_count,
                            dedicated_taobao_source_count=dedicated_taobao_source_count,
-                           budget_text=budget_text,
+                           budget_text=budget_text, minimum_discount_text=minimum_discount_text,
+                           minimum_discount_cents=minimum_discount_cents,
                            offer_filter=offer_filter,topic=topic,resource=resource,
-                           total=total, page=page, has_next=page * page_size < total,
+                           total=total, total_pages=total_pages, page_buttons=page_buttons,
+                           page=page, has_next=page * page_size < total,
                            page_size=page_size, layout_mode=layout_mode,
                            source_coverage=source_coverage, enabled_source_count=enabled_source_count,
                            matched_enabled_source_count=matched_enabled_source_count,

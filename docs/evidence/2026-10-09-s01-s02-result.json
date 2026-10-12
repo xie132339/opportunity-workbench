@@ -1,0 +1,285 @@
+{
+  "recorded_at": "2026-10-09T02:59:41.578093+00:00",
+  "branch": "feature/bootstrap",
+  "source_hashes": {
+    "services/taobao_alliance.py": "96fd731e4dd7a900ea2beec5be486b6c83d6b030a7017fa26071dcedbb67e708",
+    "services/product_search.py": "3f0e616aeb2dff62ffc35b16f224f5cd69634a90be7c04d75dfc2d76c5b25efd",
+    "autoreview.py": "fa3abfdca6ff2aa74eb9da486a148835ee8aa7d78bf24e6ea75b28c10ebc2a94",
+    "scanner.py": "6742a64c64300d747c229de17aef99110d5d76c09c038ae5a353483ea1d4d50b",
+    "db.py": "8fcda403cf5d0406633479b2b9cf03598723527351c7e0475f664996a623f086",
+    "routes/sources.py": "732680fb080034733d4f33e2b21f9177811bfc82356d1a53508b85dbcb984969",
+    "templates/sources.html": "f2cec17f472acf394064bcebba68d806636c813615fc4d0a4844d27d041292ba",
+    "templates/_source_scan_audit.html": "19fe6f608b7b76350072ad26c839272540f6bbd6c0059c6cd8d05ce36bf3cc09",
+    "tests/test_taobao_alliance.py": "dc9e2364a5aa68413ebe6da89fd4fe434e098879eafb0afe8de9728c6d16ec5d"
+  },
+  "parser_comparison": [
+    {
+      "case": "control",
+      "before": {
+        "case": "control",
+        "input_delta": {},
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "quote_cents": 800,
+        "coupon_remain_count": 20
+      },
+      "after": {
+        "quote_cents": 800,
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "coupon_candidate": true,
+        "coupon_rule_estimate_cents": 800
+      }
+    },
+    {
+      "case": "missing_reference",
+      "before": {
+        "case": "missing_reference",
+        "input_delta": {
+          "reserve_price": null
+        },
+        "accepted": false,
+        "coupon_state": null,
+        "quote_cents": null,
+        "coupon_remain_count": null
+      },
+      "after": {
+        "quote_cents": 1000,
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "coupon_candidate": true,
+        "coupon_rule_estimate_cents": 800
+      }
+    },
+    {
+      "case": "numeric_zero",
+      "before": {
+        "case": "numeric_zero",
+        "input_delta": {
+          "zk_final_price": "8",
+          "coupon_start_fee": "8",
+          "coupon_remain_count": 0
+        },
+        "accepted": true,
+        "coupon_state": "remaining_unknown",
+        "quote_cents": 800,
+        "coupon_remain_count": null
+      },
+      "after": {
+        "quote_cents": 800,
+        "accepted": true,
+        "coupon_state": "depleted",
+        "coupon_candidate": false,
+        "coupon_rule_estimate_cents": 600
+      }
+    },
+    {
+      "case": "string_zero",
+      "before": {
+        "case": "string_zero",
+        "input_delta": {
+          "zk_final_price": "8",
+          "coupon_start_fee": "8",
+          "coupon_remain_count": "0"
+        },
+        "accepted": true,
+        "coupon_state": "depleted",
+        "quote_cents": 800,
+        "coupon_remain_count": 0
+      },
+      "after": {
+        "quote_cents": 800,
+        "accepted": true,
+        "coupon_state": "depleted",
+        "coupon_candidate": false,
+        "coupon_rule_estimate_cents": 600
+      }
+    },
+    {
+      "case": "date_only",
+      "before": {
+        "case": "date_only",
+        "input_delta": {
+          "coupon_start_time": "2026-10-09",
+          "coupon_end_time": "2026-10-09"
+        },
+        "accepted": false,
+        "coupon_state": null,
+        "quote_cents": null,
+        "coupon_remain_count": null
+      },
+      "after": {
+        "quote_cents": 1000,
+        "accepted": true,
+        "coupon_state": "validity_precision_unknown",
+        "coupon_candidate": false,
+        "coupon_rule_estimate_cents": 800
+      }
+    },
+    {
+      "case": "exact_end",
+      "before": {
+        "case": "exact_end",
+        "input_delta": {
+          "coupon_end_time": "2026-10-09 12:00:00"
+        },
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "quote_cents": 800,
+        "coupon_remain_count": 20
+      },
+      "after": {
+        "quote_cents": 1000,
+        "accepted": true,
+        "coupon_state": "expired",
+        "coupon_candidate": false,
+        "coupon_rule_estimate_cents": 800
+      }
+    }
+  ],
+  "regression_log": ".....................................................................................................................................................................................................................................................................\n----------------------------------------------------------------------\nRan 261 tests in 1.591s\n\nOK\n",
+  "migration": {
+    "migration": "add source_scan_runs only",
+    "copy_unchanged": true,
+    "live_unchanged": true,
+    "integrity": "ok",
+    "tables": {
+      "auto_reviews": {
+        "count": 924,
+        "sha256": "e8a8f43815c0ad95b0f51413f6467deae10e5109864434929130fcbfe3b83d2b"
+      },
+      "benchmark_categories": {
+        "count": 9,
+        "sha256": "e1596e0faff4f7b02b44bea4a56d536ef07bb2d3f90d6834d07b90e5579bf3e2"
+      },
+      "benchmark_category_rule_audit": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "benchmark_providers": {
+        "count": 8,
+        "sha256": "8b65cd8b1a661eb667f4d6e496aebdd415cc614fe371d1608b23b15af52298a6"
+      },
+      "benchmark_topic_rule_audit": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "benchmark_topic_rules": {
+        "count": 9,
+        "sha256": "3c67d1b39bd478680afbd445b24b693bfb05de0e54904173f69ad1df40545f77"
+      },
+      "benefit_observations": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "benefit_product_relations": {
+        "count": 116,
+        "sha256": "27206f46665eb08a31e80c88e12bf5c7c262df4798964a74435ebbedf3a93b52"
+      },
+      "benefit_resource_sources": {
+        "count": 116,
+        "sha256": "8812ade7469904723a060a2158e36c766e31e822b253adcd8dcb3e018cfe3334"
+      },
+      "benefit_resources": {
+        "count": 35,
+        "sha256": "7c44d4447a6e5670666d69150b98e69fdcebe72112d75cbfe78451111a99a9c7"
+      },
+      "buy_checks": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "events": {
+        "count": 924,
+        "sha256": "fea26c50d5f5391a3e50cb278037a5463792ea3035b9da3f6c39fa1f91feb0c9"
+      },
+      "link_resolutions": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "merchant_page_checks": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "notification_deliveries": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "notifications": {
+        "count": 35,
+        "sha256": "6f68eafe09a93e0d51f93ce775861971c1da13c108a54378f7c6041ceb7f836c"
+      },
+      "opportunities": {
+        "count": 924,
+        "sha256": "ba37399c7cd54f3483c3935a98aadcc64ef510cfe29f7484c2c7f675d8bf6293"
+      },
+      "public_price_observations": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "quotes": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "review_runs": {
+        "count": 1,
+        "sha256": "81708df4ca91a27e65ff177c4c1aecdbf1ee93559fb3715db5fb3e7d33c67d17"
+      },
+      "source_candidates": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "sources": {
+        "count": 43,
+        "sha256": "71194ec6f521d8c0a644206c14ac92e7b25c22a68f2a4f31945557828c6f840c"
+      },
+      "strategies": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "trades": {
+        "count": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "backup": "/private/tmp/opportunity-s01-s02/pre-migration.sqlite3"
+  },
+  "real_browser_observation": {
+    "observed_on": "2026-10-09",
+    "precision": "day; inspection tool output retained in conversation",
+    "discovery_url": "https://web.m.taobao.com/app/ltao-fe/tbmx-pc-page/home",
+    "entry_product_url": "https://detail.tmall.com/item.htm?id=1053396412905&skuId=6252277515678",
+    "final_url": "https://item.taobao.com/item.htm?ft=t&id=1053396412905&skuId=6252277515678",
+    "title": "心相印茶语经典抽纸3层100抽日用餐巾纸面巾纸卫生纸",
+    "spec_text": "100抽；1包【经典茶语】",
+    "page_price_cents": 201,
+    "reference_cents": 378,
+    "page_discount_cents": 177,
+    "capture_context": "existing browser session, NOT anonymous proven; not checkout; not imported into product DB",
+    "price_dom_excerpt": "<div class=\"highlightPrice--asfw5V1e\" style=\"color:#FFFFFF\"><span class=\"title--xbzcSemP\">秒杀价</span><span class=\"symbol--ZqZXkLDL\">￥</span><span class=\"text--jyiUrkMu\">2.01</span></div>",
+    "reference_dom_excerpt": "<div class=\"subPrice--empS5uv8\" style=\"color:#FFFFFF\"><span class=\"title--xbzcSemP\">优惠前</span><span class=\"text--jyiUrkMu\">￥</span><span class=\"text--jyiUrkMu\">3.78</span></div>",
+    "excerpt_kind": "public DOM excerpt from browser tool; no account or shipping information retained"
+  },
+  "anonymous_http": [
+    {
+      "url": "https://web.m.taobao.com/app/ltao-fe/tbmx-pc-page/home",
+      "status": 200,
+      "bytes": 16910,
+      "sha256": "9e4679df5d6899a4e636fc2fdc601fec21a2aa36e2644abf30058aa396d8c07b",
+      "product_links": 0
+    },
+    {
+      "url": "https://item.taobao.com/item.htm?id=1053396412905&skuId=6252277515678",
+      "status": 200,
+      "bytes": 5044,
+      "sha256": "34fd8d648974d46ddd2db8fb5873264349fe29aab416eebef3944bb5610c2d82",
+      "price_panel": false
+    }
+  ],
+  "ui_check": {
+    "database": "isolated synthetic fixture only",
+    "url": "http://127.0.0.1:5003/sources",
+    "expanded_visible": "上游条目 2 · 可解析报价 1 · 优惠候选 1 · 拒绝 1；后续页读取失败；可从第2页继续；拒绝条目原文 {}",
+    "live_page": "http://127.0.0.1:5002/sources rendered successfully",
+    "worker": "not started; real automatic cycles NOT_RUN"
+  }
+}

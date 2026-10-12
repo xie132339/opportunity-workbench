@@ -31,6 +31,7 @@ from notifier import active_channels, deliver
 from scanner import review_taobao_backlog, scan_all, scan_source, strategy_matches
 from services.link_resolution_worker import run_periodically as run_link_resolution_worker
 from services.taobao_sync_validation import detail_batch_limit, validate_taobao_syncs
+from services.taobao_campaigns import refresh_due_campaigns
 from xianyu import api as xianyu_api, snapshot as xianyu_snapshot
 from offer import RESOURCE_LABELS, TOPIC_LABELS, product_subcategory, paper_package_prices
 from services.money import COST_FIELDS, cents, money
@@ -92,11 +93,14 @@ def complete_taobao_syncs(source_results):
 
 def run_taobao_cycle():
     """Collect official Taobao material and audit every synchronized record."""
+    campaigns = refresh_due_campaigns(env=os.environ)
     sources = scan_all(due_only=True, method="taobao_alliance")
     backlog = review_taobao_backlog()
-    if not sources and not backlog["selected"]:
+    if not campaigns and not sources and not backlog["selected"]:
         return {}
     result = {"sources": sources, "review_backlog": backlog}
+    if campaigns:
+        result["campaigns"] = campaigns
     if sources:
         result["post_sync_validation"] = complete_taobao_syncs(sources)
     return result

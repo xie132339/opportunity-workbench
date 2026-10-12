@@ -18,8 +18,9 @@ import requests
 
 API_ENDPOINT = "https://eco.taobao.com/router/rest"
 API_METHOD = "taobao.tbk.dg.material.optional.upgrade"
+ACTIVITY_INFO_METHOD = "taobao.tbk.activity.info.get"
 CHINA_TZ = timezone(timedelta(hours=8))
-ALLOWED_SEARCH_PARAMS = frozenset({"q", "cat", "start_price", "end_price", "is_tmall", "page_no", "page_size", "has_coupon", "max_pages"})
+ALLOWED_SEARCH_PARAMS = frozenset({"q", "material_id", "cat", "start_price", "end_price", "is_tmall", "page_no", "page_size", "has_coupon", "max_pages"})
 TAOBAO_ITEM_HOSTS = frozenset({"item.taobao.com", "m.taobao.com", "h5.m.taobao.com"})
 TMALL_ITEM_HOSTS = frozenset({"detail.tmall.com", "chaoshi.detail.tmall.com"})
 SELLER_MARKETPLACES = {"0": "taobao", "1": "tmall"}
@@ -84,8 +85,17 @@ def search_config(source_url):
         raise ValueError("淘宝联盟入口包含不支持或重复的搜索参数")
     values = dict(pairs)
     keyword = values.get("q", "").strip()
-    if not keyword or len(keyword) > 100:
-        raise ValueError("淘宝联盟搜索词 q 必填，长度不超过 100 个字符")
+    material_id = values.get("material_id", "").strip()
+    if keyword and len(keyword) > 100:
+        raise ValueError("淘宝联盟搜索词 q 长度不超过 100 个字符")
+    if material_id and not re.fullmatch(r"[0-9]{1,24}", material_id):
+        raise ValueError("淘宝联盟物料 ID 必须为 1 到 24 位数字")
+    if not keyword and not material_id:
+        raise ValueError("淘宝联盟入口必须提供搜索词 q 或官方商品物料 ID material_id")
+    if keyword:
+        values["q"] = keyword
+    if material_id:
+        values["material_id"] = material_id
     for key in ("start_price", "end_price"):
         if key in values:
             try:
@@ -300,6 +310,7 @@ def parse_item(item, now=None):
 
     coupon_amount_cents = _optional_cents(item.get("coupon_amount"))
     coupon_threshold_cents = _optional_cents(item.get("coupon_start_fee"))
+    commission_amount_cents = _optional_cents(item.get("commission_amount"))
     coupon_start = _datetime(item.get("coupon_start_time"))
     coupon_end = _datetime(item.get("coupon_end_time"))
     event_start = _datetime(item.get("event_start_time"))
@@ -393,6 +404,7 @@ def parse_item(item, now=None):
                 "presale_deposit", "presale_start_time", "presale_end_time",
                 "presale_tail_start_time", "presale_tail_end_time",
                 "final_promotion_price", "final_promotion_path", "predict_rounding_up_price_desc",
+                "commission_amount", "commission_rate", "income_rate", "commission_type",
             ) if key in item
         },
         "taobao_alliance_offer": {
@@ -404,6 +416,10 @@ def parse_item(item, now=None):
             "seller_type": str(item.get("user_type") or ""),
             "reserve_price_cents": reserve_cents,
             "promotion_price_cents": promotion_cents,
+            "commission_amount_cents": commission_amount_cents,
+            "commission_rate": str(item.get("commission_rate") or "").strip()[:40],
+            "income_rate": str(item.get("income_rate") or "").strip()[:40],
+            "commission_type": str(item.get("commission_type") or "").strip()[:80],
             "promotion_discount_cents": discount_cents,
             "quote_price_cents": quote_cents,
             "quote_basis": quote_basis,
@@ -521,6 +537,8 @@ def _upgrade_item(item):
     ids = parse_qs(parsed.query).get("id", [])
     numeric_id = ids[0] if len(ids) == 1 and ids[0].isdigit() else ""
     new_id = str(item.get("item_id") or "").strip()
+    income = publish.get("income_info")
+    income = income if isinstance(income, dict) else {}
     normalized = {
         "num_iid": numeric_id,
         "item_id": new_id,
@@ -534,6 +552,13 @@ def _upgrade_item(item):
         "final_promotion_path": (price.get("final_promotion_path_list") or {}).get("final_promotion_path_map_data")
             if isinstance(price.get("final_promotion_path_list"), dict) else None,
         "predict_rounding_up_price_desc": price.get("predict_rounding_up_price_desc"),
+        # The documented V2 response keeps the concrete commission amount
+        # under publish_info.income_info. Preserve it as returned; callers
+        # must not derive an amount from a rate.
+        "commission_amount": income.get("commission_amount"),
+        "commission_rate": income.get("commission_rate"),
+        "income_rate": publish.get("income_rate"),
+        "commission_type": publish.get("commission_type"),
     }
     presale = item.get("presale_info")
     if isinstance(presale, dict):
@@ -583,28 +608,27 @@ def _signature(parameters, secret):
     return hmac.new(secret.encode("utf-8"), source.encode("utf-8"), hashlib.md5).hexdigest().upper()
 
 
-def _fetch_page(source_url, *, http_get=None, env=None, now=None, report=None):
-    """Fetch one bounded official API page and return scanner-compatible rows."""
+def _request_top_payload(method, business_params, *, http_get=None, env=None, now=None, report=None):
+    """Call one signed TOP endpoint and retain request-neutral diagnostics.
+
+    The caller supplies only documented business parameters.  Credentials are
+    read from the local environment, used for the signature, and never copied
+    into reports or persisted campaign metadata.
+    """
     env = os.environ if env is None else env
     missing = configuration_error(env)
     if missing:
         raise TaobaoAllianceConfigurationError(missing)
-    query = search_config(source_url)
-    query.pop("max_pages", None)
     now = now or datetime.now(CHINA_TZ)
     params = {
-        "method": API_METHOD,
+        "method": method,
         "app_key": str(env["TAOBAO_ALLIANCE_APP_KEY"]).strip(),
         "sign_method": "hmac",
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "format": "json",
         "v": "2.0",
         "adzone_id": str(env["TAOBAO_ALLIANCE_ADZONE_ID"]).strip(),
-        # false is TOP's documented default: do not restrict the feed to
-        # coupon-bearing items; admission below still requires a real price drop
-        # or a fully structured, current one-item coupon candidate.
-        "has_coupon": "false",
-        **query,
+        **business_params,
     }
     params["sign"] = _signature(params, str(env["TAOBAO_ALLIANCE_APP_SECRET"]))
     get = http_get or requests.get
@@ -645,27 +669,76 @@ def _fetch_page(source_url, *, http_get=None, env=None, now=None, report=None):
                 report["top_error_code"] = code
                 report["top_sub_code"] = sub_code
             reason = "api_package_unavailable" if sub_code == "isv.permission-api-package-limit" else "api_error"
-            raise TaobaoAllianceAPIError(f"淘宝联盟 API 返回错误（code={code}, sub_code={sub_code}）", reason)
-        response_body = (payload.get("tbk_dg_material_optional_upgrade_response")
-                         if isinstance(payload, dict) else None)
-        if not isinstance(response_body, dict) and isinstance(payload, dict):
-            response_body = payload.get("tbk_dg_material_optional_response")
-        if isinstance(response_body, dict) and report is not None:
-            try:
-                total_results = int(response_body.get("total_results"))
-            except (TypeError, ValueError):
-                total_results = None
-            if total_results is not None and 0 <= total_results <= 1_000_000:
-                # This is a response-scoped count.  It is retained in the raw
-                # page audit and used only to avoid probing pages which TOP has
-                # already declared outside this result set.
-                report["official_total_results"] = total_results
-        return _rows_from_payload(payload, now=now, report=report)
+            raise TaobaoAllianceAPIError(f"淘宝联盟 API 返回错误（code={code}, sub_code={sub_code}）", reason, sub_code)
+        if not isinstance(payload, dict):
+            raise TaobaoAllianceAPIError("淘宝联盟 API 响应不是 JSON 对象", "schema_mismatch")
+        return payload
     except requests.RequestException as exc:
         raise TaobaoAllianceAPIError(f"淘宝联盟 API 读取失败（{type(exc).__name__}）", "network_error") from exc
     finally:
         response.close()
 
+
+def _fetch_page(source_url, *, http_get=None, env=None, now=None, report=None):
+    """Fetch one bounded official API page and return scanner-compatible rows."""
+    query = search_config(source_url)
+    query.pop("max_pages", None)
+    query.setdefault("has_coupon", "false")
+    payload = _request_top_payload(API_METHOD, query, http_get=http_get, env=env, now=now, report=report)
+    response_body = payload.get("tbk_dg_material_optional_upgrade_response")
+    if not isinstance(response_body, dict):
+        response_body = payload.get("tbk_dg_material_optional_response")
+    if isinstance(response_body, dict) and report is not None:
+        try:
+            total_results = int(response_body.get("total_results"))
+        except (TypeError, ValueError):
+            total_results = None
+        if total_results is not None and 0 <= total_results <= 1_000_000:
+            report["official_total_results"] = total_results
+    return _rows_from_payload(payload, now=now, report=report)
+
+
+def _official_activity_link(value):
+    value = str(value or "").strip()
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if (parsed.scheme == "https" and parsed.path and
+            (host == "taobao.com" or host.endswith(".taobao.com")
+             or host == "tmall.com" or host.endswith(".tmall.com"))):
+        return value
+    return ""
+
+
+def fetch_activity_info(activity_material_id, *, http_get=None, env=None, now=None, report=None):
+    """Read one official activity hall; this never turns a hall into a product.
+
+    ``activity_material_id`` belongs only to the activity-info endpoint.  The
+    optional product-feed ``material_id`` remains a separate source setting.
+    """
+    activity_material_id = str(activity_material_id or "").strip()
+    if not re.fullmatch(r"[0-9]{1,24}", activity_material_id):
+        raise ValueError("官方活动 ID 必须为 1 到 24 位数字")
+    if report is not None:
+        report.update(endpoint=API_ENDPOINT, method=ACTIVITY_INFO_METHOD,
+                      activity_material_id=activity_material_id,
+                      captured_at=(now or datetime.now(CHINA_TZ)).isoformat())
+    payload = _request_top_payload(
+        ACTIVITY_INFO_METHOD, {"activity_material_id": activity_material_id},
+        http_get=http_get, env=env, now=now, report=report,
+    )
+    response = payload.get("tbk_activity_info_get_response")
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, dict):
+        raise TaobaoAllianceAPIError("淘宝联盟活动 API 未返回 data", "schema_mismatch")
+    return {
+        "activity_material_id": activity_material_id,
+        "page_name": str(data.get("page_name") or "").strip()[:256],
+        "page_start_time": str(data.get("page_start_time") or "").strip()[:64],
+        "page_end_time": str(data.get("page_end_time") or "").strip()[:64],
+        "promotion_url": _official_activity_link(data.get("click_url")),
+        "short_promotion_url": _official_activity_link(data.get("short_click_url")),
+        "raw_payload": payload,
+    }
 
 def fetch_rows(source_url, *, http_get=None, env=None, now=None, report=None):
     """Bounded pages; preserve rejected input and partial success for diagnosis."""

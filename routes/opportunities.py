@@ -11,7 +11,7 @@ from offer import detected_offer_type, resource_topic
 from scanner import _public_url
 from link_resolution import enrich as enrich_links, resolution_cache
 from services.source_freshness import CATALOG_LISTING_PARSERS
-from services.product_search import listing_quote, quote_note
+from services.product_search import affiliate_promotion, listing_quote, quote_note
 from services.public_campaign import parse_public_campaign
 from services.money import cents
 from services.opportunity_analysis import public_profit_estimate
@@ -45,6 +45,7 @@ def opportunity(opportunity_id):
         resolved= enrich_links(identity_row,resolution_cache(db,[identity_row]))
         display_topic=resource_topic(opp['title'],opp['source_category'] or '')
         opp=dict(opp,metadata_json=resolved['metadata_json'],topic=display_topic,display_topic=display_topic)
+        opp['affiliate_promotion'] = affiliate_promotion(opp)
         if opp.get('auto_state') in ('campaign_upcoming','campaign_active'):
             campaign_text='\n'.join(str(value or '') for value in
                                      (opp.get('title'),opp.get('snippet'),

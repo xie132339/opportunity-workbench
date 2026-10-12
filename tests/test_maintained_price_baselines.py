@@ -266,14 +266,18 @@ class MaintainedPriceBaselineRouteTests(unittest.TestCase):
             ).lastrowid
             conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
                 VALUES(?,'observed','官方推广价',800)""", (opportunity_id,))
-        without_baseline = self.client.get("/?q=清风&buy_platform=taobao&layout=list").get_data(as_text=True)
+        without_baseline = self.client.get(
+            "/?q=清风&buy_platform=taobao&minimum_discount=0&layout=list"
+        ).get_data(as_text=True)
         self.assertIn("清风 原木 3层抽纸 100抽*6包", without_baseline)
         self.assertNotIn("按维护基准：可捡漏", without_baseline)
         self.client.post("/price-benchmarks/maintained", data=self.form_data())
-        page = self.client.get("/?q=清风&buy_platform=taobao&layout=list").get_data(as_text=True)
+        page = self.client.get(
+            "/?q=清风&buy_platform=taobao&minimum_discount=0&layout=list"
+        ).get_data(as_text=True)
         self.assertIn("清风 原木 3层抽纸 100抽*6包", page)
         self.assertIn("按维护基准：可捡漏", page)
-        self.assertIn("清风原木 3层抽纸 v1", page)
+        self.assertIn("¥1.33/每 100 抽", page)
 
 
 if __name__ == "__main__":

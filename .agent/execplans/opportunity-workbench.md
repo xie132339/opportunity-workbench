@@ -77,3 +77,65 @@
 - 分页修正：官方 `total_results` 不是当前应用可访问物料数。现实现保留它作为审计上界，并在短页、重复页或官方页上界时停止，避免假称“全站全量”。
 - 性能修正：淘宝 worker 的复审现在仅处理淘宝来源；此前它会对所有历史连接器执行全库复审，造成新的官方同步被无关历史记录拖慢。普通全渠道 worker 保持原来的全量复审行为。
 - 验收：`PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m unittest discover -s tests` 通过，297 项；2026-10-11 已启动最新网页服务和淘宝 worker。`/health` 返回数据库正常，`/sources` 实际显示 #44—#49 六个主题，所有主题启用、60 分钟、状态为 `healthy`。
+
+## 2026-10-12 官方活动与官方优惠排序
+
+### Purpose and observable outcome
+
+运营者能在“官方活动”维护一个来自淘宝联盟官方公告的活动会场 ID，并可选地绑定该活动对应的商品物料 ID。会场只展示官方入口、名称和时间；只有商品物料 ID 建立的联盟来源才进入现有定时采集。默认官方优惠列表按每条物料的单一、可解释优惠额排序，不能把多个优惠路径叠加为“最优惠”。
+
+### Scope, constraints and assumptions
+
+- 只调用推广者 API `taobao.tbk.activity.info.get` 和已运行的 `taobao.tbk.dg.material.optional.upgrade`；不调用服务商 `sc` 接口。
+- `activity_material_id` 与商品 `material_id` 分栏保存，绝不互相猜测或转换。
+- 未配置真实、当前活动 ID 时只做 Mock 契约验证；不得写入伪造活动或商品。
+- 不外发推广文案；页面只展示由官方短链生成的可复制文本。
+
+### Progress
+
+- [x] (2026-10-12 Asia/Shanghai) 查明官方活动 API 使用 `activity_material_id`，商品物料 API 使用可选 `material_id`，两者职责不同。
+- [x] (2026-10-12 Asia/Shanghai) 实现活动配置、核验和独立会场页面；活动与商品物料分表存储，worker 按活动自己的间隔核验会场。
+- [x] (2026-10-12 Asia/Shanghai) 实现基于单一官方解释路径的优惠额/比例排序，并将官方优惠额设为默认排序。
+- [x] (2026-10-12 Asia/Shanghai) Mock 契约、路由和全量回归通过；真实活动 API 仍需运营者在页面填写当前官方 ID 后验收。
+
+### Validation and acceptance
+
+1. Mock 活动 API 必须收到 `method=taobao.tbk.activity.info.get`、活动 ID 和推广位 ID，且响应中不记录 AppSecret。
+2. 新活动的可选商品物料 ID 必须创建可由现有 worker 调度的 `taobao_alliance` 来源；只填活动 ID 不得生成商品。
+3. 两条具备不同官方优惠额/比例的物料按指定排序稳定排列；同一物料多优惠路径不叠加。
+4. `unittest discover -s tests`、`git diff --check`、本地 HTTP 路由检查通过。
+
+### Evidence
+
+- `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m unittest discover -s tests`：333 项通过。
+- `bash scripts/workbench.sh restart` 后，`/health` 返回 `status=ok`；`/taobao-campaigns` 实际呈现“官方活动 ID / 商品物料 ID”，默认商品页呈现官方优惠额排序和比例切换链接。
+- 未调用真实活动 API：当前数据库未配置真实、有效的 `activity_material_id`，因此不把 Mock 结果写为十一活动已接入。
+
+### Decisions
+
+- 2026-10-12：活动页不把会场链接当商品链接或商品价格。原因是会场 API 只能证明会场信息，不能证明其中任一商品的当前结算价。
+- 2026-10-12：默认排序改为“官方可解释优惠额从高到低”；“维护基准可捡漏优先”保留为显式排序，避免本地未维护规则影响官方活动发现。
+
+## 2026-10-12 节日大促参与入口
+
+### Purpose and observable outcome
+
+运营者可独立维护双11、618、双12、年货节或自定义节日的官方会场和活动商品物料。用户能在“节日大促”页看到当前活动的官方会场入口，以及按实际单品参与条件划分的“可直接参与”和“需凑单后再核验”商品；普通活动页仍保留为通用会场配置。
+
+### Decisions and rules
+
+- 节日配置以 `festival_promotions` 一对一关联既有 `taobao_campaigns`，复用会场核验、凭据保护、商品物料来源和 worker，不新建平行采集器。
+- 直降、已满足单品门槛的有效券、可完整复算的官方促销路径才是“可直接参与”。每条商品仍只取一条可解释优惠，不叠加。
+- 券门槛未达到时只显示还差金额和凑单提醒，不能参加最优排序。未返回条件的物料仅计数。
+- 排序是当前活动物料的发现优先级：优惠额降序、优惠比例次序、参与复杂度；不是账号结算价或全网最低价。
+
+### Validation and evidence
+
+1. 新增夹具覆盖直降、满足单件门槛的券、未满足门槛的券：前两项进入直接参与并按优惠排序，后者仅进入凑单观察。
+2. 节日配置与通用活动记录分别保存，`activity_material_id` 与 `material_id` 仍不混用。
+3. 专项 `tests.test_festival_promotions tests.test_taobao_campaigns tests.test_taobao_alliance`：70 项通过；全量 `unittest discover -s tests`：338 项通过；`git diff --check` 通过。
+4. 当前源码服务重启后，`/health` 返回 `status=ok`，`/festival-promotions` HTTP 返回“节日大促、双11、618、可直接参与、需凑单后再核验、最优参与”。
+
+### Remaining external evidence boundary
+
+当前尚未填入真实、有效的双11或618活动 ID/活动商品物料 ID。页面、数据结构和规则已就绪，但不能将夹具排序称为真实节日活动结果；录入官方公告中的当前 ID 后，必须以实际返回的会场和物料完成 AC-09 回放。

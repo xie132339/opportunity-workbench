@@ -64,7 +64,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all&view=ready').get_data(as_text=True))
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all&view=offers').get_data(as_text=True))
             self.assertIn('/opportunities/1',c.get('/?buy_platform=all&view=all').get_data(as_text=True))
-            self.assertIn('未形成可用报价',c.get('/?buy_platform=all&view=current').get_data(as_text=True))
+            self.assertIn('金额待确认',c.get('/?buy_platform=all&view=current').get_data(as_text=True))
 
     def test_missing_price_is_visible_as_a_fresh_lead_not_a_notice(self):
         self.seed('终于活动开始了','没有具体价格','missing_price',None)
@@ -75,7 +75,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all&view=ready').get_data(as_text=True))
             lead_page=c.get('/?buy_platform=all&view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',lead_page)
-            self.assertIn('未形成可用报价',lead_page)
+            self.assertIn('暂无报价',lead_page)
             self.assertNotIn('金额未提取',lead_page)
             self.assertNotIn('金额口径待确认',lead_page)
             self.assertIn('/opportunities/1',c.get('/?buy_platform=all&view=all').get_data(as_text=True))
@@ -126,14 +126,14 @@ class AdmissionTests(unittest.TestCase):
             clue=c.get('/?buy_platform=all&view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',clue)
             self.assertIn('¥5.00',clue)
-            self.assertIn('标题金额线索',clue)
-            self.assertIn('不参与低价排序',clue)
+            self.assertIn('金额待确认',clue)
+            self.assertNotIn('来源原文整单声称价',clue)
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all').get_data(as_text=True))
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all&budget=5').get_data(as_text=True))
         with db.connect() as c:
             c.execute("UPDATE events SET snippet='该价格商品规格：100抽3层6包，商品原价10元，活动售价5元，下单1件，实付5元，包邮'")
         with app.test_client() as c:
-            budget=c.get('/?buy_platform=all&budget=5').get_data(as_text=True)
+            budget=c.get('/?buy_platform=all&view=current&budget=5').get_data(as_text=True)
             self.assertIn('/opportunities/1',budget)
             self.assertIn('来源原文整单声称价 · 1件',budget)
 
@@ -175,7 +175,7 @@ class AdmissionTests(unittest.TestCase):
         body='该价格商品规格：100抽3层6包\n商品原价10元，活动售价5元，下单1件，实付5元，包邮'
         self.seed('某品牌抽纸100抽3层6包 5元',body,'observed',500)
         with app.test_client() as c:
-            text=c.get('/?buy_platform=all').get_data(as_text=True)
+            text=c.get('/?buy_platform=all&view=current').get_data(as_text=True)
             self.assertIn('/opportunities/1',text)
             self.assertIn('公开优惠',text)
             self.assertIn('入口抓取正常',text)
@@ -192,7 +192,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertIn('自动分析不会等待商家人工核实',verified)
             archive=c.get('/?buy_platform=all&view=all&layout=cards').get_data(as_text=True)
             self.assertIn('/opportunities/1',archive);self.assertIn('来源原文整单声称价 · 1件',archive)
-            cards=c.get('/?buy_platform=all&layout=cards').get_data(as_text=True)
+            cards=c.get('/?buy_platform=all&view=current&layout=cards').get_data(as_text=True)
             self.assertIn('来源原文整单声称价 · 1件',cards)
             self.assertNotIn('公开商品页观测：',cards)
             self.assertIn('来源原文整单声称价 · 1件',cards)
@@ -263,7 +263,8 @@ class AdmissionTests(unittest.TestCase):
         self.seed('某品牌抽纸100抽3层6包 5元','活动售价5元，下单1件，实付5元，包邮','observed',500)
         with app.test_client() as c:
             current=c.get('/?buy_platform=all&view=current').get_data(as_text=True)
-            self.assertIn('标题规格线索：100抽 × 3层 × 6包（未确认报价对应变体）',current)
+            self.assertIn('100抽 × 3层 × 6包',current)
+            self.assertNotIn('未确认报价对应变体',current)
             self.assertNotIn('原文明示报价规格：100抽 × 3层 × 6包',current)
             self.assertIn('/opportunities/1',current)
             self.assertNotIn('/opportunities/1',c.get('/?buy_platform=all&view=ready').get_data(as_text=True))

@@ -132,7 +132,7 @@ class CoreFlowTests(unittest.TestCase):
                         (resource_id,source_key,source_type,source_opportunity_id,source_title)
                         VALUES(?,'opportunity:1','collected',1,'测试纸')""",(cursor.lastrowid,))
         center=self.client.get('/?buy_platform=all&view=all').get_data(as_text=True)
-        self.assertIn('本商品优惠',center);self.assertIn('原文关联 1 个入口',center)
+        self.assertIn('本商品优惠',center);self.assertIn('优惠线索 1 条',center)
         self.assertNotIn('优惠资源归属台账',center)
         detail=self.client.get('/opportunities/1').get_data(as_text=True)
         self.assertIn('本商品能用什么优惠',detail);self.assertIn('系统从公开来源识别到明确适用本商品的优惠：0 个',detail)
@@ -202,10 +202,10 @@ class CoreFlowTests(unittest.TestCase):
         self.assertIn('全部时间匹配 3 条',text)
         self.assertIn('当前时效可见 2 条',text)
         self.assertIn('过期 1 条',text)
-        self.assertIn('2 个关联入口；独立性未证',text)
+        self.assertIn('关联 2',text)
         self.assertIn('测试 · 测试',text)
         self.assertIn('逛丢 · 纸品线索',text)
-        self.assertIn('标题与正文完全相同',text)
+        self.assertNotIn('标题与正文完全相同',text)
         self.assertIn('/opportunities/1',text)
         self.assertIn('/opportunities/2',text)
         self.assertNotIn('/opportunities/3',text)
@@ -276,14 +276,42 @@ class CoreFlowTests(unittest.TestCase):
         current=self.client.get('/?buy_platform=all&view=current').get_data(as_text=True)
         self.assertIn('/opportunities/1',current)
         self.assertIn('当前线索池',current)
-        self.assertIn('未形成可用报价',current)
+        self.assertIn('暂无报价',current)
         offers=self.client.get('/?buy_platform=all&view=offers').get_data(as_text=True)
         self.assertNotIn('/opportunities/1',offers)
         self.assertIn('公开优惠',offers)
-        self.assertIn('row-gaps',current)
+        self.assertNotIn('row-gaps',current)
         ready=self.client.get('/?buy_platform=all&view=ready').get_data(as_text=True)
         self.assertNotIn('/opportunities/1',ready)
         self.assertIn('当前达到比较准入的报价',ready)
+
+    def test_pagination_direct_links_preserve_filters_and_open_requested_page(self):
+        with db.connect() as c:
+            for number in range(101):
+                key=f'pagination-{number}'
+                event=c.execute("""INSERT INTO events(source_id,external_key,title,url,fingerprint,published_at)
+                    VALUES(1,?,?,?, ?,CURRENT_TIMESTAMP)""",
+                                (key, f'分页回归商品 {number}', f'https://example.com/{key}', key)).lastrowid
+                c.execute("""INSERT INTO opportunities(event_id,source_id,title,category,url)
+                    VALUES(?,1,?,'零售优惠',?)""",
+                          (event, f'分页回归商品 {number}', f'https://example.com/{key}'))
+
+        first=self.client.get('/?q=分页回归商品&buy_platform=all&view=all&layout=list'
+                              '&sort=commission_high&minimum_discount=5')
+        first_html=first.get_data(as_text=True)
+        self.assertEqual(first.status_code,200)
+        self.assertIn('aria-label="跳转第 2 页"',first_html)
+        self.assertIn('sort=commission_high',first_html)
+        self.assertIn('minimum_discount=5',first_html)
+        self.assertIn('第 1 / 2 页 · 每页 100 条',first_html)
+
+        second=self.client.get('/?q=分页回归商品&buy_platform=all&view=all&layout=list'
+                               '&sort=commission_high&minimum_discount=5&page=2')
+        second_html=second.get_data(as_text=True)
+        self.assertEqual(second.status_code,200)
+        self.assertIn('aria-current="page">2</span>',second_html)
+        self.assertIn('第 2 / 2 页 · 每页 100 条',second_html)
+        self.assertIn('分页回归商品 0',second_html)
 
     def test_channel_coverage_exposes_raw_to_product_and_quote_funnel(self):
         with db.connect() as c:
@@ -312,7 +340,7 @@ class CoreFlowTests(unittest.TestCase):
         self.assertIn(f'/opportunities/{opportunity}',current)
         self.assertIn('目录采集',current)
         self.assertIn('商城目录公开标价',current)
-        self.assertIn('商城目录观察期内',current)
+        self.assertIn('观察期内',current)
         self.assertIn('商城目录参考价 1 条',current)
         self.assertIn('¥1,899.00',current)
         default=self.client.get('/?buy_platform=all').get_data(as_text=True)

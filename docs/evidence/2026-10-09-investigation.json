@@ -1,0 +1,161 @@
+{
+  "recorded_at": "2026-10-09T02:33:21.517336+00:00",
+  "parser_probe": {
+    "source_sha256": "07db8cbc08f7a1aecec43ef617a1d85999d569d94088ef06b4e17ea9650d3970",
+    "mode": "synthetic offline; no requests; no database writes",
+    "frozen_now": "2026-10-09T12:00:00+08:00",
+    "base_input": {
+      "num_iid": "100000000001",
+      "title": "离线测试抽纸100抽20包",
+      "item_url": "https://item.taobao.com/item.htm?id=100000000001",
+      "reserve_price": "10",
+      "zk_final_price": "10",
+      "coupon_amount": "2",
+      "coupon_start_fee": "10",
+      "coupon_start_time": "2026-10-09 11:00:00",
+      "coupon_end_time": "2026-10-09 13:00:00",
+      "coupon_remain_count": "20"
+    },
+    "results": [
+      {
+        "case": "control",
+        "input_delta": {},
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "quote_cents": 800,
+        "coupon_remain_count": 20
+      },
+      {
+        "case": "missing_reference",
+        "input_delta": {
+          "reserve_price": null
+        },
+        "accepted": false,
+        "coupon_state": null,
+        "quote_cents": null,
+        "coupon_remain_count": null
+      },
+      {
+        "case": "numeric_zero",
+        "input_delta": {
+          "zk_final_price": "8",
+          "coupon_start_fee": "8",
+          "coupon_remain_count": 0
+        },
+        "accepted": true,
+        "coupon_state": "remaining_unknown",
+        "quote_cents": 800,
+        "coupon_remain_count": null
+      },
+      {
+        "case": "string_zero",
+        "input_delta": {
+          "zk_final_price": "8",
+          "coupon_start_fee": "8",
+          "coupon_remain_count": "0"
+        },
+        "accepted": true,
+        "coupon_state": "depleted",
+        "quote_cents": 800,
+        "coupon_remain_count": 0
+      },
+      {
+        "case": "date_only",
+        "input_delta": {
+          "coupon_start_time": "2026-10-09",
+          "coupon_end_time": "2026-10-09"
+        },
+        "accepted": false,
+        "coupon_state": null,
+        "quote_cents": null,
+        "coupon_remain_count": null
+      },
+      {
+        "case": "exact_end",
+        "input_delta": {
+          "coupon_end_time": "2026-10-09 12:00:00"
+        },
+        "accepted": true,
+        "coupon_state": "active_candidate",
+        "quote_cents": 800,
+        "coupon_remain_count": 20
+      }
+    ]
+  },
+  "local_database_snapshot": {
+    "db_path": "/Applications/work/gitRepo/opportunity-workbench/data/workbench.sqlite3",
+    "scope": "local database file; active service DB not established",
+    "sources": [
+      {
+        "method": "html",
+        "status": "failed",
+        "enabled": 1,
+        "count": 5
+      },
+      {
+        "method": "html",
+        "status": "healthy",
+        "enabled": 1,
+        "count": 5
+      },
+      {
+        "method": "html",
+        "status": "paused",
+        "enabled": 0,
+        "count": 1
+      },
+      {
+        "method": "html",
+        "status": "pending",
+        "enabled": 0,
+        "count": 2
+      },
+      {
+        "method": "manual",
+        "status": "pending",
+        "enabled": 0,
+        "count": 2
+      },
+      {
+        "method": "monitor",
+        "status": "paused",
+        "enabled": 0,
+        "count": 1
+      },
+      {
+        "method": "rss",
+        "status": "paused",
+        "enabled": 0,
+        "count": 3
+      },
+      {
+        "method": "rsshub",
+        "status": "failed",
+        "enabled": 1,
+        "count": 5
+      },
+      {
+        "method": "rsshub",
+        "status": "healthy",
+        "enabled": 1,
+        "count": 2
+      },
+      {
+        "method": "rsshub",
+        "status": "paused",
+        "enabled": 0,
+        "count": 11
+      },
+      {
+        "method": "xianbao",
+        "status": "paused",
+        "enabled": 0,
+        "count": 6
+      }
+    ],
+    "events": 924,
+    "opportunities": 924
+  },
+  "runtime_database_confirmed": false,
+  "business_code_modified": false
+}

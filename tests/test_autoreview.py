@@ -503,7 +503,7 @@ class ReviewPipelineTests(unittest.TestCase):
         with app.test_client() as client:
             page=client.get('/?buy_platform=all&view=all').get_data(as_text=True)
             self.assertIn('/opportunities/1',page)
-            self.assertIn('未形成可用报价',page)
+            self.assertIn('金额待确认',page)
             # An isolated parser amount without a purchase plan cannot pass budget filters.
             self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&view=all&budget=13').get_data(as_text=True))
             self.assertNotIn('/opportunities/1',client.get('/?buy_platform=all&view=all&budget=12').get_data(as_text=True))
