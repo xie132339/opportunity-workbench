@@ -79,6 +79,16 @@ def create_app():
 
     application.add_template_filter(freshness_label, "freshness")
 
+    # Web 进程启动即确保校准数据新鲜：worker 每小时重算落盘，但 Gunicorn
+    # (wsgi:app) 不经过 app.py main()，此处兜底让 web 进程在表空/过期时
+    # 自行校准一次，避免生产环境停留在固定种子兜底。
+    try:
+        from services import discount_calibration
+        with connect() as connection:
+            discount_calibration.refresh_if_stale(connection)
+    except Exception:
+        application.logger.exception("discount calibration refresh failed at startup")
+
     @application.before_request
     def access_control_and_csrf_protection():
         if request.endpoint not in {"login", "health", "static"} and not signed_in(session):
