@@ -107,8 +107,13 @@ class FestivalPromotionTests(unittest.TestCase):
         html = page.get_data(as_text=True)
         self.assertIn("节日大促", html)
         self.assertIn("双11", html)
-        self.assertIn("最优参与", html)
+        self.assertIn("参与规则", html)
         self.assertIn("需凑单后再核验", html)
+        self.assertIn('href="/taobao-campaigns"', html)
+        self.assertNotIn('name="activity_material_id"', html)
+        self.assertNotIn('name="campaign_name"', html)
+        self.assertNotIn("festival_promotion_add", app.view_functions)
+        self.assertNotIn("festival_promotion_refresh", app.view_functions)
 
     def test_list_festivals_keeps_current_products_under_their_own_source(self):
         festival = self._festival()

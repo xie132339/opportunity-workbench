@@ -2,27 +2,11 @@
 {% block title %}节日大促 · 多平台机会工作台{% endblock %}
 {% block content %}
 <h1>节日大促</h1>
-<p class="muted">双11、618等活动单独维护。系统只使用淘宝联盟返回的活动会场和商品物料：会场用于进入活动，物料用于发现商品。榜单只排序可按单品参与的官方优惠；需要凑单和条件不足的商品不会混入“最优参与”。</p>
+<p class="muted">这是独立的节日优惠数据入口，只负责发现淘宝联盟商品物料、定时采集和按参与条件排序。活动会场维护保留在“官方活动”菜单，本页不重复配置会场 ID。</p>
 <section class="card">
   <h2>发现淘宝联盟官方促销物料</h2>
   <p class="muted">从官方推广者物料列表读取当前账号可用的促销商品物料。返回的物料不一定属于双11；先核对名称和有效期，再手动归入节日。商品物料 ID 只用于商品采集，不会当成活动会场 ID。</p>
   <form method="post" action="{{ url_for('festival_material_discover') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>查询当前官方促销物料</button></form>
-</section>
-<section class="card">
-  <h2>新增节日活动</h2>
-  <form method="post" action="{{ url_for('festival_promotion_add') }}" class="form-grid">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>节日类型<select name="festival_code" required>{% for code,label in festival_options %}<option value="{{ code }}">{{ label }}</option>{% endfor %}</select></label>
-    <label>节日年份<input name="festival_year" type="number" min="2020" max="2100" value="2026" required></label>
-    <label>自定义节日名称<input name="festival_name" maxlength="64" placeholder="仅选择自定义节日时必填"></label>
-    <label>会场名称<input name="campaign_name" maxlength="64" required placeholder="例如：主会场、家清专场"></label>
-    <label>官方活动 ID<input name="activity_material_id" required inputmode="numeric" pattern="[0-9]{1,24}" placeholder="公告或活动页给出的 activity_material_id"></label>
-    <label>商品物料 ID（可选）<input name="material_id" inputmode="numeric" pattern="[0-9]{1,24}" placeholder="填入后才会定时同步活动商品"></label>
-    <label>同步间隔（分钟）<input name="interval_minutes" type="number" min="15" max="1440" value="60" required></label>
-    <label>单品最低官方优惠额<input name="minimum_discount" type="number" min="0" step="0.01" value="5" required></label>
-    <div><button>保存并核验节日会场</button></div>
-  </form>
-  <p class="muted">活动 ID 不能当成商品物料 ID。没有商品物料 ID 时仅保留官方会场入口；不会生成商品，也不会显示“最优参与”。</p>
 </section>
 <section class="card">
   <h2>参与规则</h2>
@@ -40,8 +24,7 @@
   {% if festival.feed_type == 'official_material' %}
   <p>淘宝联盟官方促销物料 ID {{ festival.material_id }} · 物料有效期 {{ festival.material_start_time or '未返回' }} 至 {{ festival.material_end_time or '未返回' }} · 来源 #{{ festival.source_id }} · {{ festival.source_status or '待首次同步' }}</p>
   {% else %}
-  <p>{% if festival.short_promotion_url or festival.promotion_url %}<a href="{{ festival.short_promotion_url or festival.promotion_url }}" target="_blank" rel="noopener noreferrer">进入官方活动会场 ↗</a>{% else %}会场链接待官方核验{% endif %} · 活动 ID {{ festival.activity_material_id }}{% if festival.material_id %} · 商品物料 ID {{ festival.material_id }}{% endif %}</p>
-  <form method="post" action="{{ url_for('festival_promotion_refresh',festival_id=festival.id) }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">重新核验会场</button></form>
+  <p>此为既有官方会场记录；会场信息请到 <a href="{{ url_for('taobao_campaigns') }}">官方活动</a> 菜单维护。{% if festival.short_promotion_url or festival.promotion_url %}<a href="{{ festival.short_promotion_url or festival.promotion_url }}" target="_blank" rel="noopener noreferrer">进入官方会场 ↗</a>{% endif %}</p>
   {% endif %}
   {% if festival.products.direct %}<h3>可直接参与 · 按官方优惠优先</h3><div class="table-wrap"><table><thead><tr><th>商品</th><th>官方优惠</th><th>参与方式</th><th>入口</th></tr></thead><tbody>
   {% for product in festival.products.direct %}<tr><td><strong>{{ product.title }}</strong><small>物料最近更新 {{ product.last_seen_at }}</small></td><td>{{ money(product.discount.amount_cents) }}{% if product.discount.rate_basis_points is not none %}<small>约 {{ '%.1f'|format(product.discount.rate_basis_points / 100) }}%</small>{% endif %}<small>{{ product.discount.basis }}</small></td><td><strong>{{ product.participation.label }}</strong><small>{{ product.participation.action }}</small><small>{{ product.participation.caution }}</small></td><td><a href="{{ product.url }}" target="_blank" rel="noopener noreferrer">官方推广入口 ↗</a></td></tr>{% endfor %}
@@ -50,5 +33,5 @@
   {% if festival.products.unconfirmed_count %}<small>{{ festival.products.unconfirmed_count }} 条当前物料条件不足，未进入排序。</small>{% endif %}
   {% if festival.last_error %}<small>{{ festival.last_error }}</small>{% endif %}
 </section>
-{% endfor %}{% else %}<section class="card"><p>尚未配置节日大促。请从淘宝联盟官方公告详情复制活动 ID；如公告同时给出活动商品物料 ID，再填入后才会自动同步并生成参与榜单。</p></section>{% endif %}
+{% endfor %}{% else %}<section class="card"><p>还没有节日优惠数据。点击上方“查询当前官方促销物料”，核对淘宝联盟返回的物料名称和有效期，再加入对应节日监控。</p></section>{% endif %}
 {% endblock %}
