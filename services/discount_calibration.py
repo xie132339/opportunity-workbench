@@ -108,10 +108,155 @@ _SPEC_UNIT = {
     "包": "pack", "提": "pack",
     "瓶": "bottle", "支": "bottle", "粒": "bottle",
     "ml": "ml", "毫升": "ml",
-    "L": "liter", "升": "liter",
+    "L": "liter", "l": "liter", "升": "liter",
     "kg": "kg", "斤": "kg",
 }
 _SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(抽|张|片|包|提|瓶|支|粒|ml|毫升|L|升|kg|斤)", re.IGNORECASE)
+_BOX_RE = re.compile(r"(\d+(?:\.\d+)?)\s*箱")
+_BAG_RE = re.compile(r"(\d+(?:\.\d+)?)\s*袋")
+
+# 主流家用品牌词典（维护性数据，随主题关键词同步维护，非业务阈值）。
+# 品牌标准市场参考价 = 人工维护表（用户明确"维护这样的数据肯定能有的"）；
+# 单位为该主题的标准售卖单位市场价（用户：一件/一瓶/一包），跨主题品牌
+# （金龙鱼/福临门）按主题分列。初始值按主流渠道零售常识设定，**可在
+# BRAND_STANDARD_PRICES 直接增改**；判据只拦"折算标准单位到手价明显高于
+# 品牌标准市场价"（系数 BRAND_OVERPRICE_K），低规格引流/划线虚高被拦，
+# 整箱大促折算单价 ≤ 标准市场价则永远放行。
+BRAND_TERMS = {
+    "paper": ("维达", "清风", "洁柔", "心相印", "植护", "漫花", "丹娜丝", "怡飘",
+              "卡布", "可优比", "全棉时代", "得宝", "斑布", "顺清柔", "理文"),
+    "water": ("百岁山", "农夫山泉", "怡宝", "康师傅", "娃哈哈", "景田", "恒大冰泉",
+              "依云", "昆仑山", "屈臣氏"),
+    "rice": ("柴火大院", "十月稻田", "龙稻", "福临门", "金龙鱼", "北大荒", "香满园",
+             "孟乍隆", "华润五丰"),
+    "flour": ("金沙河", "五得利", "中裕", "金龙鱼", "福临门", "河套", "塞北雪", "新良", "展艺"),
+    "cooking_oil": ("金龙鱼", "鲁花", "福临门", "多力", "胡姬花", "刀唛", "西王",
+                    "九三", "长寿花", "欧丽薇兰", "千岛源"),
+    "laundry_detergent": ("蓝月亮", "立白", "超能", "威露士", "奥妙", "汰渍", "碧浪",
+                          "雕牌", "卫新", "花王", "狮王", "白猫"),
+}
+BRAND_STANDARD_PRICES = {
+    "paper": {
+        "维达": 300, "清风": 250, "洁柔": 300, "心相印": 280, "植护": 150, "漫花": 150,
+        "丹娜丝": 150, "怡飘": 150, "卡布": 1200, "可优比": 1200, "全棉时代": 600,
+        "得宝": 300, "斑布": 200, "顺清柔": 150, "理文": 150,
+    },
+    "water": {
+        "百岁山": 280, "农夫山泉": 180, "怡宝": 180, "康师傅": 150, "娃哈哈": 180,
+        "景田": 150, "恒大冰泉": 200, "依云": 1000, "昆仑山": 400, "屈臣氏": 300,
+    },
+    "rice": {
+        "柴火大院": 4000, "十月稻田": 3000, "龙稻": 4000, "福临门": 1200, "金龙鱼": 1200,
+        "北大荒": 1200, "香满园": 1000, "孟乍隆": 3000, "华润五丰": 1500,
+    },
+    "flour": {
+        "金沙河": 400, "五得利": 400, "中裕": 600, "金龙鱼": 700, "福临门": 700,
+        "河套": 1500, "塞北雪": 1000, "新良": 800, "展艺": 700,
+    },
+    "cooking_oil": {
+        "金龙鱼": 1500, "鲁花": 2400, "福临门": 1300, "多力": 2000, "胡姬花": 2000,
+        "刀唛": 3000, "西王": 1600, "九三": 1500, "长寿花": 1800, "欧丽薇兰": 3000,
+        "千岛源": 3000,
+    },
+    "laundry_detergent": {
+        "蓝月亮": 2000, "立白": 1500, "超能": 1500, "威露士": 2000, "奥妙": 1500,
+        "汰渍": 1500, "碧浪": 2000, "雕牌": 1200, "卫新": 1500, "花王": 3000,
+        "狮王": 3000, "白猫": 1000,
+    },
+}
+# 品牌单品参考判据系数：折算标准单位到手价高于该品牌标准市场价达该倍数
+# 以上视为"贵过市场价"（划线虚高/引流小规格）。1.2x 容忍渠道价差：整箱
+# 真品折算单价 ≈ 零售市场价（1.0-1.2 倍）放行，尝鲜小规格折算单价 2-3 倍
+# 拦截。
+BRAND_OVERPRICE_K = 1.2
+
+
+def brand_from_title(title, topic):
+    """Longest brand term present in a title for a managed topic (or None)."""
+    if not title:
+        return None
+    terms = BRAND_TERMS.get(topic) or ()
+    best = None
+    for term in terms:
+        if term in title and (best is None or len(term) > len(best)):
+            best = term
+    return best
+
+
+def spec_unit_price_cents(title, final_cents):
+    """Convert a final price to a standard-unit price (one 500ml bottle, one
+    100-sheet pack, one kg, one litre) so a brand market comparison is
+    meaningful across sizes.  Returns (unit_label, unit_price_cents) or None
+    when no usable spec can be extracted.
+
+    Multipliers: 箱×瓶/包, 袋×kg, 瓶×升.  Precedence: kg > litre > bottle+ml
+    (500ml) > bottle > pack+sheets (100-sheet pack) > pack.  A lone ml without
+    a bottle count ("570ml/瓶" style unit descriptions) is NOT a total-amount
+    spec and never converts.  Bulk deals (24瓶/10kg*5袋/400抽30包) collapse to
+    a low standard-unit price; 小规格尝鲜 (348ml×2 at ¥10) shows an inflated
+    unit price that the brand market check catches.
+    """
+    if not isinstance(final_cents, int) or isinstance(final_cents, bool) or final_cents <= 0:
+        return None
+    title = title or ""
+    specs = {}
+    for m in _SPEC_RE.finditer(title):
+        value = float(m.group(1))
+        family = _SPEC_UNIT.get(m.group(2).lower())
+        if family is not None:
+            specs[family] = max(specs.get(family, 0.0), value)
+    box = _BOX_RE.search(title)
+    bag = _BAG_RE.search(title)
+    if not specs:
+        return None
+    box_n = float(box.group(1)) if box else 1.0
+    bag_n = float(bag.group(1)) if bag else 1.0
+    bottle = specs.get("bottle")
+    ml = specs.get("ml")
+    kg = specs.get("kg")
+    liter = specs.get("liter")
+    pack = specs.get("pack")
+    sheet = specs.get("sheet")
+    if kg and kg > 0:
+        total = kg * bag_n * (bottle or 1.0)
+        return ("kg", int(final_cents / total))
+    if liter and liter > 0:
+        total = liter * (bottle or 1.0)
+        return ("liter", int(final_cents / total))
+    if bottle and ml and bottle > 0 and ml > 0:
+        total = bottle * box_n
+        return ("bottle500", int(final_cents / total * 500.0 / ml))
+    if bottle and bottle > 0:
+        total = bottle * box_n
+        return ("bottle", int(final_cents / total))
+    if pack and sheet and pack > 0 and sheet > 0:
+        total = pack * box_n
+        return ("pack100", int(final_cents / total * 100.0 / sheet))
+    if pack and pack > 0:
+        total = pack * box_n
+        return ("pack", int(final_cents / total))
+    return None
+
+
+def is_brand_market_overpriced(topic, title, final_cents):
+    """Whether a branded item's standard-unit price is ABOVE the brand's
+    standard market price (user: 优惠价金额只要小于等于品牌标准市场价；品牌品
+    都是标准价格，小于市场价才是真优惠).  The reference is the maintained
+    BRAND_STANDARD_PRICES table (per brand per topic, standard selling unit),
+    editable like the category dictionary.  Unknown brand, unparseable spec or
+    missing reference never gate (conservative, protects genuine bargains).
+    """
+    brand = brand_from_title(title, topic)
+    if brand is None:
+        return False
+    priced = spec_unit_price_cents(title, final_cents)
+    if priced is None:
+        return False
+    unit_label, unit_price = priced
+    standard = (BRAND_STANDARD_PRICES.get(topic) or {}).get(brand)
+    if not isinstance(standard, int):
+        return False
+    return unit_price > int(standard * BRAND_OVERPRICE_K)
 
 
 def small_spec_limits(title):
@@ -258,6 +403,7 @@ def calibrate(db):
 
     by_topic = {topic.key: [] for topic in CORE_LIVING_TOPICS}
     promo_values = {topic.key: [] for topic in CORE_LIVING_TOPICS}
+    brand_units = {}
     for row in rows:
         topic = topic_key(row["source_name"])
         if topic is None:
@@ -276,6 +422,13 @@ def calibrate(db):
             by_topic[topic].append((math.log10(promo), ratio, reserve - promo))
         else:
             by_topic[topic].append((math.log10(promo), None, 0))
+        # 品牌单品参考价：命中品牌且可折算标准单位价的记录，按 主题-品牌-单位 收集
+        title = row["title"] if ("title" in row.keys() and row["title"]) else ""
+        brand = brand_from_title(title, topic)
+        if brand is not None:
+            unit = spec_unit_price_cents(title, promo)
+            if unit is not None:
+                brand_units.setdefault(topic, {}).setdefault(brand, {}).setdefault(unit[0], []).append(unit[1])
 
     result = {}
     for topic, pairs in by_topic.items():
@@ -328,6 +481,16 @@ def calibrate(db):
             "deep_drop_threshold": round(_quantile([r for _lp, r, _d in pairs if r is not None], DEEP_DROP_QUANTILE), 4)
                 if any(r is not None for _lp, r, _d in pairs) else None,
             "sample_count": len(pairs),
+            "brand_reference_prices": {
+                brand: {
+                    unit_label: {
+                        "median_cents": int(_quantile(values, BRAND_REFERENCE_QUANTILE)),
+                        "sample_count": len(values),
+                    }
+                    for unit_label, values in units.items()
+                }
+                for brand, units in (brand_units.get(topic) or {}).items()
+            },
             "calibrated_at": _now_iso(),
         }
     return result

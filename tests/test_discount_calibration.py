@@ -311,3 +311,42 @@ class SmallSpecLimitsTests(unittest.TestCase):
             self.assertFalse(dc.is_low_value_small_item('paper', 790))
         finally:
             dc.set_calibration(None)
+
+
+class BrandMarketReferenceTests(unittest.TestCase):
+    """品牌标准市场价判据：优惠价 ≤ 品牌单品标准市场价才为真优惠。"""
+
+    def test_spec_unit_conversion_handles_multipliers_and_priority(self):
+        from services import discount_calibration as dc
+        self.assertEqual(dc.spec_unit_price_cents('百岁山348ml*2瓶', 1001), ('bottle500', 719))
+        self.assertEqual(dc.spec_unit_price_cents('百岁山570ml*24瓶', 6390), ('bottle500', 233))
+        self.assertEqual(dc.spec_unit_price_cents('百岁山348/570ml*24瓶*2箱', 9252), ('bottle500', 169))
+        self.assertEqual(dc.spec_unit_price_cents('柴火大米5kg*2袋', 40000), ('kg', 4000))
+        self.assertEqual(dc.spec_unit_price_cents('十月稻田10kg*5袋', 100000), ('kg', 2000))
+        self.assertEqual(dc.spec_unit_price_cents('蓝月亮3kg*2瓶', 5990), ('kg', 998))
+        self.assertEqual(dc.spec_unit_price_cents('金龙鱼5L', 7990), ('liter', 1598))
+        self.assertEqual(dc.spec_unit_price_cents('维达100抽*24包', 1890), ('pack100', 78))
+        self.assertEqual(dc.spec_unit_price_cents('鲁花5S花生油5L', 11990), ('liter', 2398))
+        # 无规格/纯单瓶描述不折算
+        self.assertIsNone(dc.spec_unit_price_cents('百岁山570ml/瓶', 7800))
+        self.assertIsNone(dc.spec_unit_price_cents('漫花6大提悬挂式抽纸', 790))
+
+    def test_brand_market_overpriced_blocks_small_spec_inflated_units(self):
+        from services import discount_calibration as dc
+        # 尝鲜 348ml×2 ¥10.01 → 500ml 折算 ¥7.19 >> 百岁山标准 ¥2.80×1.2
+        self.assertTrue(dc.is_brand_market_overpriced('water', '百岁山天然矿泉水348ml*2瓶装', 1001))
+        # 整箱真品：单瓶折算 ≤ 标准市场价 → 放
+        self.assertFalse(dc.is_brand_market_overpriced('water', '百岁山570ml*24瓶整箱', 2359))
+        self.assertFalse(dc.is_brand_market_overpriced('water', '百岁山570ml*24瓶整箱', 6390))
+        self.assertFalse(dc.is_brand_market_overpriced('water', '百岁山570ml*24瓶*2箱', 9252))
+        # 维达整箱单包 ¥0.79 << ¥3.00
+        self.assertFalse(dc.is_brand_market_overpriced('paper', '维达100抽*24包整箱', 1890))
+        # KUB 高端婴童纸：单包 ¥13.11 ≈ 可优比标准 ¥12×1.2 → 放（真品）
+        self.assertFalse(dc.is_brand_market_overpriced('paper', 'KUB可优比婴儿云柔巾80抽18包', 18890))
+        # 五常米：柴火 ¥40/kg ≤ ¥40×1.2 → 放
+        self.assertFalse(dc.is_brand_market_overpriced('rice', '柴火大院五常大米5kg*2袋', 40000))
+        self.assertFalse(dc.is_brand_market_overpriced('rice', '十月稻田五常大米10kg*5袋', 100000))
+        # 未知品牌/无规格/无标准价 → 永不拦
+        self.assertFalse(dc.is_brand_market_overpriced('water', '外星人电解质水24瓶整箱', 9999))
+        self.assertFalse(dc.is_brand_market_overpriced('water', '百岁山570ml/瓶', 7800))
+        self.assertFalse(dc.is_brand_market_overpriced('paper', '漫花6大提', 790))

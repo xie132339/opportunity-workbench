@@ -260,7 +260,8 @@ def official_promotion_discount(row):
         rate = (reference_drop / reference_cents
                 if isinstance(reference_cents, int) and reference_cents > 0 else None)
         if (not discount_calibration.is_low_value_small_item(topic, promotion_cents, title)
-                and not discount_calibration.is_market_band_fake_discount(topic, promotion_cents, rate)):
+                and not discount_calibration.is_market_band_fake_discount(topic, promotion_cents, rate)
+                and not discount_calibration.is_brand_market_overpriced(topic, title, promotion_cents)):
             candidates.append(dict(
                 amount_cents=reference_drop,
                 rate_basis_points=(reference_drop * 10000 // reference_cents
@@ -281,7 +282,8 @@ def official_promotion_discount(row):
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
-                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
+                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)
+                and not discount_calibration.is_brand_market_overpriced(topic, title, final_cents)):
             candidates.append(dict(
                 amount_cents=coupon_drop,
                 rate_basis_points=(coupon_drop * 10000 // promotion_cents
@@ -302,7 +304,8 @@ def official_promotion_discount(row):
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         if (not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
-                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)):
+                and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)
+                and not discount_calibration.is_brand_market_overpriced(topic, title, final_cents)):
             candidates.append(dict(
                 amount_cents=path_drop,
                 rate_basis_points=(path_drop * 10000 // promotion_cents
@@ -393,6 +396,9 @@ def promotion_admission(row, assessment):
                         topic, promotion_cents, (reserve - promotion_cents) / reserve)):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='划线虚高（到手价在市场正常价带内），不作为默认优惠展示')
+            if discount_calibration.is_brand_market_overpriced(topic, title, promotion_cents):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='优惠价高于品牌标准市场价（划线虚高/引流小规格），不作为默认优惠展示')
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)
                 and quote['amount_cents'] > 0 and evidence):
