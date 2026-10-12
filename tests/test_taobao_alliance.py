@@ -239,6 +239,13 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertEqual(discount["amount_cents"], 200)
         self.assertEqual(discount["basis"], "单券条件试算减免")
 
+        # 尝鲜/首单引流 SKU：任何优惠路径（参考价差/券/完整路径）都不产生优惠额
+        trial = parse_item(sample_item(now, reserve="10", promotion="8", coupon="2"), now=now)
+        self.assertIsNone(official_promotion_discount({
+            "source_method": "taobao_alliance", "title": "【尝鲜】百岁山348ml2瓶便携小瓶装",
+            "metadata_json": json.dumps(trial[5]),
+        }))
+
     def test_quotes_survive_without_promotions_but_wrong_product_is_rejected(self):
         self.assertFalse(parse_item(sample_item(self.now, reserve="10", promotion="10", coupon=""), now=self.now)[5]["taobao_alliance_offer"]["price_drop_candidate"])
         expired = sample_item(self.now, reserve="10", promotion="10", coupon="2",

@@ -231,6 +231,15 @@ def official_promotion_discount(row):
     if not evidence:
         return None
 
+    # Trial/first-order traffic SKUs ("尝鲜" 348ml x 2 bottles at 5 yuan each,
+    # "新客专享" small packs, "u先试用") carry a deep-looking strikethrough but
+    # are marketing traffic, not real bargains: keep the listing with the
+    # promotion price, drop the discount identity on every path (reference gap,
+    # coupon or full promotion path).
+    title = (row.get('title') or '') if isinstance(row, dict) else ''
+    if discount_calibration.has_trial_gating_marker(title):
+        return None
+
     candidates = []
     reference_drop = evidence.get('promotion_discount_cents')
     topic = discount_calibration.topic_key(row.get('source_name') or '')
@@ -239,7 +248,6 @@ def official_promotion_discount(row):
     # The keyword search also returns look-alike products (a "rice & wheat
     # shampoo" inside the rice topic); their reference-price gap must not
     # surface as a discount amount or enter discount ranking.
-    title = (row.get('title') or '') if isinstance(row, dict) else ''
     category_ok = discount_calibration.category_matches(topic, title)
     if (evidence.get('price_drop_candidate') is True
             and reference_drop_plausible
@@ -248,13 +256,15 @@ def official_promotion_discount(row):
             and not isinstance(reference_drop, bool)
             and reference_drop > 0):
         reference_cents = evidence.get('reserve_price_cents')
-        candidates.append(dict(
-            amount_cents=reference_drop,
-            rate_basis_points=(reference_drop * 10000 // reference_cents
-                               if isinstance(reference_cents, int) and reference_cents > 0 else None),
-            basis='推广价相对官方参考价差',
-            note='联盟物料中的当前推广价低于官方返回的参考价；参考价不是账号结算价。',
-        ))
+        promotion_cents = evidence.get('promotion_price_cents')
+        if not discount_calibration.is_low_value_small_item(topic, promotion_cents):
+            candidates.append(dict(
+                amount_cents=reference_drop,
+                rate_basis_points=(reference_drop * 10000 // reference_cents
+                                   if isinstance(reference_cents, int) and reference_cents > 0 else None),
+                basis='推广价相对官方参考价差',
+                note='联盟物料中的当前推广价低于官方返回的参考价；参考价不是账号结算价。',
+            ))
 
     coupon_drop = evidence.get('coupon_applied_cents')
     if (evidence.get('quote_basis') == 'single_coupon_conditional_estimate'
@@ -263,13 +273,16 @@ def official_promotion_discount(row):
             and not isinstance(coupon_drop, bool)
             and coupon_drop > 0):
         promotion_cents = evidence.get('promotion_price_cents')
-        candidates.append(dict(
-            amount_cents=coupon_drop,
-            rate_basis_points=(coupon_drop * 10000 // promotion_cents
-                               if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
-            basis='单券条件试算减免',
-            note='当前券时间、库存与单件门槛可计算；账号资格和结算扣减仍未核实。',
-        ))
+        final_cents = evidence.get('quote_price_cents')
+        if (not discount_calibration.is_gated_price(topic, final_cents)
+                and not discount_calibration.is_low_value_small_item(topic, final_cents)):
+            candidates.append(dict(
+                amount_cents=coupon_drop,
+                rate_basis_points=(coupon_drop * 10000 // promotion_cents
+                                   if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
+                basis='单券条件试算减免',
+                note='当前券时间、库存与单件门槛可计算；账号资格和结算扣减仍未核实。',
+            ))
 
     promotion_path = evidence.get('promotion_path') or {}
     path_drop = promotion_path.get('known_discount_cents')
@@ -278,13 +291,16 @@ def official_promotion_discount(row):
             and not isinstance(path_drop, bool)
             and path_drop > 0):
         promotion_cents = evidence.get('promotion_price_cents')
-        candidates.append(dict(
-            amount_cents=path_drop,
-            rate_basis_points=(path_drop * 10000 // promotion_cents
-                               if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
-            basis='完整官方促销路径减免',
-            note='当前官方促销组件可完整复算；不与参考价差或券面额叠加。',
-        ))
+        final_cents = promotion_path.get('estimate_cents')
+        if (not discount_calibration.is_gated_price(topic, final_cents)
+                and not discount_calibration.is_low_value_small_item(topic, final_cents)):
+            candidates.append(dict(
+                amount_cents=path_drop,
+                rate_basis_points=(path_drop * 10000 // promotion_cents
+                                   if isinstance(promotion_cents, int) and promotion_cents > 0 else None),
+                basis='完整官方促销路径减免',
+                note='当前官方促销组件可完整复算；不与参考价差或券面额叠加。',
+            ))
 
     return max(candidates, key=lambda candidate: candidate['amount_cents'], default=None)
 

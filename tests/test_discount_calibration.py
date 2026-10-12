@@ -132,6 +132,64 @@ class CalibrationEstimatorTests(unittest.TestCase):
         # 未知主题（自定义来源）不设品类门槛
         self.assertTrue(dc.category_matches(None, "任意商品标题"))
 
+    def test_trial_gating_marker_blocks_traffic_skus(self):
+        # 尝鲜/首单/新客/试用等引流小规格 SKU：不得产生优惠额
+        self.assertTrue(dc.has_trial_gating_marker("【尝鲜】百岁山天然矿泉水348ml2瓶便携小瓶装"))
+        self.assertTrue(dc.has_trial_gating_marker("【新客专享】1大包抽纸整箱批发家用餐巾纸"))
+        self.assertTrue(dc.has_trial_gating_marker("2.01元购400张大包抽纸擦手纸整箱批"))
+        self.assertTrue(dc.has_trial_gating_marker("【u先试用】无染原木纯品抽纸家用整箱"))
+        self.assertTrue(dc.has_trial_gating_marker("蓝月亮内衣专用洗衣液小样80g去渍除菌"))
+        # 真实商品（即使带小规格/整箱）放行
+        self.assertFalse(dc.has_trial_gating_marker("山茶油5L茶油茶籽油低温冷榨食用油植物油"))
+        self.assertFalse(dc.has_trial_gating_marker("2026新米柴火大院绿色特等五常大米5kg原粮稻花香2号"))
+        self.assertFalse(dc.has_trial_gating_marker(""))
+        self.assertFalse(dc.has_trial_gating_marker(None))
+
+    def test_gated_promo_prices_detects_unified_low_band_subsidies(self):
+        # 低价带内精确同价（分）聚集 >= 5 条 → 引流统一价；中位价以上或低聚集不拦
+        values = [201] * 8 + [501] * 4 + [1000] * 3 + [2000] * 2 + [3000, 4000]
+        gated = dc._gated_promo_prices(values)
+        self.assertIn(201, gated)
+        self.assertNotIn(501, gated)   # 不足 5 条
+        self.assertNotIn(2000, gated)  # 无聚集
+        self.assertEqual(dc._gated_promo_prices([]), [])
+        # 中位数以上不参与：全是同价 100 元也不 gated
+        self.assertEqual(dc._gated_promo_prices([10000] * 12), [])
+
+    def test_judge_drop_blocks_gated_subsidy_price(self):
+        dc.set_calibration({"paper": {
+            "price_ceiling_cents": 35600, "high_log": 3.0,
+            "bins": [], "global_ratio_cap": 0.90, "global_drop_cap": 10000,
+            "gated_prices": [201], "sample_count": 100,
+            "calibrated_at": "2026-01-01T00:00:00+00:00"}})
+        try:
+            ok, reason = dc.judge_drop("paper", 990, 201)
+            self.assertFalse(ok)
+            self.assertIn("引流", reason)
+            # 非 gated 价不受影响
+            self.assertTrue(dc.judge_drop("paper", 990, 400)[0])
+        finally:
+            dc.set_calibration(None)
+
+    def test_low_value_small_item_floor_is_data_driven_and_drops_only_discount(self):
+        # P15 推广价作为低价小件线：几块钱单包/单瓶不算"优惠力度大"
+        dc.set_calibration({"paper": {
+            "price_ceiling_cents": 35600, "high_log": 3.0,
+            "bins": [], "global_ratio_cap": 0.90, "global_drop_cap": 10000,
+            "gated_prices": [], "low_price_floor": 400, "sample_count": 100,
+            "calibrated_at": "2026-01-01T00:00:00+00:00"}})
+        try:
+            self.assertTrue(dc.is_low_value_small_item("paper", 201))
+            self.assertTrue(dc.is_low_value_small_item("paper", 399))
+            self.assertFalse(dc.is_low_value_small_item("paper", 400))  # 恰在线上不拦
+            self.assertFalse(dc.is_low_value_small_item("paper", 790))
+            # 未知主题/无校准不拦
+            self.assertFalse(dc.is_low_value_small_item(None, 201))
+            self.assertFalse(dc.is_low_value_small_item("other", 201))
+            self.assertFalse(dc.is_low_value_small_item("paper", 0))
+        finally:
+            dc.set_calibration(None)
+
     def test_seed_fallback_matches_legacy_rules(self):
         dc.set_calibration(None)
         try:

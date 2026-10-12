@@ -22,6 +22,7 @@ The whole calibration is persisted to SQLite and refreshed periodically by the
 worker, so thresholds follow new data automatically.
 """
 from datetime import datetime, timezone
+import collections
 import json
 import math
 import os
@@ -66,6 +67,41 @@ TOPIC_CATEGORY_TERMS = {
 }
 _GENERIC_INTERFERING_TERMS = ("洗发", "护发", "化妆", "护肤", "彩妆", "面膜", "直邮", "条纹", "罗纹",
                               "服饰", "手机", "数码", "机器", "设备", "机油", "润滑")
+
+# Trial / first-order traffic SKUs ("尝鲜" 348ml x 2 bottles at 5 yuan each,
+# "新客专享" small packs, "u先试用", "2.01元购" first-order subsidies).  They
+# carry a deep-looking strikethrough but are marketing traffic, not real
+# bargains: they must not produce a discount amount.
+TRIAL_GATING_TERMS = ("尝鲜", "首单", "新人", "新客", "试饮", "试用", "小样", "引流",
+                      "体验装", "一分购", "元购")
+# A promotion price shared verbatim by many distinct listings inside one topic's
+# low band is a first-order/unified subsidy price, not a market price.
+GATED_MIN_COUNT = 5
+
+
+def has_trial_gating_marker(title):
+    """Whether the title carries a trial/first-order traffic marker.
+
+    Only removes the discount identity (kept on the default list with the
+    promotion price shown); unknown/empty titles return False so nothing is
+    gated by default.
+    """
+    return bool(title) and any(word in title for word in TRIAL_GATING_TERMS)
+
+
+def is_gated_price(topic, cents):
+    """Whether a price is a unified first-order/subsidy traffic price.
+
+    Checked against the final price of every discount path (reference gap,
+    coupon or full promotion path), not only the reference-price gap, because
+    the same subsidy price shows up as a coupon-applied / path-estimate total.
+    Unknown topics and absent calibration never gate.
+    """
+    if not isinstance(cents, int) or isinstance(cents, bool) or cents <= 0:
+        return False
+    payload = get_calibration().get(topic) or {}
+    gated = payload.get("gated_prices") or []
+    return cents in gated
 
 
 def category_matches(topic, title):
@@ -168,6 +204,7 @@ def calibrate(db):
         AND length(e.metadata_json) > 2""", params).fetchall()
 
     by_topic = {topic.key: [] for topic in CORE_LIVING_TOPICS}
+    promo_values = {topic.key: [] for topic in CORE_LIVING_TOPICS}
     for row in rows:
         topic = topic_key(row["source_name"])
         if topic is None:
@@ -180,6 +217,7 @@ def calibrate(db):
         reserve = offer.get("reserve_price_cents")
         if not isinstance(promo, int) or isinstance(promo, bool) or promo <= 0:
             continue
+        promo_values[topic].append(promo)
         if isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promo:
             ratio = (reserve - promo) / reserve
             by_topic[topic].append((math.log10(promo), ratio, reserve - promo))
@@ -226,10 +264,43 @@ def calibrate(db):
             "bins": bins,
             "global_ratio_cap": global_ratio,
             "global_drop_cap": global_drop,
+            "gated_prices": _gated_promo_prices(promo_values[topic]),
+            "low_price_floor": int(_quantile(sorted(promo_values[topic]), 0.15)) if promo_values[topic] else None,
             "sample_count": len(pairs),
             "calibrated_at": _now_iso(),
         }
     return result
+
+
+def _gated_promo_prices(promo_values):
+    """Unified first-order/subsidy prices: a low-band promotion price shared
+    verbatim by many distinct listings (e.g. 2.01-yuan tissues) is a traffic
+    SKU signal, not a market price.  Only prices below the topic median qualify,
+    so genuine bulk deals in the mid/upper band are never gated."""
+    if not promo_values:
+        return []
+    counts = collections.Counter(promo_values)
+    ordered = sorted(promo_values)
+    median = ordered[len(ordered) // 2]
+    return sorted(p for p, n in counts.items()
+                  if n >= GATED_MIN_COUNT and p < median)
+
+
+def is_low_value_small_item(topic, cents):
+    """Whether a final price is a low-value small-item price (topic P15).
+
+    Cheap single packs / single bottles (a 2-yuan tissue pack, a 5-yuan flour
+    bag) are not "real bargains with big savings" for the user even when the
+    strikethrough looks deep; they must not surface a discount amount.  The
+    floor is estimated from the corpus (P15 of promotion prices), never
+    hard-coded, and only the discount identity is dropped — the listing stays
+    on the default list with its promotion price shown.
+    """
+    if not isinstance(cents, int) or isinstance(cents, bool) or cents <= 0:
+        return False
+    payload = get_calibration().get(topic) or {}
+    floor = payload.get("low_price_floor")
+    return isinstance(floor, int) and cents < floor
 
 
 CALIBRATION_SCHEMA = """
@@ -341,9 +412,13 @@ def judge_drop(topic, reserve_cents, promotion_cents):
     if ceiling and promotion_cents > ceiling:
         return False, "推广价超出当前生活品主题合理上界（由校准分布估计），划线价不作为优惠证据"
 
+    payload = get_calibration().get(topic) or {}
+    gated = payload.get("gated_prices") or []
+    if gated and promotion_cents in gated:
+        return False, "低价引流统一价（首单/新人/试饮等小规格引流 SKU），不作为优惠证据"
+
     drop = reserve_cents - promotion_cents
     ratio = drop / reserve_cents
-    payload = get_calibration().get(topic)
     # Premium prices (>= topic P97 bin edge) are protected from per-bin caps:
     # deep discounts on genuine premium goods (12-bottle low-deuterium water,
     # camellia-oil gift sets) are normal there.  They are still bound by the
