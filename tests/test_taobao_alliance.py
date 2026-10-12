@@ -17,7 +17,7 @@ from routes.search import can_skip_alliance_link_enrichment
 from services.product_search import affiliate_promotion, is_promotional_price_candidate, listing_quote
 from services.taobao_alliance import (
     API_ENDPOINT, TaobaoAllianceAPIError, TaobaoAllianceConfigurationError, _signature, configuration_error,
-    fetch_rows, parse_item, search_config, validated_offer, validated_offer_for_row,
+    fetch_rows, has_current_promotion_signal, parse_item, search_config, validated_offer, validated_offer_for_row,
 )
 from services.taobao_sku_detail import (
     DETAIL_METHOD, LEGACY_DETAIL_METHOD, SKU_DETAIL_METHODS,
@@ -95,11 +95,27 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertFalse(offer["price_drop_candidate"])
         self.assertFalse(offer["reference_drop_plausible"])
         self.assertIn("参考价过高", record[3])
+        # 划线价差被判定不可信时，不再作为优惠额信号，但“存在参考价差”本身
+        # 仍是准入信号：真实便宜货必须保留在默认列表（官方推广价展示、无虚高优惠额）。
+        self.assertTrue(has_current_promotion_signal(offer))
         # 合理降幅仍应产生促销信号
         record_ok = parse_item(sample_item(self.now, reserve="10.00", promotion="8.00"), now=self.now)
         offer_ok = record_ok[5]["taobao_alliance_offer"]
         self.assertTrue(offer_ok["price_drop_candidate"])
         self.assertTrue(offer_ok["reference_drop_plausible"])
+        self.assertTrue(has_current_promotion_signal(offer_ok))
+
+    def test_has_current_promotion_signal_keeps_reference_gap_but_excludes_plain_items(self):
+        # 划线=推广价且无券无路径 → 普通商品，无促销信号，不进默认优惠列表
+        self.assertFalse(has_current_promotion_signal({
+            "reserve_price_cents": 5000, "promotion_price_cents": 5000,
+            "price_drop_candidate": False, "coupon_candidate": False,
+            "promotion_path_candidate": False}))
+        # 划线价差存在（即使不可信）→ 保留准入，但不显示虚高优惠额
+        self.assertTrue(has_current_promotion_signal({
+            "reserve_price_cents": 69900, "promotion_price_cents": 6990,
+            "price_drop_candidate": False, "coupon_candidate": False,
+            "promotion_path_candidate": False}))
 
     def test_only_official_promotion_links_skip_local_link_resolution(self):
         direct = parse_item(sample_item(self.now), now=self.now)

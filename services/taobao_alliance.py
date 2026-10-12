@@ -59,9 +59,23 @@ def reference_drop_plausibility(reserve_cents, promotion_cents):
 
 
 def has_current_promotion_signal(offer):
-    """Whether official material carries a current, auditable promotion signal."""
-    return bool(isinstance(offer, dict) and any(bool(offer.get(field))
-                                                for field in PROMOTION_SIGNAL_FIELDS))
+    """Whether official material carries a current, auditable promotion signal.
+
+    A reference-price gap is itself a promotion shape even when the drop is not
+    yet credible enough for a discount amount (merchant-set strikethrough prices
+    can be inflated arbitrarily).  Such material must stay in the default list
+    at its official promotion price — hiding it would lose genuine cheap finds —
+    but it never shows an inflated saving and never enters discount ranking.
+    """
+    if not isinstance(offer, dict):
+        return False
+    if any(bool(offer.get(field)) for field in PROMOTION_SIGNAL_FIELDS):
+        return True
+    reserve_cents = offer.get("reserve_price_cents")
+    promotion_cents = offer.get("promotion_price_cents")
+    return (isinstance(reserve_cents, int) and isinstance(promotion_cents, int)
+            and not isinstance(reserve_cents, bool) and not isinstance(promotion_cents, bool)
+            and reserve_cents > promotion_cents > 0)
 
 
 class TaobaoAllianceConfigurationError(RuntimeError):

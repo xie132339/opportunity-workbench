@@ -83,6 +83,13 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - **校准快照对账（prod `.runtime/workbench.sqlite3`）**：6 主题 sample paper 11252 / water 3440 / rice 2691 / flour 5531 / cooking_oil 3605 / laundry 6515；paper global_ratio_cap 0.8995、high 豁免线 ¥100。生产判定复核（WORKBENCH_DB 注入后）：KUB 拦（86% 界）、柴火拦（81%）、袁谷拦（81%）、百岁山拦（80%）、威露士荒谬高价拦、低氘水 358 放、5 折放。公网回放：五主题 TOP 优惠额全为真品，KUB/柴火无优惠。
 - 部署操作：ECS `git fetch && git merge --ff-only origin/feature/bootstrap` → `sqlite3 delete from discount_calibration`（强制重建；表新鲜时 refresh 会跳过）→ `systemctl restart opportunity-workbench-web opportunity-workbench-worker` → health + 公网回放。
 
+## 5.2d 2026-10-12 保真优先：划线虚高商品保留展示（不误伤真实捡漏）
+
+- 背景：用户强调"一定不要误伤真实的要优惠捡漏的产品"。此前 judge_drop 判定不可信的参考价差使 `price_drop_candidate=False`，商品若无券/无路径则促销信号全空 → 从默认列表消失——真实便宜货（推广价可信）被误伤。
+- 修复：`services/taobao_alliance.py::has_current_promotion_signal` 增加兜底——**存在参考价差（reserve>promo>0）本身即准入信号**，与可信性解耦。划线虚高商品：以官方推广价保留在默认列表，**不产生优惠额、不参与优惠额排序、不显示"优惠 X 元"**，snippet 保留"参考价过高，未据此认定优惠"；荒谬单价（推广价超校准上界）仍仅来源审计；划线=推广价且无券无路径的普通商品仍不准入。
+- 真实数据回放（本机 10.4 万条）：被拦但保留 纸 2634 / 水 360 / 米 155 / 面 423 / 油 114 / 洗衣液 569；荒谬移除 纸 229 / 水 71 / 米 24 / 面 31 / 洗衣液 6；无信号普通商品仍排除（纸 1539 等）。页面回放：KUB 乳霜纸在列表（推广价展示、无优惠标签、含"参考价过高"说明），威露士 2997 不在列表，`sort=discount_high` TOP 优惠额全为真品（596.9/595.99/595.9）。
+- 测试：`test_parse_item_inflated_reference_drop_is_not_a_promotion_signal` 扩展断言被拦后仍有准入信号；新增 `test_has_current_promotion_signal_keeps_reference_gap_but_excludes_plain_items`；全量 383 项唯一失败仍为既有基线。文档：契约规则 6 增补"保真优先"条目。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
