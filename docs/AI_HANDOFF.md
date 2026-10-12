@@ -101,6 +101,21 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 验证：本机真实回放——品类错配过滤 339 条，可信价差 TOP12 全真品（山茶油 5L/低氘水/秋味坊/赣江/PDO 橄榄油/KUB 整箱）；大米主题官方优惠 TOP 十月稻田 50kg ¥1000/33%、龙稻 5kg ¥300/62.5%、柴火 5kg ¥200/71.4% 全真米。公网 ECS 回放：科颜氏/Reiss 0 出现、"省 X%"与"在淘宝 App 打开"按钮正常。测试：新增 `test_category_matches_blocks_look_alike_products` + 豁免区全局界扩展用例；全量 384 项唯一失败仍为既有基线 `test_single_item_price_is_not_rendered_twice`。部署：`git merge --ff-only origin/feature/bootstrap` + `systemctl restart opportunity-workbench-web opportunity-workbench-worker`；品类过滤不改变校准表数据，refresh_if_stale 照常管新鲜度。
 - 词表维护：品类词是维护性词典（非业务阈值），主题关键词新增采集词时需同步检查 `TOPIC_CATEGORY_TERMS` 的 include/exclude 是否覆盖新品类边界。
 
+## 5.2f 2026-10-13 低价小件/引流 SKU 去优惠化（百岁山 348ml 4 块多不算优惠）
+
+- 背景：用户打开"【尝鲜】百岁山 348ml 2 瓶"（推广 ¥10.01、划线 ¥19.9、省 50%）明确"不算优惠"；price_low/优惠排序仍被低价小件霸屏（¥2.01 抽纸大量精确同价划线虚高省 70-85%、植护 ¥2.39 省 84.8%、洁柔 ¥2.99 省 69.8%）。诊断：引流小规格/首单统一补贴价不是真优惠，却走参考价差/单券/完整路径任一候选产生优惠额霸榜。
+- 修复（提交 `54396d3`，已推 GitHub、已部署 ECS、生产库已重校准）：
+  - `services/discount_calibration.py`：
+    - `TRIAL_GATING_TERMS`（尝鲜/首单/新人/新客/试饮/试用/小样/引流/体验装/一分购/元购）+ `has_trial_gating_marker(title)`（空/None→False）；
+    - `GATED_MIN_COUNT=5` + `_gated_promo_prices(promo_values)`：主题内低于中位数的精确同价（分）聚集 ≥5 → 引流统一价；`calibrate` 落盘 `gated_prices`；
+    - `low_price_floor` = 主题推广价 P15（数据驱动低价小件线）；`is_gated_price(topic,cents)`、`is_low_value_small_item(topic,cents)` 查询函数；
+    - `judge_drop` 新增 gated 拦截（reason"低价引流统一价（首单/新人/试饮等小规格引流 SKU），不作为优惠证据"）。
+  - `services/product_search.py::official_promotion_discount`：
+    - **函数级守卫**：`has_trial_gating_marker(title)` 命中即 return None（覆盖参考价差/单券/完整路径全部候选——初稿只拦参考价差，尝鲜装走促销路径仍产 ¥9.89）；
+    - 单券候选按券后价 `quote_price_cents`、完整路径候选按 `estimate_cents` 分别过 `is_gated_price` + `is_low_value_small_item`；参考价差候选过 `judge_drop`（含 gated）+ `is_low_value_small_item(promotion)`。
+- 验证：本机重校准（DELETE discount_calibration→calibrate→save→load）：paper gated ¥1.41-2.20 等、water ¥2.11-6.30、laundry ¥2.01-3.61；`judge(paper 990→201)=False`、`judge(water 1990→1001)=False`；尝鲜百岁山 official=None。页面回放：搜"百岁山"23 条全整箱真记录（24 瓶 ¥92.52 省 53.5% 等）；price_low 小件引流清零、剩 ¥7.9 大提整箱；discount_high TOP8 全真品。公网 ECS：搜百岁山 10 条全整箱（旗舰店 570ml×24 ¥74.9 省 61.4%）、price_low 无小件、TOP 全真品大件。全量 388 项唯一失败仍为既有基线。
+- 部署要点：本改动新增 `gated_prices`/`low_price_floor` 校准字段，**生产部署必须重校准**（`DELETE FROM discount_calibration` + `WORKBENCH_DB=/application/.runtime/workbench.sqlite3 PYTHONPATH=/application .venv/bin/python -B -u <脚本>`，base64 通道；重启服务后 refresh_if_stale 在表新鲜时不会再重算）。生产口径 floor：paper 4.00/water 21.00/rice 17.76/flour 9.99/oil 35.88/laundry 10.90。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
