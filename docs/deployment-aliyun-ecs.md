@@ -11,7 +11,7 @@
 | 公网 IPv4 | `8.159.128.186` |
 | 浏览器入口 | <http://8.159.128.186/>（HTTP；当前未配置域名、TLS 证书或 443） |
 | 项目根目录 | `/application` |
-| Git 分支 / 部署提交 | `feature/bootstrap` / `802fa5102134e01a3ff41c427b82587c682fa2e5`（2026-10-12 20:06 实测） |
+| Git 分支 / 手机布局代码提交 | `feature/bootstrap` / `802fa5102134e01a3ff41c427b82587c682fa2e5`；当前服务器 HEAD 以 `git -C /application rev-parse HEAD` 查询 |
 | Web 进程 | `opportunity-workbench-web`；Gunicorn 监听 `127.0.0.1:5002` |
 | 淘宝采集进程 | `opportunity-workbench-worker`；独立 systemd 服务 |
 | 数据库 / 备份 | `/application/.runtime/workbench.sqlite3`；`/application/.runtime/backups` |
