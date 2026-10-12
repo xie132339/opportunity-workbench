@@ -154,6 +154,7 @@ class CalibrationEstimatorTests(unittest.TestCase):
 class CalibrationTopicKeyTests(unittest.TestCase):
     def test_topic_key_maps_managed_source_names(self):
         self.assertEqual(dc.topic_key("淘宝店抽纸优惠搜索"), "paper")
+        self.assertEqual(dc.topic_key("淘宝生活品·纸品优惠搜索"), "paper")
         self.assertEqual(dc.topic_key("淘宝生活品·食用油优惠搜索"), "cooking_oil")
         self.assertEqual(dc.topic_key("淘宝生活品·洗衣液优惠搜索"), "laundry_detergent")
         self.assertIsNone(dc.topic_key("自定义生活品·员工福利"))

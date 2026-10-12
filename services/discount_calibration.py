@@ -55,7 +55,9 @@ def topic_key(source_name):
     if not name:
         return None
     for topic in _core_topics():
-        if topic.keyword in name:
+        # name ("纸品") covers official source naming ("淘宝生活品·纸品优惠搜索"),
+        # keyword ("抽纸") covers the original dev naming ("淘宝店抽纸优惠搜索").
+        if topic.name in name or topic.keyword in name:
             return topic.key
     return None
 
