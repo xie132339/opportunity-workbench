@@ -1,0 +1,8 @@
+<div class="mobile-offer">
+  <a class="mobile-offer-title" href="{{ url_for('opportunity',opportunity_id=row.id) }}">{{ display_title }}</a>
+  <div class="mobile-offer-prices">
+    <span><small>{{ row.mobile_price_label }}</small><b>{{ money(row.mobile_price_cents) if row.mobile_price_cents is not none else '—' }}</b></span>
+    <span><small>优惠价</small><b>{% if row.mobile_discount_cents is not none %}{{ '约 ' if row.mobile_discount_estimated else '' }}{{ money(row.mobile_discount_cents) }}{% else %}—{% endif %}</b></span>
+  </div>
+  <a class="mobile-offer-detail" href="{{ url_for('opportunity',opportunity_id=row.id) }}">详情 →</a>
+</div>

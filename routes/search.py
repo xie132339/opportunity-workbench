@@ -1,4 +1,5 @@
 """Search fresh source leads and optionally filter for comparison readiness."""
+import json
 from datetime import datetime, timezone
 from flask import render_template, request
 import db as database
@@ -54,6 +55,48 @@ def attach_offer_data(row, include_diagnostics=True):
                                   and row['display_quote'].get('kind')=='catalog_public')
     row['promotional_candidate']=is_promotional_price_candidate(row,brief)
     row['official_discount'] = official_promotion_discount(row)
+    quote = row['display_quote']
+    row['mobile_price_cents'] = quote['amount_cents'] if quote else None
+    row['mobile_price_label'] = '价格'
+    row['mobile_discount_cents'] = None
+    row['mobile_discount_estimated'] = False
+    if (taobao_offer and quote and quote['kind'] == 'official_promotion_observation'
+            and row['official_discount']):
+        basis = row['official_discount']['basis']
+        promotion = taobao_offer.get('promotion_price_cents')
+        if basis == '推广价相对官方参考价差':
+            before, after = taobao_offer.get('reserve_price_cents'), promotion
+        elif basis == '单券条件试算减免':
+            before, after = promotion, quote['amount_cents']
+        elif basis == '完整官方促销路径减免':
+            before = promotion
+            after = (taobao_offer.get('promotion_path') or {}).get('estimate_cents')
+        else:
+            before = after = None
+        if (isinstance(before, int) and isinstance(after, int)
+                and before > after > 0):
+            row['mobile_price_cents'] = before
+            row['mobile_price_label'] = ('参考价' if basis == '推广价相对官方参考价差'
+                                         else '推广价')
+            row['mobile_discount_cents'] = after
+            row['mobile_discount_estimated'] = basis != '推广价相对官方参考价差'
+    elif (taobao_offer and quote and quote['kind'] == 'source_claim'
+          and quote['label'] == '淘宝联盟 SKU 预估优惠价'):
+        detail = row.get('detail_json') or {}
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except (TypeError, ValueError):
+                detail = {}
+        if isinstance(detail, dict) and detail.get('field_state') == 'bound':
+            estimate = detail.get('promotion_estimate_cents')
+            before = detail.get('public_sale_cents') if estimate else detail.get('reference_cents')
+            after = quote['amount_cents']
+            if isinstance(before, int) and before > after > 0:
+                row['mobile_price_cents'] = before
+                row['mobile_price_label'] = 'SKU标价' if estimate else 'SKU参考价'
+                row['mobile_discount_cents'] = after
+                row['mobile_discount_estimated'] = bool(estimate)
     row['affiliate_promotion'] = affiliate_promotion(row)
     row['display_quote_note']=quote_note(brief)
     return row

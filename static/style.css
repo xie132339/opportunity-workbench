@@ -197,6 +197,7 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
 /* Phone layout keeps the normal routes and forms while giving primary actions a fixed tab bar. */
 .mobile-tabbar{display:none}
 .affiliate-web-fallback{display:none}
+.mobile-offer{display:none}
 .home-guide{margin:0 0 16px}.home-guide>summary,.advanced-filters>summary,.search-summary-info>summary,.source-status-help>summary{display:none}
 .advanced-filters{grid-column:1/-1;margin:0}.advanced-filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
 .advanced-filter-grid label{min-width:0}
@@ -246,4 +247,26 @@ form label input[type="checkbox"]{width:auto;margin-right:6px}
   .source-actions button,.source-inline-form button{min-height:40px}
   .login-page{min-height:100dvh}.login-shell{padding:14px}.login-card{padding:20px}
   code,pre,.card a,.card small{overflow-wrap:anywhere}
+}
+@media(max-width:760px){
+  .home-title,.home-guide,.search-summary,.manual-lead,.offer-view-switch{display:none}
+  .search-layout{display:block}
+  .search-filters{padding:10px 12px}
+  .search-filters h2{display:none}
+  .offer-list-table tbody tr{display:block}
+  .offer-list-table tbody td:not(:first-child){display:none}
+  .offer-list-table tbody td:first-child{border:0;padding:12px}
+  .offer-list-table tbody td:first-child::before,
+  .offer-list-table tbody td:first-child>strong,
+  .offer-list-table tbody td:first-child>small{display:none}
+  .offer-card{padding:12px;gap:0}
+  .offer-card>:not(.mobile-offer){display:none}
+  .mobile-offer{display:grid;gap:8px}
+  .mobile-offer-title{font-size:16px;font-weight:700;line-height:1.4;color:var(--ink)}
+  .mobile-offer-prices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .mobile-offer-prices span{min-width:0;display:grid;gap:1px}
+  .mobile-offer-prices small{font-size:11px;color:var(--muted)}
+  .mobile-offer-prices b{font-size:18px;line-height:1.3;overflow-wrap:anywhere}
+  .mobile-offer-prices span:last-child b{color:var(--accent)}
+  .mobile-offer-detail{justify-self:end;font-weight:700}
 }
