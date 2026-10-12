@@ -333,6 +333,8 @@ def parse_item(item, now=None):
                             and coupon_amount_cents < promotion_cents)
     price_drop = bool(reserve_cents and promotion_cents < reserve_cents)
     promotion_path = _current_promotion_path(item, promotion_cents, now)
+    rounding_up_price_cents = _optional_cents(item.get("predict_rounding_up_price"))
+    rounding_up_description = " ".join(str(item.get("predict_rounding_up_price_desc") or "").split())[:120]
 
     coupon_state = "not_returned"
     if coupon_amount_cents:
@@ -404,7 +406,8 @@ def parse_item(item, now=None):
                 "coupon_info", "event_start_time", "event_end_time", "shop_title", "user_type",
                 "presale_deposit", "presale_start_time", "presale_end_time",
                 "presale_tail_start_time", "presale_tail_end_time",
-                "final_promotion_price", "final_promotion_path", "predict_rounding_up_price_desc",
+                "final_promotion_price", "final_promotion_path", "predict_rounding_up_price",
+                "predict_rounding_up_price_desc",
                 "commission_amount", "commission_rate", "income_rate", "commission_type",
             ) if key in item
         },
@@ -451,6 +454,8 @@ def parse_item(item, now=None):
                                                        if promotion_path else None),
             "promotion_path_unexplained_discount_cents": (promotion_path.get("unexplained_discount_cents")
                                                              if promotion_path else None),
+            "rounding_up_price_cents": rounding_up_price_cents,
+            "rounding_up_price_description": rounding_up_description,
             "unit": "single_item",
         "price_basis": ("taobao_alliance_coupon_conditional_estimate"
                         if quote_basis == "single_coupon_conditional_estimate"
@@ -550,6 +555,7 @@ def _upgrade_item(item):
         "reserve_price": price.get("reserve_price"),
         "zk_final_price": price.get("zk_final_price"),
         "final_promotion_price": price.get("final_promotion_price"),
+        "predict_rounding_up_price": price.get("predict_rounding_up_price"),
         "final_promotion_path": (price.get("final_promotion_path_list") or {}).get("final_promotion_path_map_data")
             if isinstance(price.get("final_promotion_path_list"), dict) else None,
         "predict_rounding_up_price_desc": price.get("predict_rounding_up_price_desc"),

@@ -168,6 +168,87 @@ def participation_for_row(row, now=None):
             "action": "当前官方物料无法完整说明单品参与条件。"}
 
 
+def savings_plan_for_row(row, now=None):
+    """Explain the strongest combination supported by this item's official fields.
+
+    This is intentionally item-scoped: the material API cannot see a shopper's
+    personal coupon wallet or the rest of their cart.
+    """
+    evidence = validated_offer_for_row(row, now=now)
+    if not evidence:
+        return {"label": "暂时算不了", "steps": [],
+                "note": "淘宝没有返回足够的优惠条件。"}
+
+    promotion_price = evidence.get("promotion_price_cents")
+    path = evidence.get("promotion_path") or {}
+    candidates = []
+    if evidence.get("promotion_path_complete"):
+        estimate = path.get("estimate_cents")
+        saving = promotion_price - estimate if isinstance(promotion_price, int) and isinstance(estimate, int) else None
+        candidates.append({
+            "label": "按淘宝接口给出的完整组合走",
+            "price_cents": estimate,
+            "price_label": "接口路径预估",
+            "saving_cents": saving,
+            "steps": [" + ".join(filter(None, (part.get("title"), part.get("description"))))
+                      for part in path.get("components", [])],
+            "note": "组合金额与接口返回的预估价一致；结算前仍以淘宝购物车为准。",
+        })
+    if evidence.get("quote_basis") == "single_coupon_conditional_estimate":
+        threshold = evidence.get("coupon_threshold_cents")
+        coupon = evidence.get("coupon_amount_cents")
+        estimate = evidence.get("quote_price_cents")
+        candidates.append({
+            "label": "单品券试算（不与其他优惠重复相减）",
+            "price_cents": estimate,
+            "price_label": "单券条件价",
+            "saving_cents": coupon,
+            "steps": [f"推广价 ¥{promotion_price / 100:.2f}",
+                      f"满 ¥{threshold / 100:.2f} 用券减 ¥{coupon / 100:.2f}"],
+            "note": "这是单券条件试算；先领券，再在结算页确认账号可用。",
+        })
+
+    # Compare only complete paths for the same item quantity. Never stack
+    # independent discounts; a multi-item estimate stays a separate option.
+    candidates = [plan for plan in candidates
+                  if isinstance(plan.get("price_cents"), int) and plan["price_cents"] > 0]
+    if candidates:
+        plan = min(candidates, key=lambda option: option["price_cents"])
+        if len(candidates) > 1:
+            plan["note"] = "在接口可复算的单券与完整路径中选择预估价较低的一项；不把两者相加。结算前以淘宝为准。"
+    elif evidence.get("price_drop_candidate"):
+        plan = {
+            "label": "直接买当前推广价",
+            "price_cents": promotion_price,
+            "price_label": "当前推广价",
+            "saving_cents": evidence.get("promotion_discount_cents"),
+            "steps": ["当前推广价已低于接口参考价"],
+            "note": "另有优惠券时，只有淘宝显示可叠加才继续使用；这里不重复扣券。",
+        }
+    elif evidence.get("coupon_state") == "threshold_not_met":
+        threshold = evidence.get("coupon_threshold_cents")
+        coupon = evidence.get("coupon_amount_cents")
+        gap = threshold - promotion_price if isinstance(threshold, int) and isinstance(promotion_price, int) else None
+        plan = {
+            "label": "先别为了券多买",
+            "price_cents": None,
+            "saving_cents": None,
+            "steps": [f"单件 ¥{promotion_price / 100:.2f}，券为满 ¥{threshold / 100:.2f} 减 ¥{coupon / 100:.2f}"],
+            "gap_cents": gap if isinstance(gap, int) and gap > 0 else None,
+            "note": "只有购物车里有本来就要买的商品时再凑门槛；否则多花的钱可能超过券额。",
+        }
+    else:
+        plan = {"label": "暂时算不了", "price_cents": None,
+                "saving_cents": None, "steps": [],
+                "note": "官方返回的路径或券条件不完整，不能判断组合后的价格。"}
+
+    rounding_price = evidence.get("rounding_up_price_cents")
+    rounding_desc = evidence.get("rounding_up_price_description") or "凑单条件未返回"
+    if isinstance(rounding_price, int) and rounding_price > 0:
+        plan["rounding_up"] = {"price_cents": rounding_price, "description": rounding_desc}
+    return plan
+
+
 def _festival_rows(db, source_id):
     return [dict(row) for row in db.execute("""SELECT o.id,o.title,o.url,o.source_id,
         s.method AS source_method,s.name AS source_name,s.status AS source_status,
@@ -196,9 +277,11 @@ def festival_products(db, festival, now=None):
                 continue
             row["discount"] = discount
             row["participation"] = participation
+            row["savings_plan"] = savings_plan_for_row(row, now=now)
             direct.append(row)
         elif participation["bucket"] == "bundle":
             row["participation"] = participation
+            row["savings_plan"] = savings_plan_for_row(row, now=now)
             bundle.append(row)
         else:
             unconfirmed += 1

@@ -531,6 +531,7 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
             "item_basic_info": {"title": "测试抽纸", "user_type": 0, "shop_title": "测试店"},
             "price_promotion_info": {
                 "reserve_price": "12", "zk_final_price": "12", "final_promotion_price": "1.91",
+                "predict_rounding_up_price": "8.88",
                 "predict_rounding_up_price_desc": "需凑单",
                 "final_promotion_path_list": {"final_promotion_path_map_data": [
                     {"promotion_title": "秒杀直降", "promotion_desc": "直降4.8元", "promotion_fee": "4.8",
@@ -547,6 +548,8 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         evidence = row[5]["taobao_alliance_offer"]
         self.assertEqual(evidence["quote_price_cents"], 1200)
         self.assertEqual(evidence["promotion_path"]["estimate_cents"], 191)
+        self.assertEqual(evidence["rounding_up_price_cents"], 888)
+        self.assertEqual(evidence["rounding_up_price_description"], "需凑单")
         self.assertTrue(evidence["promotion_path_candidate"])
         self.assertIn("需凑单", row[3])
         brief = {"quantity": 1}

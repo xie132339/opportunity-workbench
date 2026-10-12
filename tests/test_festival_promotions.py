@@ -11,7 +11,7 @@ import scanner
 from app import app
 from services.festival_promotions import (create_festival, festival_products,
                                           create_festival_material_feed,
-                                          list_festivals)
+                                          list_festivals, savings_plan_for_row)
 from services.taobao_alliance import parse_item, search_config
 
 
@@ -84,8 +84,37 @@ class FestivalPromotionTests(unittest.TestCase):
         self.assertEqual([row["title"] for row in products["direct"]], ["节日测试商品 101", "节日测试商品 102"])
         self.assertEqual(products["direct"][0]["participation"]["label"], "可直接参与")
         self.assertEqual(products["direct"][1]["participation"]["label"], "领取单品券后参与")
+        self.assertEqual(products["direct"][1]["savings_plan"]["price_cents"], 800)
+        self.assertEqual(products["direct"][1]["savings_plan"]["label"], "单品券试算（不与其他优惠重复相减）")
         self.assertEqual(products["bundle"][0]["title"], "节日测试商品 103")
         self.assertEqual(products["bundle"][0]["participation"]["gap_cents"], 200)
+        self.assertEqual(products["bundle"][0]["savings_plan"]["gap_cents"], 200)
+        self.assertIn("先别为了券多买", products["bundle"][0]["savings_plan"]["label"])
+        page = app.test_client().get("/festival-promotions")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("单品券试算（不与其他优惠重复相减）", page.get_data(as_text=True))
+        self.assertIn("单券条件价 ¥8.00", page.get_data(as_text=True))
+
+    def test_complete_official_path_is_shown_as_the_combination_to_follow(self):
+        now = datetime.now(CHINA)
+        item = self._item(now, "104", reserve="12", promotion="12", coupon="2", threshold="8")
+        item.update({
+            "final_promotion_price": "1.91",
+            "final_promotion_path": [
+                {"promotion_title": "秒杀直降", "promotion_desc": "直降4.80元", "promotion_fee": "4.80",
+                 "promotion_start_time": str(int((now-timedelta(minutes=1)).timestamp()*1000)),
+                 "promotion_end_time": str(int((now+timedelta(minutes=30)).timestamp()*1000))},
+                {"promotion_title": "限时补贴", "promotion_desc": "补贴5.29元", "promotion_fee": "5.29",
+                 "promotion_start_time": str(int((now-timedelta(minutes=1)).timestamp()*1000)),
+                 "promotion_end_time": str(int((now+timedelta(minutes=30)).timestamp()*1000))},
+            ],
+        })
+        parsed = parse_item(item, now=now)
+        plan = savings_plan_for_row({"metadata_json": json.dumps(parsed[5])}, now=now)
+        self.assertEqual(plan["price_cents"], 191)
+        self.assertEqual(plan["label"], "按淘宝接口给出的完整组合走")
+        self.assertEqual(plan["saving_cents"], 1009)
+        self.assertEqual(len(plan["steps"]), 2)
 
     def test_threshold_excludes_small_direct_discount_without_hiding_bundle_observation(self):
         now = datetime.now(CHINA)
@@ -107,8 +136,10 @@ class FestivalPromotionTests(unittest.TestCase):
         html = page.get_data(as_text=True)
         self.assertIn("节日大促", html)
         self.assertIn("双11", html)
-        self.assertIn("参与规则", html)
-        self.assertIn("需凑单后再核验", html)
+        self.assertIn("怎么组合更省", html)
+        self.assertIn("两件商品各 ¥100", html)
+        self.assertIn("付 ¥180", html)
+        self.assertIn("不能再把店铺券减一次算成 ¥170", html)
         self.assertIn('href="/taobao-campaigns"', html)
         self.assertNotIn('name="activity_material_id"', html)
         self.assertNotIn('name="campaign_name"', html)
