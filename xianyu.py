@@ -11,6 +11,11 @@ import requests
 ACCOUNT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,50}$")
 RESULT_FILE = re.compile(r"^[^/\\]+_full_data\.jsonl$")
 PUBLISH_WINDOWS = {"", "最新", "1天内", "3天内", "7天内", "14天内"}
+SNAPSHOT_TIMEOUT = (0.25, 0.75)
+LOCAL_SESSION = requests.Session()
+# A loopback bridge must never inherit an HTTP proxy.  Otherwise an unavailable
+# local collector becomes a slow proxy failure during normal navigation.
+LOCAL_SESSION.trust_env = False
 
 
 class XianyuError(ValueError):
@@ -24,12 +29,12 @@ def base_url():
     return base
 
 
-def api(method, path, payload=None):
+def api(method, path, payload=None, timeout=(3, 12)):
     if not path.startswith("/") or ".." in path or "//" in path:
         raise XianyuError("闲鱼接口路径无效")
     try:
-        response = requests.request(method, base_url() + path, json=payload,
-                                    timeout=(3, 12), allow_redirects=False)
+        response = LOCAL_SESSION.request(method, base_url() + path, json=payload,
+                                         timeout=timeout, allow_redirects=False)
     except requests.RequestException as exc:
         raise XianyuError("闲鱼采集服务未运行或暂不可达") from exc
     if response.is_redirect:
@@ -44,12 +49,14 @@ def api(method, path, payload=None):
 
 
 def snapshot():
-    health = api("GET", "/health")
+    # The dashboard treats the collector as optional.  Bound its health check
+    # tightly so a stopped collector cannot delay unrelated navigation.
+    health = api("GET", "/health", timeout=SNAPSHOT_TIMEOUT)
     if health.get("status") != "healthy":
         raise XianyuError("闲鱼采集服务尚未就绪")
-    accounts = api("GET", "/api/accounts")
-    tasks = api("GET", "/api/tasks")
-    files = api("GET", "/api/results/files").get("files", [])
+    accounts = api("GET", "/api/accounts", timeout=SNAPSHOT_TIMEOUT)
+    tasks = api("GET", "/api/tasks", timeout=SNAPSHOT_TIMEOUT)
+    files = api("GET", "/api/results/files", timeout=SNAPSHOT_TIMEOUT).get("files", [])
     if not isinstance(accounts, list) or not isinstance(tasks, list) or not isinstance(files, list):
         raise XianyuError("闲鱼采集服务列表格式错误")
     return accounts, tasks, files

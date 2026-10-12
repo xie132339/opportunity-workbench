@@ -2,7 +2,6 @@
 from flask import render_template, request
 from db import connect
 from benefits import KINDS as BENEFIT_KINDS, listing as list_benefits, stats as benefit_stats
-from acceptance import QUERY, evaluate, freeze
 from autoreview import offer_summary
 from services.source_freshness import CATALOG_LISTING_PARSERS
 from services.product_search import listing_quote
@@ -57,13 +56,11 @@ def verification():
             f'标题规格线索：{source_spec}（未确认报价对应变体）' if source_spec else
             '未能从来源原文确定')
         display_rows.append(item)
-    from acceptance import QUERY,evaluate,freeze
-    with connect() as db:
-        evidence=[dict(r) for r in db.execute(QUERY)]
-        cache={r['url']:dict(r) for r in db.execute('SELECT * FROM link_resolutions')}
-    cohort=freeze(evidence,current_only=True)
-    acceptance=evaluate(evidence,cohort,cache)
-    return render_template('verification.html',counts=counts,run=run,rows=display_rows,state=state,acceptance=acceptance)
+    # This page presents persisted verification snapshots.  Re-running the
+    # corpus-wide engineering acceptance experiment here neither changes a
+    # record nor affects an offer's admission, but it did make ordinary
+    # navigation scan every historical opportunity.
+    return render_template('verification.html',counts=counts,run=run,rows=display_rows,state=state)
 
 def register(app):
     app.add_url_rule('/benefits', endpoint='benefits_page', view_func=benefits_page, methods=['GET'])

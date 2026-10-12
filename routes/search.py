@@ -53,6 +53,28 @@ def attach_offer_data(row, include_diagnostics=True):
     return row
 
 
+def can_skip_alliance_link_enrichment(row):
+    """True only when Alliance fields themselves establish marketplace type."""
+    if row.get('source_method') != 'taobao_alliance':
+        return False
+    offer = validated_offer_for_row(row)
+    return bool(offer and offer.get('link_kind') == 'official_promotion_link'
+                and offer.get('marketplace_key') in {'taobao', 'tmall'})
+
+
+def attach_search_marketplace(row, link_cache):
+    """Attach marketplace identity without resolving Alliance promotion links.
+
+    Only official promotion links carry the merchant type and product identity
+    needed by marketplace identity. Resolving those URLs again does not add a
+    default-list admission signal; direct merchant URLs still use the normal
+    resolver path.
+    """
+    if can_skip_alliance_link_enrichment(row):
+        return attach_product_marketplace(row)
+    return attach_product_marketplace(enrich_links(row, link_cache))
+
+
 def index():
     query = request.args.get("q", "").strip()
     category = request.args.get("category", "").strip()
@@ -146,10 +168,15 @@ def index():
             # Product search and the current lead inbox start from fresh purchase-like
             # records. The explicit ready view applies the shared evidence gate below.
             sql += " AND o.resource_kind IN ('purchase','unknown')"
-    # This scope includes the same product/type and user filters, but excludes
-    # freshness/status gates so current search can explain why rows are absent.
-    search_scope_sql = sql
-    search_scope_args = tuple(args)
+    # The current clue pool still explains freshness exclusions, but needs no
+    # resolver or offer parsing for rows that will not be displayed.  Keep its
+    # lightweight SQL scope separate from the default official-offer inbox.
+    funnel_scope_sql = None
+    funnel_scope_args = ()
+    if (query and view_mode == "current" and not show_archive and not candidate_only
+            and not budget_text):
+        funnel_scope_sql = sql
+        funnel_scope_args = tuple(args)
     if not show_archive:
         sql += " AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')"
         sql += """ AND ((s.method='manual' AND o.status='verified'
@@ -162,16 +189,31 @@ def index():
                               OR ((s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
                                    OR s.method='taobao_alliance')
                                   AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))) )"""
+    # The default offer view is explicitly the official Taobao Alliance
+    # promotion inbox.  Constrain it before materialising rows so unrelated
+    # source records are never link-resolved merely to be filtered later.
+    if priced_only and buy_platform == 'taobao':
+        sql += " AND s.method='taobao_alliance'"
     try:
         page = max(1, int(request.args.get("page", "1")))
     except ValueError:
         page = 1
     with connect() as db:
+        if priced_only and buy_platform == 'taobao':
+            # Start from the small set of currently healthy Alliance sources.
+            # Without this explicit source-id scope SQLite may scan every
+            # historical opportunity to satisfy a leading-wildcard title
+            # search, even though the default inbox only accepts Alliance data.
+            source_ids = [row['id'] for row in db.execute("""SELECT id FROM sources
+                WHERE method='taobao_alliance' AND enabled=1 AND status='healthy'
+                  AND last_success>=datetime('now','-' || MIN(2*interval_minutes+15,120) || ' minutes')""")]
+            if source_ids:
+                sql += " AND o.source_id IN (" + ",".join("?" for _ in source_ids) + ")"
+                args.extend(source_ids)
+            else:
+                sql += " AND 0"
         maintained_baselines = load_baselines(db)
-        search_funnel = {}
-        # This diagnostic is optional.  Keep the template context defined for
-        # the candidate branch too; candidate results are intentionally small
-        # and still run their explicit evidence comparison below.
+        search_funnel = None
         source_comparison_deferred = False
         order_by = """ ORDER BY CASE o.category
             WHEN '零售优惠' THEN 1 WHEN '二手与闲置' THEN 2
@@ -230,18 +272,16 @@ def index():
             source_offer_count=total
             comparisons=load_comparisons(db,[row['id'] for row in rows])
         else:
-            query_scope_rows = []
-            if query and not show_archive and not candidate_only and not budget_text and view_mode in ("current", "offers"):
-                query_scope_rows = [dict(row) for row in db.execute(search_scope_sql, search_scope_args)]
             raw_rows=[dict(row) for row in db.execute(sql + order_by,args)]
-            link_cache=resolution_cache(db,raw_rows)
-            all_rows = [attach_product_marketplace(enrich_links(row,link_cache)) for row in raw_rows]
+            rows_needing_link_enrichment = [
+                row for row in raw_rows if not can_skip_alliance_link_enrichment(row)
+            ]
+            link_cache=resolution_cache(db,rows_needing_link_enrichment)
+            all_rows = [attach_search_marketplace(row, link_cache) for row in raw_rows]
             for row in all_rows:
                 row['display_topic']=resource_topic(row.get('title',''),row.get('source_category',''))
             if topic in TOPIC_LABELS:
                 all_rows=[row for row in all_rows if row['display_topic']==topic]
-                query_scope_rows=[row for row in query_scope_rows
-                                  if resource_topic(row.get('title',''),row.get('source_category',''))==topic]
             marketplace_population_count = len(all_rows)
             marketplace_unidentified_count = sum(row['marketplace_key'] == 'unknown' for row in all_rows)
             marketplace_selected_count = sum(
@@ -251,16 +291,6 @@ def index():
             if buy_platform != 'all':
                 all_rows = [row for row in all_rows
                             if marketplace_matches_filter(row['marketplace_key'], buy_platform)]
-                if query_scope_rows:
-                    scope_link_cache = resolution_cache(db, query_scope_rows)
-                    query_scope_rows = [
-                        attach_product_marketplace(enrich_links(row, scope_link_cache))
-                        for row in query_scope_rows
-                    ]
-                    query_scope_rows = [
-                        row for row in query_scope_rows
-                        if marketplace_matches_filter(row['marketplace_key'], buy_platform)
-                    ]
             if not show_archive:
                 # A live catalogue row may have an old saved ``missing_time``
                 # result from the former post-only rule. Re-evaluate that row
@@ -327,8 +357,12 @@ def index():
             quality_counts['unpriced']=sum(not row.get('display_quote') for row in all_rows)
             quality_counts['excluded']=candidate_pool_count-quality_counts['search_ready']
             unpriced_current_count=quality_counts['unpriced']
-            if query and not show_archive and not candidate_only and not budget_text and view_mode in ("current", "offers"):
-                search_funnel=summarize_search_funnel(query_scope_rows,all_rows)
+            if funnel_scope_sql:
+                # Preserve the current-pool explanation without repeating the
+                # old whole-corpus resolver/marketplace/offer preparation.
+                funnel_scope_rows = [dict(row) for row in db.execute(
+                    funnel_scope_sql, funnel_scope_args)]
+                search_funnel = summarize_search_funnel(funnel_scope_rows, all_rows)
             provenance_corpus = all_rows
             if ready_only and not show_archive:
                 all_rows=[row for row in all_rows if search_assessments[row['id']]['search_ready']]
@@ -380,8 +414,12 @@ def index():
                 all_rows = priced + unpriced
             rows=all_rows[(page-1)*page_size:page*page_size]
             rows=annotate_search_sources(rows, provenance_corpus)
-            product_link_cache=resolution_cache(db,rows)
-            rows=[enrich_links(row,product_link_cache) for row in rows]
+            rows_needing_link_enrichment = [
+                row for row in rows if not can_skip_alliance_link_enrichment(row)
+            ]
+            product_link_cache=resolution_cache(db,rows_needing_link_enrichment)
+            rows=[enrich_links(row,product_link_cache)
+                  if not can_skip_alliance_link_enrichment(row) else row for row in rows]
             # Hydrate only records that the user can see.  This restores the
             # exact audit, promotion and sync text required by both list and
             # card templates without paying that parsing cost for every row.

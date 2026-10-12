@@ -10,6 +10,24 @@ from app import app
 
 
 class XianyuBridgeTests(unittest.TestCase):
+    def test_snapshot_uses_short_timeout_for_optional_local_collector(self):
+        calls = []
+
+        def fake_api(method, path, payload=None, timeout=None):
+            calls.append((method, path, timeout))
+            responses = {
+                "/health": {"status": "healthy"},
+                "/api/accounts": [],
+                "/api/tasks": [],
+                "/api/results/files": {"files": []},
+            }
+            return responses[path]
+
+        with patch('xianyu.api', side_effect=fake_api):
+            self.assertEqual(xianyu.snapshot(), ([], [], []))
+        self.assertEqual([call[2] for call in calls], [xianyu.SNAPSHOT_TIMEOUT] * 4)
+        self.assertFalse(xianyu.LOCAL_SESSION.trust_env)
+
     def test_account_state_requires_real_goofish_domain(self):
         for content in ('not-json', '{"cookies": []}',
                         '{"cookies": [{"domain": "evilgoofish.com"}]}'):

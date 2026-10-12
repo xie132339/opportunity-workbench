@@ -29,11 +29,10 @@
   {% endif %}
   {% endif %}
   {% if search_funnel %}
-  <div class="search-funnel" aria-label="本次查询数据漏斗">
-    <strong>本次查询：全部时间匹配 {{ search_funnel.matched_count }} 条</strong>
-    <span>当前时效可见 {{ search_funnel.current_count }} 条：价差候选 {{ search_funnel.current_promotion_candidate_count }} 条、商城目录参考价 {{ search_funnel.current_catalog_reference_count }} 条、没有价差依据的普通价格 {{ search_funnel.current_plain_price_claim_count }} 条、没有可用报价 {{ search_funnel.current_unpriced_count }} 条。</span>
-    <small>当前结果之外：过期 {{ search_funnel.stale_count }} 条、来源不可读 {{ search_funnel.source_unavailable_count }} 条、待重试 {{ search_funnel.retry_count }} 条、规则排除 {{ search_funnel.excluded_state_count }} 条、其他来源/时间条件未达标 {{ search_funnel.other_freshness_count }} 条。此统计解释筛选结果，不会把旧线索放回当前列表。</small>
-  </div>
+  <details class="search-funnel" aria-label="本次查询数据漏斗">
+    <summary>查询范围说明：全部时间匹配 {{ search_funnel.matched_count }} 条，当前时效可见 {{ search_funnel.current_count }} 条</summary>
+    <small>当前时效内：价差候选 {{ search_funnel.current_promotion_candidate_count }} 条、商城目录参考价 {{ search_funnel.current_catalog_reference_count }} 条、普通来源价格 {{ search_funnel.current_plain_price_claim_count }} 条、没有可用报价 {{ search_funnel.current_unpriced_count }} 条。当前范围之外：过期 {{ search_funnel.stale_count }} 条、来源不可读 {{ search_funnel.source_unavailable_count }} 条、待重试 {{ search_funnel.retry_count }} 条、规则排除 {{ search_funnel.excluded_state_count }} 条、其他来源或时间条件未达标 {{ search_funnel.other_freshness_count }} 条。</small>
+  </details>
   {% endif %}
   <details class="source-coverage">
     <summary>全渠道产出：{{ matched_enabled_source_count }} / {{ enabled_source_count }} 个启用入口命中本次商品线索；{{ quoted_enabled_source_count }} 个入口提供金额或目录价格参考。展开查看 {{ source_coverage|length }} 个配置入口的结果</summary>

@@ -12,6 +12,7 @@ import scanner
 import autoreview
 import app as application_module
 from app import app
+from routes.search import can_skip_alliance_link_enrichment
 from services.product_search import is_promotional_price_candidate, listing_quote
 from services.taobao_alliance import (
     API_ENDPOINT, TaobaoAllianceAPIError, TaobaoAllianceConfigurationError, _signature, configuration_error,
@@ -66,6 +67,20 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 search_config(invalid)
+
+    def test_only_official_promotion_links_skip_local_link_resolution(self):
+        direct = parse_item(sample_item(self.now), now=self.now)
+        promotion = sample_item(self.now)
+        promotion.pop("num_iid")
+        promotion["item_id"] = "opaque-official-id"
+        promotion["item_url"] = "https://s.click.taobao.com/t?e=official-promotion"
+        official = parse_item(promotion, now=self.now)
+        self.assertFalse(can_skip_alliance_link_enrichment({
+            "source_method": "taobao_alliance", "metadata_json": json.dumps(direct[5]),
+        }))
+        self.assertTrue(can_skip_alliance_link_enrichment({
+            "source_method": "taobao_alliance", "metadata_json": json.dumps(official[5]),
+        }))
 
     def test_row_validation_cache_reuses_unchanged_metadata_and_invalidates_on_change(self):
         row = {"metadata_json": "first"}

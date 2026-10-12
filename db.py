@@ -167,6 +167,10 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS idx_events_source ON events(source_id, observed_at);
 CREATE INDEX IF NOT EXISTS idx_opportunities_status ON opportunities(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_sources_method_enabled_status ON sources(method, enabled, status, id);
+CREATE INDEX IF NOT EXISTS idx_opportunities_source_status_created ON opportunities(source_id, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_opportunities_source_resource_status_created ON opportunities(source_id, resource_kind, status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_events_source_last_seen ON events(source_id, last_seen_at DESC, published_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_status ON notification_deliveries(status, id);
 CREATE INDEX IF NOT EXISTS idx_buy_checks_opp ON buy_checks(opportunity_id, checked_at);
 CREATE TABLE IF NOT EXISTS auto_reviews (
