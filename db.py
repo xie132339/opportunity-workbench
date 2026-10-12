@@ -493,3 +493,8 @@ def initialize():
                 (platform,name,category,url,method,parser,enabled)
                 VALUES(?,?,?,?,?,?,?)""",
                 (platform,name,category,url,method,parser,enabled))
+        # Default collection queries are versioned application configuration,
+        # not runtime observations. Seed them on every fresh/updated database
+        # initialization; the helper adopts existing URLs and is idempotent.
+        from services.taobao_living_topics import ensure_core_topics
+        ensure_core_topics(db, env=os.environ)

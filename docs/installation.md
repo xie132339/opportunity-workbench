@@ -53,7 +53,7 @@ bash scripts/workbench.sh stop
 .venv/bin/python app.py worker
 ```
 
-如果目前只采集淘宝联盟，在本机 `.env` 配置你自己的 `TAOBAO_ALLIANCE_APP_KEY`、`TAOBAO_ALLIANCE_APP_SECRET` 和 `TAOBAO_ALLIANCE_ADZONE_ID`，确认应用已获得升级物料搜索接口权限。随后打开“渠道管理 → 淘宝生活品主题配置”，点击“初始化 / 补齐核心生活品主题”：系统会沿用纸品历史来源，并建立饮用水、大米、面粉、食用油和洗衣液的独立官方查询来源。需要扩展时在同一页新增主题，不需要改代码。只运行这些来源的定时采集：
+如果目前只采集淘宝联盟，在本机 `.env` 配置你自己的 `TAOBAO_ALLIANCE_APP_KEY`、`TAOBAO_ALLIANCE_APP_SECRET` 和 `TAOBAO_ALLIANCE_ADZONE_ID`，确认应用已获得升级物料搜索接口权限。首次启动时，数据库会自动幂等初始化纸品、饮用水、大米、面粉、食用油和洗衣液六个版本化主题配置；已有纸品来源会被沿用，不重复建源。打开“渠道管理 → 淘宝生活品主题配置”即可查看，按钮“初始化 / 补齐核心生活品主题”用于手工恢复缺失配置。需要扩展时在同一页新增主题，不需要改代码。配置脚本随源码提交，采集到的商品和扫描历史仍保存在不入 Git 的 SQLite 运行库。只运行这些来源的定时采集：
 
 ```bash
 .venv/bin/python app.py taobao-worker

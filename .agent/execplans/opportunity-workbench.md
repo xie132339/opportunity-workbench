@@ -158,3 +158,22 @@
 1. `tests.test_local_auth`：未登录重定向、健康检查、默认登录、错误密码、外部跳转拒绝和退出回锁共 5 项通过。
 2. `unittest discover -s tests`：343 项通过；现有业务路由测试使用的测试客户端自动建立测试会话，生产请求不受该测试适配器影响。
 3. 重启本机网页与 worker 后，实际 HTTP 回放确认 `/` 未登录为 302、`/health` 为 200、提交登录表单后 `/sources` 为 200。
+
+## 2026-10-12 默认淘宝主题配置自动初始化
+
+### Finding
+
+生产 WSGI 入口和本机启动都会调用 `db.initialize()`，但原初始化只添加通用来源；六个生活品主题虽然已在源码版本化，却只有通过来源页的 POST 按钮才会写进运行数据库。因此新服务器首次启动可以打开应用，却看不到淘宝主题配置。
+
+### Change and acceptance
+
+- [x] `db.initialize()` 在通用来源初始化完成后调用 `ensure_core_topics()`，以查询 URL 幂等创建缺失主题并沿用既有同关键词来源。
+- [x] 不写商品事件、报价或采集历史；真实商品仍由已配置凭据后的官方定时任务获取。
+- [x] 更新安装与 ECS 部署文档；页面按钮保留为人工补齐入口。
+- [x] 测试新数据库自动有六个已启用主题、重复初始化不增行、旧纸品来源迁移、淘宝扫描只处理测试配置。
+- [x] 全量 `unittest discover -s tests`：344 项通过；`git diff --check` 通过。
+- [ ] 提交并推送 `feature/bootstrap`，再经 Workbench CLI 部署到 `/application`，检查在线 `/sources` 六主题及 worker 状态。
+
+### Boundary
+
+本地实现通过不等于 ECS 已加载新代码。此前工作期间 Workbench CLI 使用的 AccessKey 在异常工具输出中暴露，必须先由用户在 RAM 中轮换并更新 Workbench CLI 凭据；在此之前不复用该密钥，也不宣称在线配置已补齐。

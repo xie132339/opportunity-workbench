@@ -38,14 +38,34 @@ class TaobaoLivingTopicsTests(unittest.TestCase):
 
     def _insert_paper_source(self):
         with db.connect() as conn:
+            existing = conn.execute("SELECT id FROM sources WHERE method='taobao_alliance' AND url=?",
+                                    (source_url("抽纸"),)).fetchone()
+            if existing:
+                return existing["id"]
             return conn.execute("""INSERT INTO sources
                 (platform,name,category,url,method,parser,status,enabled,interval_minutes)
                 VALUES('淘宝联盟','淘宝店抽纸优惠搜索','零售优惠',?,'taobao_alliance',
                        'taobao_alliance','healthy',1,60)""", (source_url("抽纸"),)).lastrowid
 
-    def test_core_topics_adopt_existing_paper_source_and_are_idempotent(self):
+    def test_initialize_preloads_core_topics_and_is_idempotent(self):
+        with db.connect() as conn:
+            first = ensure_core_topics(conn, env=VALID_ENV)
+            second = ensure_core_topics(conn, env=VALID_ENV)
+            sources = conn.execute("SELECT * FROM sources WHERE method='taobao_alliance' ORDER BY id").fetchall()
+
+        self.assertEqual(first["created"], [])
+        self.assertEqual(len(first["adopted"]), len(CORE_LIVING_TOPICS))
+        self.assertEqual(second["created"], [])
+        self.assertEqual(len(second["adopted"]), len(CORE_LIVING_TOPICS))
+        self.assertEqual(len(sources), len(CORE_LIVING_TOPICS))
+        self.assertTrue(all(row["enabled"] for row in sources))
+        self.assertEqual({search_config(row["url"])["q"] for row in sources},
+                         {topic.keyword for topic in CORE_LIVING_TOPICS})
+
+    def test_ensure_topics_adopts_legacy_paper_source_and_creates_missing_topics(self):
         paper_id = self._insert_paper_source()
         with db.connect() as conn:
+            conn.execute("DELETE FROM sources WHERE method='taobao_alliance' AND id<>?", (paper_id,))
             first = ensure_core_topics(conn, env=VALID_ENV)
             second = ensure_core_topics(conn, env=VALID_ENV)
             sources = conn.execute("SELECT * FROM sources WHERE method='taobao_alliance' ORDER BY id").fetchall()
@@ -97,7 +117,7 @@ class TaobaoLivingTopicsTests(unittest.TestCase):
             taobao_id = conn.execute("""INSERT INTO sources
                 (platform,name,category,url,method,parser,status,enabled)
                 VALUES('淘宝联盟','淘宝主题','零售优惠',?,'taobao_alliance','taobao_alliance','healthy',1)""",
-                (source_url("大米"),)).lastrowid
+                (source_url("测试专用主题"),)).lastrowid
             other_id = conn.execute("""INSERT INTO sources
                 (platform,name,category,url,method,status,enabled)
                 VALUES('其他平台','不应复审','零售优惠','https://example.test/feed','rss','healthy',1)""").lastrowid

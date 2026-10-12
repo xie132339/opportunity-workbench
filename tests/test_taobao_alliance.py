@@ -793,6 +793,9 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         self.db_patch.start()
         db.initialize()
         with db.connect() as conn:
+            # Production initialization now preloads six enabled default
+            # topics. These pipeline tests exercise only their own fixture.
+            conn.execute("UPDATE sources SET enabled=0 WHERE method='taobao_alliance'")
             self.source_id = conn.execute("""INSERT INTO sources
                 (platform,name,category,url,method,parser,status,enabled,interval_minutes)
                 VALUES('淘宝联盟','抽纸搜索','零售优惠',?,'taobao_alliance','taobao_alliance','pending',1,60)""",
