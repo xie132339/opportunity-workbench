@@ -68,4 +68,4 @@ Publish the current `feature/bootstrap` worktree on the user-created Aliyun ECS 
 
 ## Outcomes and retrospective
 
-The feature branch revision `636fcaf` is running from `/application`. Web, worker, backup timer, Nginx, local health, login, database ownership, and active backup behavior have current evidence. The remaining boundary is only independent external-browser HTTP confirmation; this execution environment reached port 80 at TCP level but its direct HTTP client returned no response body.
+The current `feature/bootstrap` revision is running from `/application`. Web, worker, backup timer, Nginx, local health, login, database ownership, and active backup behavior have current evidence. The remaining boundary is only independent external-browser HTTP confirmation; this execution environment reached port 80 at TCP level but its direct HTTP client returned no response body.
