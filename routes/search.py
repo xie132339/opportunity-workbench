@@ -23,6 +23,7 @@ from services.marketplace_identity import (
     FILTER_OPTIONS, attach_product_marketplace, marketplace_matches_filter,
 )
 from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
+from services.discount_calibration import assess_brand_baseline, topic_key
 from services.taobao_alliance import validated_offer_for_row
 from services.search_result_cache import get as get_prepared_search, put as put_prepared_search
 
@@ -177,8 +178,18 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
     source_comparison_deferred = not ready_only and len(all_rows) > MAX_TARGET_IDS_FOR_PEER_EXPANSION
     for row in all_rows:
         attach_offer_data(row, include_diagnostics=not source_comparison_deferred)
-        row['maintained_baseline'] = assess_maintained_baseline(
+        maintained = assess_maintained_baseline(
             row, row['offer_brief'], row.get('display_quote'), maintained_baselines)
+        # 人工维护基准优先；未命中时回退品牌标准市场价自动基准（95 品牌配置表，
+        # 即用户要求全面维护的配置数据），使 AC-05 维护基准判断实际生效。
+        if maintained.get('state') in ('no_match', 'unit_unavailable', 'not_official_promotion'):
+            brand = assess_brand_baseline(
+                topic_key(row.get('source_name')) or row.get('display_topic') or row.get('topic'),
+                row.get('title') or (row.get('offer_brief') or {}).get('title') or '',
+                (row.get('display_quote') or {}).get('amount_cents'))
+            if brand.get('state') != 'no_match':
+                maintained = brand
+        row['maintained_baseline'] = maintained
     source_match_counts = {}
     source_quote_counts = {}
     for matched_row in all_rows:
@@ -493,8 +504,16 @@ def index():
                     source_quote_counts[prepared['source_id']]=source_quote_counts.get(prepared['source_id'],0)+1
                 prepared_candidates.append(prepared)
             for prepared in prepared_candidates:
-                prepared['maintained_baseline'] = assess_maintained_baseline(
+                maintained = assess_maintained_baseline(
                     prepared, prepared['offer_brief'], prepared.get('display_quote'), maintained_baselines)
+                if maintained.get('state') in ('no_match', 'unit_unavailable', 'not_official_promotion'):
+                    brand = assess_brand_baseline(
+                        topic_key(prepared.get('source_name')) or prepared.get('display_topic') or prepared.get('topic'),
+                        prepared.get('title') or (prepared.get('offer_brief') or {}).get('title') or '',
+                        (prepared.get('display_quote') or {}).get('amount_cents'))
+                    if brand.get('state') != 'no_match':
+                        maintained = brand
+                prepared['maintained_baseline'] = maintained
             total=len(prepared_candidates)
             total_pages = max(1, (total + page_size - 1) // page_size)
             page = min(page, total_pages)

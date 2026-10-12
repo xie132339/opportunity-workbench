@@ -16,6 +16,7 @@ from services.public_campaign import parse_public_campaign
 from services.money import cents
 from services.opportunity_analysis import public_profit_estimate
 from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
+from services.discount_calibration import assess_brand_baseline, topic_key
 from routes.common import go
 
 def opportunity(opportunity_id):
@@ -61,6 +62,13 @@ def opportunity(opportunity_id):
         detail_quote=listing_quote(dict(opp,catalog_listing=opp.get('source_parser') in CATALOG_LISTING_PARSERS),brief)
         detail_quote_note=quote_note(brief)
         maintained_baseline=assess_maintained_baseline(opp, brief, detail_quote, load_baselines(db))
+        if maintained_baseline.get('state') in ('no_match', 'unit_unavailable'):
+            brand = assess_brand_baseline(
+                topic_key(opp.get('source_name')) or opp.get('display_topic') or opp.get('topic'),
+                opp.get('title') or brief.get('title') or '',
+                (detail_quote or {}).get('amount_cents'))
+            if brand.get('state') != 'no_match':
+                maintained_baseline = brand
         opp_for_merchant=dict(opp,detail_json=review['detail_json'] if review else '{}')
         product_identity=merchant_identity(opp_for_merchant)
         readiness=assess_readiness(opp,comparison,brief)

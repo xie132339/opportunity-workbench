@@ -456,6 +456,117 @@ def is_brand_market_overpriced(topic, title, final_cents):
     return unit_price > int(standard * factor * BRAND_OVERPRICE_K)
 
 
+BRAND_BASELINE_RANKS = {
+    # ratio thresholds -> (state, label, rank), aligned with maintained_price_baselines
+    "bargain": 0.60,   # 折算标准单价 ≤ 市场价 6 折 = 可捡漏
+    "low": 0.85,       # ≤ 8.5 折 = 优惠
+    "typical": 1.00,   # ≤ 市场价 = 低于常规
+    "regular": 1.20,   # ≤ 市场价×1.2 = 常规
+}
+BRAND_BASELINE_UNVERIFIED_RATIO = 0.30  # 便宜到离谱：不标可捡漏，防假货/解析异常霸榜
+BRAND_BASELINE_EXCLUDE_TERMS = {
+    # 非本品类混品（单价通常低于本品类，用本品类标准价比较会误标"可捡漏"）：
+    # 黄小米/杂粮等不是大米，不能用大米品牌标准价下结论。
+    "rice": ("小米", "黄小米", "杂粮", "糯米", "黑米", "糙米", "藜麦", "燕麦米"),
+}
+
+
+def _brand_standard_reference(topic, brand):
+    """Return (standard_cents, unit_label) or None when the brand has no
+    usable maintained standard-market reference for this topic."""
+    spec = (BRAND_REFERENCE_CONFIG.get(topic) or {}).get(brand)
+    if not isinstance(spec, dict):
+        return None
+    standard = spec.get("price_cents")
+    unit = spec.get("unit")
+    if not isinstance(standard, int) or not isinstance(unit, str) or not unit:
+        return None
+    return standard, unit
+
+
+def assess_brand_baseline(topic, title, amount_cents):
+    """Positive-side bargain assessment using the maintained brand standard
+    market prices (BRAND_REFERENCE_CONFIG, the operator-editable config the
+    user asked to keep comprehensive).  Returns the same schema as
+    maintained_price_baselines.assess_maintained_baseline so lists, detail
+    pages and the 'maintained-baseline bargain first' sort all work unchanged.
+
+    Only branded items whose spec converts to the brand's standard selling
+    unit are assessed; exempt sub-categories (乳霜/悬挂/菜籽油/烘焙面粉…)
+    have no standard-unit baseline and never get a conclusion (conservative,
+    no mislabelling).  ratio < 0.30 is flagged unverified instead of 'bargain'
+    so absurdly cheap rows (fake/lookup errors) never rank as genuine deals.
+    """
+    base = {
+        "state": "no_match", "label": "尚无匹配品牌基准", "note": "",
+        "rank": 0, "baseline_id": None, "baseline_name": "",
+        "baseline_version": None, "unit_label": "", "current_unit_cents": None,
+        "bargain_cents": None, "low_cents": None, "typical_cents": None,
+        "high_cents": None, "typical_delta_cents": None, "matched_by": "",
+        "ratio": None,
+    }
+    if not isinstance(amount_cents, int) or isinstance(amount_cents, bool) or amount_cents <= 0:
+        return base
+    topic = topic or "other"
+    brand = brand_from_title(title or "", topic)
+    if brand is None:
+        return base
+    if any(term in (title or "") for term in BRAND_BASELINE_EXCLUDE_TERMS.get(topic, ())):
+        return base
+    ref = _brand_standard_reference(topic, brand)
+    if ref is None:
+        return base
+    # 注意：不检查 BRAND_EXEMPT_TERMS——豁免词只作用于拦截侧（细分品类单价
+    # 高不拦）；捡漏侧"折算低于品牌标准市场价"本身就是真便宜的强证据，忽略
+    # 豁免词才能让柴火五常米/新疆面粉等真品获得捡漏标注，不浪费已维护的标准价。
+    standard, unit = ref
+    priced = spec_unit_price_cents(title or "", amount_cents)
+    if priced is None:
+        return base
+    unit_label, unit_price = priced
+    if unit_label != unit:
+        return base
+    ratio = unit_price / standard
+    note = "该结论仅按本工作台维护的品牌标准市场价计算，不代表账号结算价或全网最低价。"
+    matched_by = (f"品牌「{brand}」按标题规格折算为 {unit_price / 100:.2f} 元/{unit_label}"
+                  f"，与配置标准市场价 {standard / 100:.2f} 元/{unit_label} 比较")
+    if ratio < BRAND_BASELINE_UNVERIFIED_RATIO:
+        return {**base, "state": "unverified_brand", "label": "按品牌基准：异常偏低待复核",
+                "note": note, "baseline_name": brand,
+                "baseline_version": "品牌标准市场价配置表", "effective_from": "持续生效",
+                "unit_label": unit_label, "current_unit_cents": unit_price,
+                "bargain_cents": int(standard * BRAND_BASELINE_RANKS["bargain"]),
+                "low_cents": int(standard * BRAND_BASELINE_RANKS["low"]),
+                "typical_cents": standard, "high_cents": int(standard * BRAND_BASELINE_RANKS["regular"]),
+                "typical_delta_cents": standard - unit_price, "matched_by": matched_by,
+                "ratio": ratio}
+    for state, label, rank in (("maintained_bargain", "按品牌基准：可捡漏", 5),
+                               ("maintained_low", "按品牌基准：优惠", 4),
+                               ("maintained_below_typical", "按品牌基准：低于常规", 3),
+                               ("maintained_regular", "按品牌基准：常规价格", 2),
+                               ("maintained_high", "按品牌基准：价格偏高", 1)):
+        if ratio <= BRAND_BASELINE_RANKS["regular"] or state == "maintained_high":
+            threshold = BRAND_BASELINE_RANKS.get(state.split("_")[-1], None)
+            # bargain/low/below_typical use their own upper bound; regular/high
+            # fall through when ratio <= 1.2 / above it.
+            if state in ("maintained_bargain", "maintained_low", "maintained_below_typical"):
+                bound = {"maintained_bargain": 0.60, "maintained_low": 0.85,
+                         "maintained_below_typical": 1.00}[state]
+                if ratio > bound:
+                    continue
+            return {**base, "state": state, "label": label, "rank": rank,
+                    "note": note, "baseline_name": brand,
+                    "baseline_version": "品牌标准市场价配置表", "effective_from": "持续生效",
+                    "unit_label": unit_label, "current_unit_cents": unit_price,
+                    "bargain_cents": int(standard * BRAND_BASELINE_RANKS["bargain"]),
+                    "low_cents": int(standard * BRAND_BASELINE_RANKS["low"]),
+                    "typical_cents": standard,
+                    "high_cents": int(standard * BRAND_BASELINE_RANKS["regular"]),
+                    "typical_delta_cents": standard - unit_price, "matched_by": matched_by,
+                    "ratio": ratio}
+    return base
+
+
 def small_spec_limits(title):
     """Whether a title describes a small-specification item in every measured
     unit (e.g. "30抽宝宝用" or "348ml*2瓶").  Titles with a large unit (整箱/
