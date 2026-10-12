@@ -4,5 +4,10 @@
     <span><small>{{ row.mobile_price_label }}</small><b>{{ money(row.mobile_price_cents) if row.mobile_price_cents is not none else '—' }}</b></span>
     <span><small>优惠价</small><b>{% if row.mobile_discount_cents is not none %}{{ '约 ' if row.mobile_discount_estimated else '' }}{{ money(row.mobile_discount_cents) }}{% else %}—{% endif %}</b></span>
   </div>
-  <a class="mobile-offer-detail" href="{{ url_for('opportunity',opportunity_id=row.id) }}">详情 →</a>
+  <div class="mobile-offer-actions">
+    {% if row.affiliate_promotion %}
+    <a class="mobile-offer-open" data-app-promotion href="{{ row.affiliate_promotion.url }}" target="_blank" rel="noopener noreferrer">在淘宝 App 打开</a>
+    {% endif %}
+    <a class="mobile-offer-detail" href="{{ url_for('opportunity',opportunity_id=row.id) }}">详情 →</a>
+  </div>
 </div>

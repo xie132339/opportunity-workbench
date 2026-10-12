@@ -12,6 +12,7 @@ import scanner
 import autoreview
 import app as application_module
 from app import app
+from flask import render_template
 from routes.search import can_skip_alliance_link_enrichment
 from services.product_search import affiliate_promotion, is_promotional_price_candidate, listing_quote
 from services.taobao_alliance import (
@@ -817,6 +818,28 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
                 patch("autoreview.review_all"):
             scanner.scan_all(method="taobao_alliance")
         scan.assert_called_once_with(self.source_id, review=False)
+
+    def test_mobile_offer_shows_open_button_only_with_affiliate_link(self):
+        row = {
+            "id": 1,
+            "mobile_price_label": "价格",
+            "mobile_price_cents": 800,
+            "mobile_discount_cents": 600,
+            "mobile_discount_estimated": False,
+            "affiliate_promotion": {"url": "https://s.click.taobao.com/t?e=official-token",
+                                    "commission_amount_cents": 17},
+        }
+        with app.test_request_context():
+            html = render_template("_mobile_offer.html", row=row, display_title="测试抽纸 100抽*10包")
+        self.assertIn("在淘宝 App 打开", html)
+        self.assertIn("data-app-promotion", html)
+        self.assertIn("https://s.click.taobao.com/t?e=official-token", html)
+        self.assertIn("详情", html)
+        row["affiliate_promotion"] = None
+        with app.test_request_context():
+            html = render_template("_mobile_offer.html", row=row, display_title="测试抽纸 100抽*10包")
+        self.assertNotIn("data-app-promotion", html)
+        self.assertNotIn("在淘宝 App 打开", html)
 
     def test_taobao_detail_cycle_never_probes_another_source_method(self):
         with db.connect() as conn:
