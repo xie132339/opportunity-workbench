@@ -33,6 +33,37 @@ CORE_LIVING_TOPICS = (
     LivingTopic("laundry_detergent", "居家清洁", "洗衣液", "洗衣液"),
 )
 
+# Per-topic ceiling for a plausible household-goods promotion price (in cents).
+# The official keyword search also returns unrelated high-ticket items (e.g. an
+# industrial rice-polishing machine or a 2997 yuan detergent bundle), so a
+# material priced above the ceiling is kept for source audit but never admitted
+# to the default offer list. Ceilings are set above each topic's real P99 so
+# genuine large bundles and premium oils (e.g. a 1308 yuan 5L camellia oil) are
+# not collateral damage.
+TOPIC_PRICE_CEILING_CENTS = {
+    "paper": 30000,               # 300 元
+    "water": 40000,               # 400 元
+    "rice": 50000,                # 500 元
+    "flour": 40000,               # 400 元
+    "cooking_oil": 200000,        # 2000 元（容纳高端山茶油/礼盒真品）
+    "laundry_detergent": 30000,   # 300 元
+}
+
+
+def living_topic_ceiling_cents(source_name):
+    """Return the promotion-price ceiling for a managed living-topic source.
+
+    Returns ``None`` for custom/unmanaged sources so operator-added keywords
+    are not filtered by a ceiling they did not choose.
+    """
+    name = " ".join(str(source_name or "").split())
+    if not name:
+        return None
+    for topic in CORE_LIVING_TOPICS:
+        if topic.keyword in name:
+            return TOPIC_PRICE_CEILING_CENTS.get(topic.key)
+    return None
+
 
 def normalize_keyword(value):
     """Return a stable search phrase accepted by the official adapter."""

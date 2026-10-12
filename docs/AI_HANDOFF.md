@@ -57,6 +57,14 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 手机 offer 卡片（`templates/_mobile_offer.html`）在"详情"旁新增"在淘宝 App 打开"按钮，仅当该行携带官方淘宝联盟推广链接（`row.affiliate_promotion`，`s.click.taobao.com`）时显示；复用 `static/mobile.js` 的 `data-app-promotion` 唤端路径（手机端 `tbopen://` + 网页备用）。无联盟入口的来源不显示该按钮。
 - 验证：新增渲染测试通过；专项 60 项、全量 368 项中 1 个**既有失败**（`test_single_item_price_is_not_rendered_twice`，stash 基线同样失败，与本改动无关）；本机 5002 与 ECS `/application` 均已加载该改动；ECS HEAD `5090068`，公网登录后 `q=抽纸` 页面按钮出现 100 处、`data-app-promotion` 与 `s.click.taobao.com` 锚点各 200 处。实体手机唤端与佣金归因仍需实体机回放。
 
+## 5.2 2026-10-12 假优惠与荒谬单价拦截
+
+- 背景：淘宝联盟 `reserve_price` 是商家自设划线价，可任意虚高，产生大量"一包纸优惠几百元、付款几块钱"的假优惠；生活品关键词还误命中几千上万的工业设备/荒谬组合价。
+- 规则 1（参考价差合理性）：`services/taobao_alliance.py::reference_drop_plausibility` 判定划线价差不可信的情形——降幅超过参考价 90%（`drop*10 > reserve*9`）、参考价超过推广价 20 倍、或推广价低于 10 元且优惠额超过 50 元。`parse_item` 的 `price_drop` 信号、`services/product_search.py::official_promotion_discount` 的参考价差候选共用该门控；存量数据在展示层即时生效（`validated_offer` 运行时重算）。保留审计字段 `reference_drop_plausible/reference_drop_reason`，snippet 追加"参考价过高，未据此认定优惠"。
+- 规则 2（生活品主题单价上界）：`services/taobao_living_topics.py::TOPIC_PRICE_CEILING_CENTS`（纸品 300/饮用水 400/大米 500/面粉 400/食用油 2000/洗衣液 300 元）+ `living_topic_ceiling_cents(source_name)`（按核心主题关键词匹配来源名，自定义来源不拦）；`promotion_admission` 淘宝分支对超上界推广价返回 `eligible=False, tier='promotion_clue'`，reason 注明"合理上界"，仅来源审计。
+- 真实数据回放（100,707 条）：假优惠（优惠>50 元且付款<10 元）1661 条 **100% 拦截**；旧降价信号 56,407 条中新规则判定不可信 2,977 条；超主题上界 486 条（其中 115 条原为优惠信号被拦出默认列表）。高端真品（山茶油 5L 1308 元、橄榄油 3L 616 元）在上界内不受影响。
+- 测试：新增 6 项专项（合理性边界、解析信号、官方优惠额、准入拦截、真品不误伤）；全量 `unittest discover -s tests` 372 项，唯一失败为既有 `test_single_item_price_is_not_rendered_twice`（基线同样失败）。文档：`docs/current-product-contract.md` 第 3 节新增价格规则 6/7 与准入表"可解释的当前优惠信号"表述；`docs/core-acceptance.md` 增补 2026-10-12 拦截验收记录。
+
 ## 6. 安全与交付
 
 不要将本机 `.env`、服务器 `.runtime/workbench.env`、App Secret、管理员密码、会话密钥或数据库写进交接文档、终端输出或 Git。远端操作优先按已安装的 `alibabacloud-workbench-cli` Skill 和 `docs/deployment-aliyun-ecs.md`；仅在用户当前明确授权的范围内变更外部系统。GitHub 分支当前比本机落后，下一位 AI 不能只拉取远端再宣称拿到最新代码。若需发布，先核对当前凭据、分支、差异、ECS 状态和用户意图。

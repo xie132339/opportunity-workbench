@@ -69,6 +69,34 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 search_config(invalid)
 
+    def test_reference_drop_plausibility_rejects_inflated_strikethrough(self):
+        from services.taobao_alliance import reference_drop_plausibility as plausible
+        # 用户反馈的假优惠：一包纸参考 199 元、推广 2.9 元 → 降幅 98.5%
+        self.assertFalse(plausible(19900, 290)[0])
+        self.assertFalse(plausible(12990, 990)[0])     # 92.4% 降幅
+        self.assertFalse(plausible(10000, 500)[0])     # 参考价 20 倍于推广价
+        self.assertFalse(plausible(10000, 300)[0])     # 参考价 33 倍于推广价
+        self.assertFalse(plausible(None, 300)[0])
+        # 绝对荒谬保护：付款 9.9 元、优惠 55 元（降幅 84.7%）仍属划线虚高
+        self.assertFalse(plausible(6490, 990)[0])
+        self.assertFalse(plausible(6990, 690)[0])      # 付款 6.9 元、优惠 63 元
+        # 真实促销不受影响：5 折、7 折、以及 1 折清仓边界（0.90）均保留
+        self.assertTrue(plausible(10000, 5000)[0])
+        self.assertTrue(plausible(10000, 3000)[0])
+        self.assertTrue(plausible(10000, 1000)[0])
+
+    def test_parse_item_inflated_reference_drop_is_not_a_promotion_signal(self):
+        record = parse_item(sample_item(self.now, reserve="199.00", promotion="2.90"), now=self.now)
+        offer = record[5]["taobao_alliance_offer"]
+        self.assertFalse(offer["price_drop_candidate"])
+        self.assertFalse(offer["reference_drop_plausible"])
+        self.assertIn("参考价过高", record[3])
+        # 合理降幅仍应产生促销信号
+        record_ok = parse_item(sample_item(self.now, reserve="10.00", promotion="8.00"), now=self.now)
+        offer_ok = record_ok[5]["taobao_alliance_offer"]
+        self.assertTrue(offer_ok["price_drop_candidate"])
+        self.assertTrue(offer_ok["reference_drop_plausible"])
+
     def test_only_official_promotion_links_skip_local_link_resolution(self):
         direct = parse_item(sample_item(self.now), now=self.now)
         promotion = sample_item(self.now)
@@ -840,6 +868,49 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
             html = render_template("_mobile_offer.html", row=row, display_title="测试抽纸 100抽*10包")
         self.assertNotIn("data-app-promotion", html)
         self.assertNotIn("在淘宝 App 打开", html)
+
+    def test_official_discount_ignores_unplausible_reference_drop(self):
+        from services.product_search import official_promotion_discount
+        now = datetime.now(CHINA)
+        record = parse_item(sample_item(now, reserve="199.00", promotion="2.90"), now=now)
+        row = {"source_method": "taobao_alliance", "metadata_json": json.dumps(record[5])}
+        # 只有不可信的参考价差，没有券或完整路径 → 不产生官方优惠额
+        self.assertIsNone(official_promotion_discount(row))
+        record_ok = parse_item(sample_item(now, reserve="10.00", promotion="8.00"), now=now)
+        row_ok = {"source_method": "taobao_alliance", "metadata_json": json.dumps(record_ok[5])}
+        discount = official_promotion_discount(row_ok)
+        self.assertEqual(discount["amount_cents"], 200)
+        self.assertEqual(discount["basis"], "推广价相对官方参考价差")
+
+    def test_admission_blocks_absurd_high_price_for_living_topic(self):
+        from routes.search import attach_offer_data
+        from services.marketplace_identity import attach_product_marketplace
+        from services.product_search import promotion_admission
+        now = datetime.now(CHINA)
+
+        def prepared(item, source_name):
+            record = parse_item(item, now=now)
+            row = {
+                "source_method": "taobao_alliance", "metadata_json": json.dumps(record[5]),
+                "title": record[1], "url": record[2], "snippet": record[3],
+                "auto_conditions": "", "detail_json": None, "review_checked_at": None,
+                "detail_checked_at": None, "detail_error": None, "source_category": "零售优惠",
+                "source_parser": "taobao_alliance", "auto_state": "observed",
+                "source_name": source_name,
+            }
+            attach_product_marketplace(row)
+            attach_offer_data(row, include_diagnostics=False)
+            return promotion_admission(row, {})
+
+        # 威露士洗衣液 2997 元（主题上界 300 元）→ 不进默认优惠列表
+        absurd = prepared(sample_item(now, reserve="2999.00", promotion="2997.00"),
+                          "淘宝生活品·洗衣液优惠搜索")
+        self.assertFalse(absurd["eligible"])
+        self.assertIn("合理上界", absurd["reason"])
+        # 食用油 1498 元（上界 2000 元，高端真品）→ 不因上界拦截
+        oil = prepared(sample_item(now, reserve="1498.00", promotion="1498.00"),
+                       "淘宝生活品·食用油优惠搜索")
+        self.assertNotIn("合理上界", oil.get("reason", ""))
 
     def test_taobao_detail_cycle_never_probes_another_source_method(self):
         with db.connect() as conn:

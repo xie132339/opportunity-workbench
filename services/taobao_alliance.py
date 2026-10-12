@@ -30,6 +30,35 @@ PROMOTION_SIGNAL_FIELDS = (
     "coupon_candidate",
     "promotion_path_candidate",
 )
+# A merchant-set reference (strikethrough) price can be inflated arbitrarily.
+# A price-drop signal that relies on it is only explainable when the drop stays
+# within a plausible range; otherwise the drop is kept for audit but never
+# presented as an official discount amount.
+REFERENCE_DROP_MAX_RATIO = 0.90  # drop / reserve must be <= 90% (10%+ remaining price)
+REFERENCE_MAX_MARKUP = 20        # reserve / promotion must be <= 20x
+
+
+def reference_drop_plausibility(reserve_cents, promotion_cents):
+    """Return (plausible, reason) for a reference-price reduction.
+
+    ``reserve_price`` is set by the merchant, so an extreme reduction against it
+    (e.g. a 199 yuan strikethrough on a 2.9 yuan pack of tissues) is treated as
+    an unverified marketing anchor rather than an official discount.
+    """
+    if not (isinstance(reserve_cents, int) and isinstance(promotion_cents, int)
+            and not isinstance(reserve_cents, bool) and not isinstance(promotion_cents, bool)
+            and reserve_cents > promotion_cents > 0):
+        return False, "无有效参考价差"
+    drop = reserve_cents - promotion_cents
+    # Absolute guard: a household item costing under 10 yuan cannot credibly
+    # "save" over 50 yuan (e.g. 6.26 yuan tissues with a 53-yuan strikethrough).
+    if promotion_cents < 1000 and drop > 5000:
+        return False, "低价值商品优惠额超过50元，划线价作为优惠证据不可信"
+    if drop * 10 > reserve_cents * 9:  # drop / reserve > 0.90
+        return False, "降幅超过参考价90%，参考价作为划线价不可信"
+    if reserve_cents > promotion_cents * REFERENCE_MAX_MARKUP:
+        return False, "参考价超过推广价20倍，参考价作为划线价不可信"
+    return True, ""
 
 
 def has_current_promotion_signal(offer):
@@ -331,7 +360,8 @@ def parse_item(item, now=None):
     )
     coupon_candidate = bool(coupon_dates_current and coupon_remaining and coupon_eligible_by_threshold
                             and coupon_amount_cents < promotion_cents)
-    price_drop = bool(reserve_cents and promotion_cents < reserve_cents)
+    price_drop_plausible, price_drop_reason = reference_drop_plausibility(reserve_cents, promotion_cents)
+    price_drop = bool(price_drop_plausible)
     promotion_path = _current_promotion_path(item, promotion_cents, now)
     rounding_up_price_cents = _optional_cents(item.get("predict_rounding_up_price"))
     rounding_up_description = " ".join(str(item.get("predict_rounding_up_price_desc") or "").split())[:120]
@@ -381,6 +411,9 @@ def parse_item(item, now=None):
     if quote_basis == "single_coupon_conditional_estimate":
         coupon_info += f"；按单件满足门槛试算券后价¥{quote_cents / 100:.2f}，非结算实测"
     reference_text = f"参考价¥{reserve_cents / 100:.2f}；" if reserve_cents else "参考价未提供；"
+    if (reserve_cents and promotion_cents and reserve_cents > promotion_cents
+            and not price_drop_plausible):
+        reference_text += "参考价过高，未据此认定优惠；"
     snippet = ("淘宝联盟官方推广 API 返回：" + reference_text
                + f"推广价¥{promotion_cents / 100:.2f}；"
                + (f"推广价低于参考价¥{discount_cents / 100:.2f}。"
@@ -447,6 +480,8 @@ def parse_item(item, now=None):
             "coupon_rule_estimate_basis": "仅单券扣减算式；未证明叠加、账号资格、可领取或结算",
             "coupon_candidate": coupon_candidate,
             "price_drop_candidate": price_drop,
+            "reference_drop_plausible": bool(price_drop_plausible),
+            "reference_drop_reason": price_drop_reason,
             "promotion_path_candidate": bool(promotion_path),
             "promotion_path": promotion_path,
             "promotion_path_complete": bool(promotion_path and promotion_path.get("complete")),

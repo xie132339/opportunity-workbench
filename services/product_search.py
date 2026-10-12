@@ -4,8 +4,10 @@ import re
 import unicodedata
 from decimal import Decimal
 from urllib.parse import urlparse
+from services.taobao_living_topics import living_topic_ceiling_cents
 from services.taobao_alliance import (
     has_current_promotion_signal as taobao_has_current_promotion_signal,
+    reference_drop_plausibility,
     validated_offer_for_row as validated_taobao_alliance_offer,
 )
 
@@ -230,7 +232,10 @@ def official_promotion_discount(row):
 
     candidates = []
     reference_drop = evidence.get('promotion_discount_cents')
+    reference_drop_plausible, _reason = reference_drop_plausibility(
+        evidence.get('reserve_price_cents'), evidence.get('promotion_price_cents'))
     if (evidence.get('price_drop_candidate') is True
+            and reference_drop_plausible
             and isinstance(reference_drop, int)
             and not isinstance(reference_drop, bool)
             and reference_drop > 0):
@@ -326,6 +331,13 @@ def promotion_admission(row, assessment):
     if row.get('source_method') == 'taobao_alliance':
         evidence = validated_taobao_alliance_offer(row)
         quote = row.get('display_quote') or {}
+        promotion_cents = (evidence or {}).get('promotion_price_cents')
+        ceiling = living_topic_ceiling_cents(row.get('source_name') or '')
+        if (ceiling and isinstance(promotion_cents, int)
+                and not isinstance(promotion_cents, bool)
+                and promotion_cents > ceiling):
+            return dict(eligible=False, tier='promotion_clue',
+                        reason='推广价超出当前生活品主题合理上界，仅作来源审计，不作为默认优惠展示')
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)
                 and quote['amount_cents'] > 0 and evidence):
