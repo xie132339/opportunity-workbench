@@ -874,6 +874,7 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
             "mobile_price_cents": 800,
             "mobile_discount_cents": 600,
             "mobile_discount_estimated": False,
+            "mobile_discount_rate": None,
             "affiliate_promotion": {"url": "https://s.click.taobao.com/t?e=official-token",
                                     "commission_amount_cents": 17},
         }

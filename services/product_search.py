@@ -236,8 +236,14 @@ def official_promotion_discount(row):
     topic = discount_calibration.topic_key(row.get('source_name') or '')
     reference_drop_plausible, _reason = discount_calibration.judge_drop(
         topic, evidence.get('reserve_price_cents'), evidence.get('promotion_price_cents'))
+    # The keyword search also returns look-alike products (a "rice & wheat
+    # shampoo" inside the rice topic); their reference-price gap must not
+    # surface as a discount amount or enter discount ranking.
+    title = (row.get('title') or '') if isinstance(row, dict) else ''
+    category_ok = discount_calibration.category_matches(topic, title)
     if (evidence.get('price_drop_candidate') is True
             and reference_drop_plausible
+            and category_ok
             and isinstance(reference_drop, int)
             and not isinstance(reference_drop, bool)
             and reference_drop > 0):

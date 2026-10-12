@@ -46,6 +46,47 @@ SEED_PRICE_CEILING_CENTS = {
     "cooking_oil": 200000, "laundry_detergent": 30000,
 }
 
+# Topic category terms: a reference-price discount amount is only produced when
+# the title carries a topic category word and no interfering word.  The living
+# keyword search also returns look-alike products (e.g. a "Kiehl's rice & wheat
+# shampoo" or a "rice-colored Reiss sweater" caught by the "rice" keyword);
+# without this guard those unrelated items dominate the discount ranking.
+# This is a category dictionary, not a business threshold.
+TOPIC_CATEGORY_TERMS = {
+    "paper": (("纸", "抽", "柔", "巾", "卷"), ("面膜", "化妆", "护肤", "彩妆", "直邮")),
+    "water": (("水", "泉", "矿", "瓶", "桶", "饮"), ("护肤", "爽肤", "化妆", "美容", "香水", "精华", "洗面", "面膜")),
+    "rice": (("米", "稻", "粳", "糯", "胚", "粥", "饭", "糙", "籼", "珍珠米", "丝苗", "五常", "长粒", "香米", "碎米"),
+             ("洗发", "护发", "化妆", "护肤", "彩妆", "面膜", "直邮", "条纹", "罗纹", "服饰", "衣", "裤", "裙", "鞋", "帽", "手机", "数码", "油")),
+    "flour": (("面", "粉", "麦", "麸", "馍", "馒头", "饺子", "面条"),
+              ("面膜", "化妆", "护肤", "彩妆", "粉底", "散粉", "爽身粉", "洗衣")),
+    "cooking_oil": (("油", "脂", "茶油", "橄榄", "菜籽", "葵花", "花生油", "玉米油", "调和油", "豆油", "米糠", "亚麻", "山茶"),
+                    ("机油", "润滑", "燃油", "汽油", "柴油", "护肤", "精华", "卸妆", "身体乳", "发油")),
+    "laundry_detergent": (("洗衣", "洗洁", "柔顺", "皂", "渍", "凝珠", "衣物", "内衣"),
+                          ("洗面", "洗发", "沐浴", "化妆", "护肤", "面膜")),
+}
+_GENERIC_INTERFERING_TERMS = ("洗发", "护发", "化妆", "护肤", "彩妆", "面膜", "直邮", "条纹", "罗纹",
+                              "服饰", "手机", "数码", "机器", "设备", "机油", "润滑")
+
+
+def category_matches(topic, title):
+    """Whether a title belongs to the topic's product category.
+
+    ``None``/unknown topic returns True (no category gate for custom sources);
+    a managed topic requires at least one include term and no interfering term.
+    """
+    if not title:
+        return True
+    terms = TOPIC_CATEGORY_TERMS.get(topic)
+    if not terms:
+        return True
+    include, exclude = terms
+    if not any(word in title for word in include):
+        return False
+    if any(word in title for word in exclude) or any(
+            word in title for word in _GENERIC_INTERFERING_TERMS):
+        return False
+    return True
+
 _CACHE = None   # dict: topic -> calibration payload, or None
 
 
@@ -303,10 +344,16 @@ def judge_drop(topic, reserve_cents, promotion_cents):
     drop = reserve_cents - promotion_cents
     ratio = drop / reserve_cents
     payload = get_calibration().get(topic)
-    # Premium prices (>= topic P97) are exempt from ratio/drop caps; the price
-    # ceiling above is the only guard for them.
+    # Premium prices (>= topic P97 bin edge) are protected from per-bin caps:
+    # deep discounts on genuine premium goods (12-bottle low-deuterium water,
+    # camellia-oil gift sets) are normal there.  They are still bound by the
+    # topic-wide drop cap so that 90%+ inflated strikethroughs (e.g. a shampoo
+    # caught by the "rice" keyword) do not surface a huge fake saving.
     high_log = (payload or {}).get("high_log")
     if high_log is not None and promotion_cents > 0 and math.log10(promotion_cents) >= high_log:
+        global_ratio = (payload or {}).get("global_ratio_cap")
+        if global_ratio is not None and ratio > global_ratio:
+            return False, f"降幅超过该主题全局可信上界（{global_ratio:.0%}），划线价作为优惠证据不可信"
         return True, ""
 
     ratio_cap, drop_cap = _lookup_caps(topic, promotion_cents)

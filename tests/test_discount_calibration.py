@@ -109,8 +109,28 @@ class CalibrationEstimatorTests(unittest.TestCase):
             self.assertFalse(dc.judge_drop("water", 30000, 3710)[0])
             # 500 元高端水 90% off：豁免线之上但荒谬高价上界 457 拦
             self.assertFalse(dc.judge_drop("water", 500000, 50000)[0])
+            # 豁免区内仍受主题全局降幅界约束：400 元水 92% off（超出全局 0.81）拦
+            self.assertFalse(dc.judge_drop("water", 500000, 40000)[0])
+            # 豁免区内 70% off 正常放行
+            self.assertTrue(dc.judge_drop("water", 133333, 40000)[0])
         finally:
             dc.set_calibration(None)
+
+    def test_category_matches_blocks_look_alike_products(self):
+        # 大米主题误命中的洗护/服饰商品：不得产生参考价差优惠额
+        self.assertFalse(dc.category_matches("rice", "欧洲直邮Kiehl's科颜氏大米小麦丰盈洗发露5"))
+        self.assertFalse(dc.category_matches("rice", "美国直邮reiss大米Fernando条纹罗纹上衣"))
+        self.assertFalse(dc.category_matches("water", "雅漾活泉水爽肤水喷雾化妆水"))
+        self.assertFalse(dc.category_matches("flour", "补水面膜粉底散粉爽身粉"))
+        self.assertFalse(dc.category_matches("cooking_oil", "发动机机油润滑油5W-30"))
+        # 真实品类商品全部放行
+        self.assertTrue(dc.category_matches("rice", "2025新米东北五常大米10斤装粳米"))
+        self.assertTrue(dc.category_matches("paper", "KUB可优比婴儿云柔巾乳霜保湿超柔抽纸80抽18包"))
+        self.assertTrue(dc.category_matches("water", "康泽泉低氘小分子水350ml×12瓶"))
+        self.assertTrue(dc.category_matches("cooking_oil", "赣江山茶油食用油2L礼盒纯正茶油"))
+        self.assertTrue(dc.category_matches("laundry_detergent", "蓝月亮洗衣液3kg薰衣草香深层洁净"))
+        # 未知主题（自定义来源）不设品类门槛
+        self.assertTrue(dc.category_matches(None, "任意商品标题"))
 
     def test_seed_fallback_matches_legacy_rules(self):
         dc.set_calibration(None)

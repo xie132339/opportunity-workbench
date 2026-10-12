@@ -60,12 +60,14 @@ def attach_offer_data(row, include_diagnostics=True):
     row['mobile_price_label'] = '价格'
     row['mobile_discount_cents'] = None
     row['mobile_discount_estimated'] = False
+    row['mobile_discount_rate'] = None
     if (taobao_offer and quote and quote['kind'] == 'official_promotion_observation'
             and row['official_discount']):
         basis = row['official_discount']['basis']
         promotion = taobao_offer.get('promotion_price_cents')
         if basis == '推广价相对官方参考价差':
             before, after = taobao_offer.get('reserve_price_cents'), promotion
+            row['mobile_discount_rate'] = row['official_discount'].get('rate_basis_points')
         elif basis == '单券条件试算减免':
             before, after = promotion, quote['amount_cents']
         elif basis == '完整官方促销路径减免':
@@ -75,6 +77,8 @@ def attach_offer_data(row, include_diagnostics=True):
             before = after = None
         if (isinstance(before, int) and isinstance(after, int)
                 and before > after > 0):
+            if row['mobile_discount_rate'] is None:
+                row['mobile_discount_rate'] = (before - after) * 10000 // before
             row['mobile_price_cents'] = before
             row['mobile_price_label'] = ('参考价' if basis == '推广价相对官方参考价差'
                                          else '推广价')

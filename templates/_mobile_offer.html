@@ -3,6 +3,7 @@
   <div class="mobile-offer-prices">
     <span><small>{{ row.mobile_price_label }}</small><b>{{ money(row.mobile_price_cents) if row.mobile_price_cents is not none else '—' }}</b></span>
     <span><small>优惠价</small><b>{% if row.mobile_discount_cents is not none %}{{ '约 ' if row.mobile_discount_estimated else '' }}{{ money(row.mobile_discount_cents) }}{% else %}—{% endif %}</b></span>
+    {% if row.mobile_discount_rate is not none %}<span class="mobile-offer-rate">省 {{ '%.1f'|format(row.mobile_discount_rate / 100) }}%</span>{% endif %}
   </div>
   <div class="mobile-offer-actions">
     {% if row.affiliate_promotion %}
