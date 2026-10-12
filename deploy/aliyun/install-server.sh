@@ -45,7 +45,7 @@ if [[ ! -f /etc/opportunity-workbench/workbench.env ]]; then
 fi
 
 systemctl daemon-reload
-WORKBENCH_DB=/var/lib/opportunity-workbench/workbench.sqlite3 "${APP_ROOT}/.venv/bin/gunicorn" --check-config wsgi:app
+runuser -u "${APP_USER}" -- env WORKBENCH_DB=/var/lib/opportunity-workbench/workbench.sqlite3 "${APP_ROOT}/.venv/bin/gunicorn" --check-config wsgi:app
 nginx -t
 
 echo "Preparation complete. Services and Nginx are deliberately not enabled by this script."
