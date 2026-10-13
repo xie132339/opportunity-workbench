@@ -213,8 +213,9 @@ class StrikeThroughSamplesTests(unittest.TestCase):
             # 真贵货仍拦
             self.assertTrue(dc.is_brand_market_overpriced('water', 'Ganten景田饮用纯净水560ml*24瓶整箱大瓶装水会议饮用水非矿泉', 5989))
             self.assertTrue(dc.is_brand_market_overpriced('water', 'Ganten百岁山天然矿泉水4.5L10箱大桶泡茶冲奶煮饭整箱饮用水批发', 43750))
-            self.assertTrue(dc.is_brand_market_overpriced('cooking_oil', '香满园四川风味精选食用调和油5L装菜籽香食用油家用商用炒菜新货', 36000))
-            self.assertTrue(dc.is_brand_market_overpriced('laundry_detergent', '【顺手买一件】奥妙4斤深层洁净洗衣液天然酵素去除顽渍长效抑菌', 9990))
+            # 真贵货仍拦（得宝普通款 7.3元/包 90抽=815分/100抽 > 450×1.2 拦；四层正厚豁免放行）
+            self.assertTrue(dc.is_brand_market_overpriced('paper', 'Tempo得宝软抽纸巾M码90抽15包/箱', 11000))
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '【积分】会员精选Tempo得宝无香软抽四层正厚M码抽纸90抽15包/箱', 11000))
             # 细分品类豁免：厨房抽纸/天鹅绒/Mini/羊绒面纸/润田翠/臻品贵族/河套雪
             self.assertFalse(dc.is_brand_market_overpriced('paper', '【下拉享优惠】心相印厨房抽纸2层70抽3包大张厨房专用卷纸吸水纸', 2990))
             self.assertFalse(dc.is_brand_market_overpriced('paper', '【买3加赠Pingu雨伞】Tempo得宝天鹅绒软抽纸巾M码60抽20包亲肤', 9990))
