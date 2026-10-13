@@ -1064,10 +1064,12 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
         now = datetime.now(CHINA)
         high = sample_item(now, item_id="affiliate-high")
         high.pop("num_iid")
-        high.update(item_id="affiliate-high", item_url="https://s.click.taobao.com/t?e=high", commission_amount="0.80")
+        high.update(item_id="affiliate-high", title="测试抽纸 高佣金款 100抽*10包",
+                    item_url="https://s.click.taobao.com/t?e=high", commission_amount="0.80")
         low = sample_item(now, item_id="affiliate-low")
         low.pop("num_iid")
-        low.update(item_id="affiliate-low", item_url="https://s.click.taobao.com/t?e=low", commission_amount="0")
+        low.update(item_id="affiliate-low", title="测试抽纸 低佣金款 100抽*10包",
+                   item_url="https://s.click.taobao.com/t?e=low", commission_amount="0")
         with patch("scanner.taobao_alliance_rows", return_value=[parse_item(high, now=now), parse_item(low, now=now)]):
             scanner.scan_source(self.source_id)
 
@@ -1103,14 +1105,21 @@ class TaobaoAlliancePipelineTests(unittest.TestCase):
             rows = conn.execute("""SELECT o.id,a.state FROM opportunities o
                 JOIN auto_reviews a ON a.opportunity_id=o.id
                 WHERE o.source_id=? ORDER BY o.id""", (self.source_id,)).fetchall()
-        self.assertEqual(len(rows), 2)  # Raw history is retained.
-        self.assertEqual(rows[0]["state"], "excluded")
-        self.assertEqual(rows[1]["state"], "observed")
+        # 稳定去重键：同商品跨轮同步不再新增（联盟 item_id/链接每轮动态，
+        # 旧实现产生重复快照；新实现按归一化标题|店铺合并，只刷新不新增）
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["state"], "observed")
+        with db.connect() as conn:
+            event = conn.execute("""SELECT e.last_seen_at, e.metadata_json FROM events e
+                JOIN opportunities o ON o.event_id=e.id WHERE o.source_id=?
+                ORDER BY o.id""", (self.source_id,)).fetchone()
+        self.assertIn("second-link", event["metadata_json"])
         page = app.test_client().get(
             "/?q=测试抽纸&buy_platform=taobao&view=current").get_data(as_text=True)
+        # 稳定去重键后同商品不再产生第二条：当前视图只有这一条商品
         self.assertIn('1 条新鲜来源记录', page)
-        self.assertIn('href="/opportunities/2"', page)
-        self.assertNotIn('href="/opportunities/1"', page)
+        self.assertIn('href="/opportunities/1"', page)
+        self.assertNotIn('href="/opportunities/2"', page)
 
     def test_new_material_item_id_goes_directly_to_current_detail_api(self):
         now = datetime.now(CHINA)

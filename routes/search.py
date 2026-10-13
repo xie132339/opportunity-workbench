@@ -140,6 +140,25 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
     rendering concern, and lets the caller reuse this prepared result safely.
     """
     raw_rows = [dict(row) for row in db.execute(sql + order_by, args)]
+    # 展示层折叠：淘宝联盟同款（同归一化标题、不同店铺/多轮快照）只保留排序最优一条。
+    # SQL 已按 order_by 排序，每组第一个即最优/最新；非淘宝来源（external_key 唯一）不折叠。
+    if raw_rows:
+        seen_keys = set()
+        folded = []
+        for row in raw_rows:
+            key = row.get('id')
+            if row.get('source_method') == 'taobao_alliance':
+                ek = row.get('event_external_key') or ''
+                if ek.startswith('taobao:'):
+                    rest = ek[len('taobao:'):]
+                    key = ('t', rest.split('|')[0])
+            else:
+                key = ('o', key)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            folded.append(row)
+        raw_rows = folded
     rows_needing_link_enrichment = [
         row for row in raw_rows if not can_skip_alliance_link_enrichment(row)
     ]
@@ -363,6 +382,7 @@ def index():
              s.enabled AS source_enabled,s.interval_minutes AS source_interval,s.name AS source_name,
              s.last_success AS source_last_success,
              e.is_baseline,e.published_at,e.last_seen_at,e.url AS event_url,e.snippet,e.metadata_json,
+             e.external_key AS event_external_key,
              a.state AS auto_state,a.reason AS auto_reason,a.advertised_cents,
              a.specification AS auto_specification,a.conditions AS auto_conditions,a.detail_json,
              a.checked_at AS review_checked_at,a.detail_checked_at,a.detail_error

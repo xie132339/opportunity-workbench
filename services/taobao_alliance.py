@@ -331,6 +331,22 @@ def _current_promotion_path(item, public_cents, now):
     }
 
 
+def taobao_dedup_key(title, shop_title):
+    """稳定商品去重键。
+
+    淘宝联盟推广 API 不返回稳定商品 ID（num_iid 为空、item_id 每轮动态生成、
+    推广链接每轮不同），按「归一化标题|店铺」作为近似商品身份：同店同标题
+    视为同一商品，跨轮同步不再新增事件。仅用于 taobao_alliance 来源。
+    """
+    def _norm(text):
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
+        text = text.replace("（", "(").replace("）", ")")
+        text = text.replace("【", "[").replace("】", "]")
+        return text.lower()
+
+    return "taobao:" + _norm(title) + "|" + _norm(shop_title)
+
+
 def parse_item(item, now=None):
     """Turn one TOP result into a quote; promotion eligibility is assessed separately."""
     if not isinstance(item, dict):

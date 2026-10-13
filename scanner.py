@@ -509,17 +509,35 @@ def scan_source(source_id, *, review=True):
                 key, title, url, snippet = record[:4]
                 published_at = record[4] if len(record) > 4 else None
                 metadata = record[5] if len(record)>5 else {}
+                if published_at:
+                    # 坏时间戳在任何写入前即拒绝（回滚整个同步），避免被去重 IGNORE 短路
+                    datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S")
                 encoded = json.dumps(metadata,ensure_ascii=False,sort_keys=True)
-                digest = hashlib.sha256((title + "\n" + snippet + (encoded if metadata else '')).encode()).hexdigest()
+                taobao_dedup = None
+                if source["method"] == "taobao_alliance":
+                    # 联盟 API 无稳定商品 ID：用「归一化标题|店铺」作稳定身份键，
+                    # 同一商品跨轮同步不再新增事件（external_key/指纹均稳定，
+                    # UNIQUE 命中即刷新 last_seen_at 与最新报价并重审）。
+                    shop = (metadata.get("taobao_alliance_offer") or {}).get("shop_title") or ""
+                    from services.taobao_alliance import taobao_dedup_key as _dedup
+                    taobao_dedup = _dedup(title, shop)
+                    key, digest = taobao_dedup, taobao_dedup
+                else:
+                    digest = hashlib.sha256((title + "\n" + snippet + (encoded if metadata else '')).encode()).hexdigest()
                 result = db.execute("""INSERT OR IGNORE INTO events
                     (source_id,external_key,title,url,snippet,fingerprint,published_at,is_baseline,last_seen_at,metadata_json)
                     VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)""",
                     (source_id,key,title,url,snippet,digest,published_at,int(prior == 0),encoded))
                 if not result.rowcount:
-                    db.execute("""UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
-                        published_at=COALESCE(?,published_at)
-                        WHERE source_id=? AND external_key=? AND fingerprint=?""",
-                        (published_at,source_id,key,digest))
+                    refresh_args = [published_at, source_id, key, digest]
+                    refresh_sql = """UPDATE events SET last_seen_at=CURRENT_TIMESTAMP,
+                        published_at=COALESCE(?,published_at)"""
+                    if taobao_dedup is not None:
+                        # 同商品新快照：刷新最新报价元数据，价格变化交由重审更新准入与报价
+                        refresh_sql += ",metadata_json=?"
+                        refresh_args = [published_at, encoded, source_id, key, digest]
+                    refresh_sql += """ WHERE source_id=? AND external_key=? AND fingerprint=?"""
+                    db.execute(refresh_sql, tuple(refresh_args))
                     existing_event = db.execute("""SELECT id FROM events
                         WHERE source_id=? AND external_key=? AND fingerprint=?""",
                         (source_id, key, digest)).fetchone()
