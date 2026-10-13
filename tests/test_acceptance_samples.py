@@ -176,10 +176,45 @@ class StrikeThroughSamplesTests(unittest.TestCase):
             self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '道道全纯正菜籽油5L桶装', 8000))
             self.assertTrue(dc.is_brand_market_overpriced('cooking_oil', '香满园食用调和油5L桶装', 10000))
             self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '香满园食用调和油5L桶装', 7500))
-            # laundry：金纺（L 单位）60 元/3L 拦、45 元放行；网易严选放行
-            self.assertTrue(dc.is_brand_market_overpriced('laundry_detergent', '金纺衣物柔顺剂3L家庭装', 6000))
+            # laundry：金纺柔顺剂命中"柔顺"豁免（柔顺剂品类价格透明不误伤）；
+            # 网易严选放行；超能高端线豁免
+            self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '金纺衣物柔顺剂3L家庭装', 6000))
             self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '金纺衣物柔顺剂3L家庭装', 4500))
             self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '网易严选洗衣液3kg实惠装', 2500))
+        finally:
+            dc.set_calibration(None)
+
+    def test_品牌判据防误伤(self):
+        # 全量复验发现 235 条拦截中的误伤（小瓶/联名限定/高端线/加号组合规格），
+        # 修复后：真贵货仍拦、正常价全部放行（用户：一定不要误伤真实捡漏）。
+        dc.set_calibration(None)
+        try:
+            # 加号组合量贩装："18+6包"=24包 → 2.5元/包 130抽 不误伤
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '维达细韧抽纸3层130抽18+6包XS码纸巾', 5990))
+            # 联名/限定/迷你/四层豁免（得宝/心相印联名款、迷你抽纸、四层正厚）
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '【万圣节限定款】tempo得宝南瓜香迷你抽纸80抽4包h', 1990))
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '【新品上市】tempo得宝秋季限定桂花香印花抽纸80抽15包', 10090))
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '【积分】会员精选Tempo得宝无香软抽四层正厚M码抽纸90抽15包/箱', 11000))
+            # water 小瓶整箱保留 1.4 溢价保护（380ml）；无乘号桶数 5L4桶=20L；婴儿水豁免
+            self.assertFalse(dc.is_brand_market_overpriced('water', '农夫山泉饮用水非纯净水非矿泉水天然水红盖380ml*24瓶 整箱装1箱', 4112))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '农夫山泉饮用天然水5L4桶5升整箱非矿泉水家庭办公泡茶做饭饮用水', 4612))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '屈臣氏饮用水汪汪队联名200ml*24瓶非矿泉蒸馏水整箱便携小瓶', 6490))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '农夫山泉婴儿水天然水母婴水适合宝宝婴幼儿饮用水1L低钠整箱', 4000))
+            # rice：稻花香基准 2000（五常稻花香 10元/斤不误伤）；鲜米/6步鲜豁免；小包装<2.5kg 跳过
+            self.assertFalse(dc.is_brand_market_overpriced('rice', '响水大米千年御贡东北稻花香2号新米5kg石板大米2025新米', 8900))
+            self.assertFalse(dc.is_brand_market_overpriced('rice', '【下拉领补贴】金龙鱼稻谷鲜生6步鲜稻花香大米5kg东北寒地大米', 7990))
+            self.assertFalse(dc.is_brand_market_overpriced('rice', '【金龙鱼稻花香】6步鲜大米500g稻谷先生1斤粳米粥米宿舍福利正品', 1090))
+            # oil：加号组合 5.68L+5L=10.68L；葵仁油豁免
+            self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '金龙鱼黄金比例植物食用调和油5.68L+5L葵调家用炒菜油食用油', 17180))
+            self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '多力浓香葵仁油1.8L/桶家用炒菜营养健康食用油官方正品旗舰店', 6990))
+            # laundry：超能高端线（植沐/悦色/柔顺/亲肤/椰油/APG）豁免
+            self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '超能植沐悦色洗衣液3.38kg*2天然椰子油植物氨基酸绿色风铃草香', 12990))
+            self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '超能洗衣液APG10斤家用护衣护色抵抗沉积低泡易漂官方旗舰店正品', 13625))
+            # 真贵货仍拦
+            self.assertTrue(dc.is_brand_market_overpriced('water', 'Ganten景田饮用纯净水560ml*24瓶整箱大瓶装水会议饮用水非矿泉', 5989))
+            self.assertTrue(dc.is_brand_market_overpriced('water', 'Ganten百岁山天然矿泉水4.5L10箱大桶泡茶冲奶煮饭整箱饮用水批发', 43750))
+            self.assertTrue(dc.is_brand_market_overpriced('cooking_oil', '香满园四川风味精选食用调和油5L装菜籽香食用油家用商用炒菜新货', 36000))
+            self.assertTrue(dc.is_brand_market_overpriced('laundry_detergent', '【顺手买一件】奥妙4斤深层洁净洗衣液天然酵素去除顽渍长效抑菌', 9990))
         finally:
             dc.set_calibration(None)
 

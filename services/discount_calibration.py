@@ -230,7 +230,7 @@ BRAND_REFERENCE_CONFIG = {
         "乔府大院": {"terms": ("乔府大院",), "unit": "kg", "price_cents": 3000, "note": "乔府大院五常米约30元/kg"},
         "裕道府": {"terms": ("裕道府",), "unit": "kg", "price_cents": 3000, "note": "裕道府五常米约30元/kg"},
         "恒大兴安": {"terms": ("恒大兴安",), "unit": "kg", "price_cents": 1500, "note": "恒大兴安大米约15元/kg"},
-        "稻花香": {"terms": ("稻花香",), "unit": "kg", "price_cents": 1300, "note": "稻花香五常米约13元/kg"},
+        "稻花香": {"terms": ("稻花香",), "unit": "kg", "price_cents": 2000, "note": "稻花香五常米约10元/斤=20元/kg"},
         "葵花阳光": {"terms": ("葵花阳光",), "unit": "kg", "price_cents": 800, "note": "葵花阳光东北米约8元/kg"},
         "响水":   {"terms": ("响水",), "unit": "kg", "price_cents": 2000, "note": "响水大米高端约20元/kg"},
         "五芳斋": {"terms": ("五芳斋",), "unit": "kg", "price_cents": 800, "note": "五芳斋大米约8元/kg"},
@@ -257,11 +257,11 @@ BRAND_REFERENCE_CONFIG = {
         "香满园": {"terms": ("香满园",), "unit": "kg", "price_cents": 900, "note": "香满园面粉约7元/kg"},
         "中粮":   {"terms": ("中粮",), "unit": "kg", "price_cents": 700, "note": "中粮面粉约7元/kg"},
         "今麦郎": {"terms": ("今麦郎",), "unit": "kg", "price_cents": 400, "note": "今麦郎面粉约4元/kg"},
-        "想念":   {"terms": ("想念",), "unit": "kg", "price_cents": 500, "note": "想念面粉/挂面约5元/kg"},
-        "陈克明": {"terms": ("陈克明",), "unit": "kg", "price_cents": 500, "note": "陈克明面粉/挂面约5元/kg"},
+        "想念":   {"terms": ("想念",), "unit": "kg", "price_cents": 600, "note": "想念面粉/挂面约5元/kg"},
+        "陈克明": {"terms": ("陈克明",), "unit": "kg", "price_cents": 600, "note": "陈克明面粉/挂面约5元/kg"},
         "鲁王":   {"terms": ("鲁王",), "unit": "kg", "price_cents": 500, "note": "鲁王面粉约5元/kg"},
         "发达":   {"terms": ("发达",), "unit": "kg", "price_cents": 500, "note": "发达面粉约5元/kg"},
-        "香雪":   {"terms": ("香雪",), "unit": "kg", "price_cents": 500, "note": "中粮香雪面粉约5元/kg"},
+        "香雪":   {"terms": ("香雪",), "unit": "kg", "price_cents": 600, "note": "中粮香雪面粉约5元/kg"},
         "丹顶鹤": {"terms": ("丹顶鹤",), "unit": "kg", "price_cents": 600, "note": "丹顶鹤面粉约6元/kg"},
         "北大荒": {"terms": ("北大荒",), "unit": "kg", "price_cents": 600, "note": "北大荒面粉约6元/kg"},
         "王后":   {"terms": ("王后",), "unit": "kg", "price_cents": 1500, "note": "王后烘焙面粉高端约15元/kg"},
@@ -348,25 +348,28 @@ BRAND_OVERPRICE_K = 1.2
 # 面粉、普通大米、常规洗衣液）仍严格用品牌标准价判据。
 BRAND_EXEMPT_TERMS = {
     "paper": ("乳霜", "云柔", "柔巾", "婴儿", "宝宝", "护理", "悬挂", "挂抽",
-              "壁挂", "提挂", "加厚", "4层", "5层", "6层", "厚实", "压花",
+              "壁挂", "提挂", "加厚", "4层", "四层", "正厚", "厚实", "压花",
+              "迷你", "联名", "限定", "万圣节", "kitty", "凯蒂", "三丽鸥", "桂花香", "南瓜香",
               "擦手", "厨房纸", "多康", "商用", "商务", "湿厕", "可冲散",
               "溶易抽", "黑金", "高端", "进口", "XL", "大尺寸"),
     "water": ("苏打", "气泡", "含气", "咖啡", "茶饮", "果味", "迷你", "儿童",
-              "碱性", "电解", "体验"),
+              "碱性", "电解", "体验", "联名", "限定", "婴儿", "母婴", "宝宝", "汪汪队"),
     "rice": ("杂粮", "糙米", "低GI", "黑米", "红米", "紫米", "胚芽", "有机",
              "礼盒", "特等", "臻选", "贡米", "五常", "香米", "长粒香",
-             "茉莉香米", "皇家", "组合", "粮油", "小袋"),
+             "茉莉香米", "皇家", "组合", "粮油", "小袋", "鲜米", "6步鲜", "稻谷鲜生"),
     "flour": ("全麦", "黑麦", "麦麸", "烘焙", "面包", "自发", "预拌", "杂粮",
               "瑞雪", "麦芯", "尚品", "雪花", "臻选", "有机", "淀粉", "澄面",
               "虾饺", "小袋", "石磨", "面筋粉", "谷朊粉", "六星", "七星",
-              "八星", "九星", "金典", "冀南香", "沙粒", "wonder"),
+              "八星", "九星", "金典", "冀南香", "沙粒", "wonder", "天山", "新疆",
+              "多谷物", "谷物", "糕点", "低筋", "奇台"),
     "cooking_oil": ("花生", "橄榄", "山茶", "茶油", "菜籽油", "初榨", "胡麻",
                     "亚麻", "核桃", "芝麻", "葡萄籽", "红花", "芥花", "牛油果",
-                    "葵花籽", "葵花仁", "玉米", "大豆油", "稻米油", "米糠油",
+                    "葵花籽", "葵花仁", "葵仁", "玉米", "大豆油", "稻米油", "米糠油",
                     "二酯"),
     "laundry_detergent": ("浓缩", "凝珠", "手洗", "内衣", "婴儿", "宝宝",
                           "敏感", "孕妇", "香氛", "精油", "大师", "香护",
-                          "除菌", "消毒", "袋装", "快洗"),
+                          "除菌", "消毒", "袋装", "快洗", "植沐", "悦色", "柔顺",
+                          "亲肤", "椰油", "氨基酸", "低泡", "柔护", "APG"),
 }
 
 # 小规格瓶装溢价系数（water：280-410ml 小瓶单 ml 价高于 500-570ml 标准瓶，
@@ -439,6 +442,17 @@ def spec_unit_price_cents(title, final_cents):
         n = float(m.group(3))
         if n > 1:
             specs["pack"] = max(specs.get("pack", 0.0), float(m.group(1)) * n)
+    # 加号组合量贩装："18+6包"=24包、"5.68L+5L"=10.68L（防把组合装当单规格误伤）
+    plus_pack = re.search(r"(\d+)\s*\+\s*(\d+)\s*(包|提)", title)
+    if plus_pack:
+        specs["pack"] = float(plus_pack.group(1)) + float(plus_pack.group(2))
+    plus_liter = re.search(r"(\d+(?:\.\d+)?)\s*[Ll升]\s*\+\s*(\d+(?:\.\d+)?)\s*[Ll升]", title)
+    if plus_liter:
+        specs["liter"] = float(plus_liter.group(1)) + float(plus_liter.group(2))
+    # 无乘号桶数："5L4桶"=20L（"5L*4桶"已由 _TIMES_RE 处理，此处不重复）
+    l_bucket = re.search(r"(\d+(?:\.\d+)?)\s*[Ll升]\s*(\d+)\s*桶", title)
+    if l_bucket and specs.get("liter"):
+        specs["liter"] *= float(l_bucket.group(2))
     box = _BOX_RE.search(title)
     bag = _BAG_RE.search(title)
     if not specs:
@@ -540,6 +554,10 @@ def is_brand_market_overpriced(topic, title, final_cents):
         bulk = bulk_kg_or_none(title)
         if bulk is not None and bulk < 5.0:
             return False
+    elif topic == "rice":
+        bulk = bulk_kg_or_none(title)
+        if bulk is not None and bulk < 2.5:
+            return False
     elif topic == "laundry_detergent":
         bulk = bulk_kg_or_none(title)
         if bulk is not None and bulk < 2.0:
@@ -549,7 +567,14 @@ def is_brand_market_overpriced(topic, title, final_cents):
         # 整箱/大包装为常规规格，无小规格尝鲜溢价：用标准基准直接比较
         # （农夫山泉 550ml×24 整箱 3 元/瓶、百岁山整箱 4.58 元/瓶均应拦截；
         #  怡宝 4.5L×4桶×10箱 1.94 元/L 真便宜不误伤）
-        factor = 1.0
+        # 但 water 小瓶（<450ml）整箱仍保留 1.4 小瓶溢价保护（380ml×24 正常价不误伤）
+        small_bottle = False
+        if topic == "water":
+            ml_m = re.search(r"(\d+)\s*ml", title)
+            if ml_m and int(ml_m.group(1)) < 450:
+                small_bottle = True
+        if not small_bottle:
+            factor = 1.0
     if topic == "paper" and unit_label == "pack100":
         sm = re.search(r"(\d+(?:\.\d+)?)\s*抽", title)
         if sm and float(sm.group(1)) < 100.0:
