@@ -70,6 +70,14 @@ systemctl --no-pager --full status opportunity-workbench-web opportunity-workben
 
 只在本机验证通过后，才在 ECS 安全组中添加 TCP 80 入站规则。不要开放 5002。配置域名和 HTTPS 前，公网暂通过 IP 使用；中国大陆域名上线前需完成适用的备案流程。
 
+- **workbench exec 跑业务脚本前必须设置环境**：worker/web 通过 systemd `Environment=WORKBENCH_DB=/application/.runtime/workbench.sqlite3` 与
+  `EnvironmentFile=/application/.runtime/workbench.env`（联盟凭据）注入环境；exec 的 shell 不继承，直接跑 scanner 等会
+  用默认库 `/application/data/workbench.sqlite3`（写错库）且报 not_configured。脚本开头手动加载：
+  `for line in open('/application/.runtime/workbench.env'): k,_,v=line.partition('='); os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))`
+  并 `os.environ['WORKBENCH_DB']='/application/.runtime/workbench.sqlite3'`。env 值带引号需剥除（AppKey 必须纯数字）。
+- **手动扫描与 worker 并发会互相干扰**：验证同步行为优先看 worker 的 source_scan_runs（status=complete 即一轮真实同步），
+  不要手动并发 scan 同 source。
+
 ## 更新
 
 ```bash
