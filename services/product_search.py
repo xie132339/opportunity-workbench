@@ -248,10 +248,16 @@ def official_promotion_discount(row):
     if discount_calibration.is_high_tier_unverifiable(topic, title, promo_cents):
         return None
 
+    # Listings from a "瞎搞小店"（店铺离谱率高）get tightened caps on every
+    # discount path so that borderline absurd strikethroughs no longer surface.
+    from services import shop_reputation
+    shop_bad = shop_reputation.is_bad_shop(evidence.get('shop_title') or '')
+
     candidates = []
     reference_drop = evidence.get('promotion_discount_cents')
     reference_drop_plausible, _reason = discount_calibration.judge_drop(
-        topic, evidence.get('reserve_price_cents'), evidence.get('promotion_price_cents'))
+        topic, evidence.get('reserve_price_cents'), evidence.get('promotion_price_cents'),
+        shop_bad=shop_bad)
     # The keyword search also returns look-alike products (a "rice & wheat
     # shampoo" inside the rice topic); their reference-price gap must not
     # surface as a discount amount or enter discount ranking.
@@ -291,7 +297,7 @@ def official_promotion_discount(row):
         # plausibility bounds: an inflated coupon illustration on top of an
         # inflated strikethrough must not surface as a fake saving.
         coupon_drop_ok, _reason = discount_calibration.judge_drop(
-            topic, promotion_cents + coupon_drop, promotion_cents)
+            topic, promotion_cents + coupon_drop, promotion_cents, shop_bad=shop_bad)
         if (coupon_drop_ok
                 and not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
@@ -316,7 +322,7 @@ def official_promotion_discount(row):
         rate = (path_drop / promotion_cents
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
         path_drop_ok, _reason = discount_calibration.judge_drop(
-            topic, promotion_cents + path_drop, promotion_cents)
+            topic, promotion_cents + path_drop, promotion_cents, shop_bad=shop_bad)
         if (path_drop_ok
                 and not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
@@ -418,6 +424,14 @@ def promotion_admission(row, assessment):
             if discount_calibration.is_high_tier_unverifiable(topic, title, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='高价且无品牌/无规格市场参照，优惠证据不可信，不作为默认优惠展示')
+            # 瞎搞小店（店铺离谱率高，见 services/shop_reputation）：店内无法形成
+            # 有效优惠证据的条目不展示（用户：很多店铺都是瞎搞的，数据太离谱就不
+            # 展示）；店内可验证的真优惠仍保留，避免误伤。
+            from services import shop_reputation
+            shop = (evidence or {}).get('shop_title') or ''
+            if shop_reputation.is_bad_shop(shop) and not official_promotion_discount(row):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='店铺离谱率高（瞎搞小店），该条无法形成可验证优惠，不展示')
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)
                 and quote['amount_cents'] > 0 and evidence):

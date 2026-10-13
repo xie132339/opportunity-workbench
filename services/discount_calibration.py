@@ -1010,12 +1010,17 @@ def _lookup_caps(topic, promotion_cents):
     return payload.get("global_ratio_cap"), payload.get("global_drop_cap")
 
 
-def judge_drop(topic, reserve_cents, promotion_cents):
+def judge_drop(topic, reserve_cents, promotion_cents, shop_bad=False):
     """Data-driven (plausible, reason) for a reference-price reduction.
 
     ``topic`` may be ``None`` for sources outside the managed living topics;
-    those still get the global caps or the conservative seeds.
+    those still get the global caps or the conservative seeds.  ``shop_bad``
+    marks a listing from a "瞎搞小店"（店铺离谱率高，见 services/shop_reputation）:
+    its caps are tightened by SHOP_BAD_CAP_K so that borderline absurd
+    strikethroughs from low-trust shops no longer surface (user: 很多店铺都是
+    瞎搞的，数据太离谱就不展示).
     """
+    from services.shop_reputation import SHOP_BAD_CAP_K
     if not (isinstance(reserve_cents, int) and isinstance(promotion_cents, int)
             and not isinstance(reserve_cents, bool) and not isinstance(promotion_cents, bool)
             and reserve_cents > promotion_cents > 0):
@@ -1051,9 +1056,12 @@ def judge_drop(topic, reserve_cents, promotion_cents):
         if global_ratio is not None and ratio > global_ratio:
             return False, f"降幅超过该主题全局可信上界（{global_ratio:.0%}），划线价作为优惠证据不可信"
         high_ratio_cap = (payload or {}).get("high_reserve_ratio_cap")
-        if isinstance(high_ratio_cap, (int, float)) and reserve_cents > promotion_cents * high_ratio_cap:
-            return False, (f"划线价超过该主题高价段可信比值（{high_ratio_cap:.1f}倍推广价），"
-                           "划线价作为优惠证据不可信")
+        if isinstance(high_ratio_cap, (int, float)):
+            if shop_bad:
+                high_ratio_cap = high_ratio_cap * SHOP_BAD_CAP_K
+            if reserve_cents > promotion_cents * high_ratio_cap:
+                return False, (f"划线价超过该主题高价段可信比值（{high_ratio_cap:.1f}倍推广价"
+                               + ("，且店铺离谱率高" if shop_bad else "") + "），划线价作为优惠证据不可信")
         return True, ""
 
     ratio_cap, drop_cap = _lookup_caps(topic, promotion_cents)
@@ -1067,14 +1075,19 @@ def judge_drop(topic, reserve_cents, promotion_cents):
 
     # Seeds apply the same semantics as the old absolute guard.
     if ratio_cap is None:
-        if promotion_cents < SEED_LOW_PROMO_CENTS and drop > SEED_DROP_CAP_CENTS:
+        seed_ratio_cap = SEED_RATIO_CAP * SHOP_BAD_CAP_K if shop_bad else SEED_RATIO_CAP
+        seed_drop_cap = int(SEED_DROP_CAP_CENTS * SHOP_BAD_CAP_K) if shop_bad else SEED_DROP_CAP_CENTS
+        if promotion_cents < SEED_LOW_PROMO_CENTS and drop > seed_drop_cap:
             return False, "低价值商品优惠额超过50元，划线价作为优惠证据不可信"
-        if ratio >= SEED_RATIO_CAP:
+        if ratio >= seed_ratio_cap:
             return False, "降幅达到参考价85%或以上，参考价作为划线价不可信"
         if reserve_cents > promotion_cents * 20:
             return False, "参考价超过推广价20倍，参考价作为划线价不可信"
         return True, ""
 
+    if shop_bad:
+        ratio_cap = ratio_cap * SHOP_BAD_CAP_K if isinstance(ratio_cap, (int, float)) else ratio_cap
+        drop_cap = int(drop_cap * SHOP_BAD_CAP_K) if isinstance(drop_cap, int) else drop_cap
     if ratio_cap is not None and ratio > ratio_cap:
         return False, f"降幅超过该价位校准可信上界（{ratio_cap:.0%}），划线价作为优惠证据不可信"
     if drop_cap is not None and drop > drop_cap:

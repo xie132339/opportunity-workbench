@@ -83,9 +83,10 @@ def create_app():
     # (wsgi:app) 不经过 app.py main()，此处兜底让 web 进程在表空/过期时
     # 自行校准一次，避免生产环境停留在固定种子兜底。
     try:
-        from services import discount_calibration
+        from services import discount_calibration, shop_reputation
         with connect() as connection:
             discount_calibration.refresh_if_stale(connection)
+            shop_reputation.refresh_stats_if_stale(connection)
     except Exception:
         application.logger.exception("discount calibration refresh failed at startup")
 
@@ -173,9 +174,10 @@ def main():
             result = run_taobao_cycle()
             if result:
                 print(result, flush=True)
-            from services import discount_calibration
+            from services import discount_calibration, shop_reputation
             with connect() as connection:
                 discount_calibration.refresh_if_stale(connection)
+                shop_reputation.refresh_stats_if_stale(connection)
             time.sleep(60)
     elif command == "review":
         print(run_cycle())
@@ -202,9 +204,10 @@ def main():
                 deliveries = dispatch_verified_alerts()
                 if deliveries["sent"] or deliveries["failed"]:
                     print(deliveries, flush=True)
-                from services import discount_calibration
+                from services import discount_calibration, shop_reputation
                 with connect() as connection:
                     discount_calibration.refresh_if_stale(connection)
+                    shop_reputation.refresh_stats_if_stale(connection)
                 time.sleep(60)
         finally:
             link_stop.set()
