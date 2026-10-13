@@ -142,7 +142,7 @@ class FestivalOptimizerRouteTests(unittest.TestCase):
         response = self.client.post('/festival-promotions', data={'csrf': token, 'basket_json': '{bad'})
         self.assertEqual(response.status_code, 200)
         self.assertIn('role="alert"', response.get_data(as_text=True))
-        self.assertEqual(self.client.post('/festival-promotions', data={'basket_json': '{}'}).status_code, 400)
+        self.assertEqual(self.client.post('/festival-promotions', data={'basket_json': '{}'}).status_code, 302)
 
     def test_import_missing_product_and_login_required(self):
         with db.connect() as conn:

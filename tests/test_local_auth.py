@@ -115,6 +115,28 @@ class LocalAuthenticationTests(unittest.TestCase):
             self.assertFalse(stored_session.permanent)
         self.assertNotIn("Expires=", response.headers.get("Set-Cookie", ""))
 
+    def test_login_page_never_cached(self):
+        # 登录页必须 no-store：否则浏览器复用旧 HTML 里的 csrf token，会话 cookie
+        # 失效后（关浏览器/过期）提交必现 Invalid form token 400。
+        client = app.test_client(authenticated=False)
+        response = client.get("/login")
+        self.assertEqual(response.status_code, 200)
+        cache = response.headers.get("Cache-Control", "")
+        self.assertIn("no-store", cache)
+
+    def test_stale_csrf_redirects_back_with_hint_instead_of_bare_400(self):
+        # 模拟"打开历史缓存登录页 + 会话 cookie 已失效"：提交旧 token 时，
+        # 不应再裸 400（浏览器报 Bad Request 无从下手），而是带提示回到登录页。
+        client = app.test_client(authenticated=False)
+        response = client.post("/login", data={
+            "csrf": "stale-token", "next": "/", "username": "admin", "password": "taobaoadmin@1",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login", response.headers["Location"])
+        # 提示出现在跳转后的登录页
+        follow = client.get(response.headers["Location"])
+        self.assertIn("页面会话已过期", follow.get_data(as_text=True))
+
 
 if __name__ == "__main__":
     unittest.main()

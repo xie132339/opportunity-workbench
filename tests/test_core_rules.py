@@ -517,7 +517,7 @@ class CoreFlowTests(unittest.TestCase):
     def test_form_rejects_partial_zero_and_missing_csrf(self):
         for values in [dict(max_buy='30'),dict(min_profit='10'),dict(max_buy='30',min_profit='0'),dict(max_buy='0',min_profit='10')]:
             self.client.post('/strategies',data=dict(csrf='test-csrf',name='invalid',**values))
-        self.assertEqual(self.client.post('/strategies',data={'name':'bad'}).status_code,400)
+        self.assertEqual(self.client.post('/strategies',data={'name':'bad'}).status_code,302)
         with db.connect() as c:
             self.assertEqual(c.execute('SELECT count(*) FROM strategies').fetchone()[0],1)
 

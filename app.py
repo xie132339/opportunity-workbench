@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from flask import Flask, abort, redirect, request, session, url_for
+from flask import Flask, flash, redirect, request, session, url_for
 from flask.testing import FlaskClient
 
 ROOT = Path(__file__).resolve().parent
@@ -95,7 +95,19 @@ def create_app():
         if request.endpoint not in {"login", "health", "static"} and not signed_in(session):
             return redirect(url_for("login", next=request.full_path.rstrip("?")))
         if request.method == "POST" and request.form.get("csrf") != session.get("csrf"):
-            abort(400, "Invalid form token")
+            # 登录页被浏览器缓存或会话 cookie 过期时，旧页面携带的 csrf 会失效；
+            # 不再裸 400（浏览器显示 Bad Request 用户无从下手），改为提示并回到登录页重试。
+            flash("页面会话已过期，请刷新后重新提交。", "error")
+            next_path = request.form.get("next") or "/"
+            return redirect(url_for("login", next=next_path))
+
+    @application.after_request
+    def no_cache_login_page(response):
+        # 登录页禁止缓存：否则浏览器复用旧 HTML 里的 csrf token，会话 cookie 失效后必现 400
+        if request.endpoint == "login":
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
 
     @application.context_processor
     def common():

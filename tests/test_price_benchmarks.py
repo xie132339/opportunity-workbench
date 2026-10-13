@@ -404,7 +404,7 @@ class PriceBenchmarkPageTests(unittest.TestCase):
         response = self.client.post("/price-benchmarks/categories", data={
             "name": "未授权纸品", "pricing_unit": "元/件", "identity_rule": "一致",
         })
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 302)
         response = self.client.post("/price-benchmarks/categories", data={
             "csrf": "test-csrf", "name": "", "pricing_unit": "元/件", "identity_rule": "一致",
         })

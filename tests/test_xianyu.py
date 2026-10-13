@@ -122,7 +122,7 @@ class XianyuPageTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn('闲鱼账号与搜索任务'.encode(), page.data)
         self.assertNotIn(b'127.0.0.1:8000/', page.data)
-        self.assertEqual(self.client.post('/xianyu/tasks', data={}).status_code, 400)
+        self.assertEqual(self.client.post('/xianyu/tasks', data={}).status_code, 302)
 
     def test_populated_page_shows_edit_and_result_sync(self):
         account = {'name': 'mine', 'path': 'state/mine.json'}
