@@ -195,6 +195,24 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 修复效果：maintained_high 8226→711（-91%）、regular 2292→805；公网比较排序 52 可捡漏+48 优惠、偏高噪声 0，置顶全真品（农夫山泉 ¥0.74/瓶、维达 ¥1.82/包、斑布 ¥2.02/包）。
 - **诚实结论**：渠道数据已做到"无显著假优惠/无噪声标签"，但"真优惠的证据覆盖"仅 16.6%——83.4% 白牌/无规格品缺市场价参照，是下一阶段要补的（主题级市场行情价参照覆盖无品牌品）。全量 433 项唯一失败仍为既有基线。
 
+## 5.2n 2026-10-13 同步去重（用户："相同的数据会同步多次吗"）
+
+- **诊断：会，且 77% 是重复**。淘宝联盟推广 API 不返回稳定商品 ID（num_iid 为空、
+  item_id 每轮动态、链接每轮不同）→ UNIQUE(source_id, external_key, fingerprint) 三键
+  全失效（external_key 动态、指纹含价格）→ 同商品每轮同步必新增。证据：聪妈旗舰店
+  同标题 3 天 160 条；全库 145,926 条中重复标题组 19,973、top 标题 x551。
+- **三层修复（已部署）**：
+  1. 同步侧防新增：taobao_alliance 分支 external_key/fingerprint 改为稳定去重键
+     『归一化标题|店铺』；命中 UNIQUE 即 IGNORE + 刷新 last_seen_at/metadata，价格变化
+     交由重审更新准入与报价（published_at 坏值校验前置，保持 malformed 回滚审计语义）。
+  2. 存量清理：按同键合并保留 promo 最低（同价取最新）；本地 145,926→34,253（-76.5%），
+     生产 21,425 条、同 key 重复组 0（备份 workbench_backup_20261013.sqlite3）。
+  3. 展示层折叠：taobao_alliance 列表按 external_key 标题部分折叠，同款只留排序最优
+     一条（非淘宝不折叠）。
+- 验证：全量 433 项唯一失败仍为既有基线；本机/公网 q=纸、水 列表精确重复组 0。
+- 已知项：生产库 818MB（21,425 行 × 平均 38KB metadata 膨胀），后续可裁剪
+  metadata_json 冗余字段瘦身；白牌同名不同店（重复标题组 551）由展示折叠兜底。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
