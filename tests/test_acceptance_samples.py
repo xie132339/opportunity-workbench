@@ -8,10 +8,82 @@
 """
 import unittest
 
+import services.discount_calibration as dc
 from services.discount_calibration import (
     assess_brand_baseline, brand_from_title, has_trial_gating_marker,
     is_brand_market_overpriced, topic_key, BRAND_REFERENCE_CONFIG,
 )
+
+
+class StrikeThroughSamplesTests(unittest.TestCase):
+    """用户截图实证（2026-10-13）：联盟划线价虚高，页面却按划线价差展示
+    “优惠¥510/约73%”类假优惠。必须被 judge_drop 判为划线价不可信；同时
+    高价真品深折扣（低氘水 61% off）不得误伤。"""
+
+    PAPER_CAL = {"paper": {
+        "price_ceiling_cents": 69972,
+        "high_log": 1.9,               # ¥79 以上为高价段（P97 箱上沿）
+        "high_reserve_ratio_cap": 3.2,  # 高价段划线价≤3.2倍推广价
+        "bins": [(2.0, 2.5, 0.85, 5000), (2.5, 3.0, 0.85, 5000),
+                 (3.0, 3.5, 0.85, 16210), (3.5, 4.0, 0.85, 16210)],
+        "global_ratio_cap": 0.8995, "global_drop_cap": 16210,
+        "sample_count": 2625, "calibrated_at": "2026-10-13T00:00:00+00:00"}}
+    WATER_CAL = {"water": {
+        "price_ceiling_cents": 45700,
+        "high_log": 4.5,               # ¥316 以上为高价段
+        "high_reserve_ratio_cap": 3.5,
+        "bins": [(3.5, 4.0, 0.78, 18800), (4.0, 4.5, 0.64, 27300)],
+        "global_ratio_cap": 0.81, "global_drop_cap": 18000,
+        "sample_count": 2625, "calibrated_at": "2026-10-13T00:00:00+00:00"}}
+
+    def setUp(self):
+        dc.set_calibration(self.PAPER_CAL | self.WATER_CAL)
+
+    def tearDown(self):
+        dc.set_calibration(None)
+
+    def test_心相印90抽整箱划线虚高必须拦截(self):
+        # 天猫实际原价 79.9（用户截图铁证），联盟划线价 319.8（4倍）→ 高价段比值超限
+        ok, reason = dc.judge_drop('paper', 31980, 7990)
+        self.assertFalse(ok)
+        self.assertIn('划线价', reason)
+
+    def test_KUB云柔巾80抽18包划线虚高必须拦截(self):
+        # 推广价 188.9、划线价 699（3.7倍），页面曾显示“优惠¥510.10/约73%”
+        ok, _reason = dc.judge_drop('paper', 69900, 18890)
+        self.assertFalse(ok)
+
+    def test_维达整箱划线虚高必须拦截(self):
+        ok, _reason = dc.judge_drop('paper', 19900, 3517)
+        self.assertFalse(ok)
+
+    def test_德佑乳霜纸划线虚高必须拦截(self):
+        ok, _reason = dc.judge_drop('paper', 19990, 3480)
+        self.assertFalse(ok)
+
+    def test_心相印悬挂式划线虚高必须拦截(self):
+        ok, _reason = dc.judge_drop('paper', 24000, 3990)
+        self.assertFalse(ok)
+
+    def test_低价段深划线仍受全局界约束(self):
+        # 39.9 元悬挂纸 drop 200 元（83.4%）：中低价段走分箱/全局界
+        ok, _reason = dc.judge_drop('paper', 24000, 3990)
+        self.assertFalse(ok)
+
+    def test_高价真品深折扣不误伤(self):
+        # 358 元低氘水 61% off（原价 1080）：reserve/promo=3.0 < 3.5 → 放行
+        ok, reason = dc.judge_drop('water', 108000, 35800)
+        self.assertTrue(ok, reason)
+
+    def test_真实立减24元仍可作优惠证据(self):
+        # 心相印官方“限时立减24元”：reserve=103.9 仅 1.3 倍推广价 → 放行
+        ok, reason = dc.judge_drop('paper', 10390, 7990)
+        self.assertTrue(ok, reason)
+
+    def test_babycare与KUB别名命中品牌判据(self):
+        self.assertEqual(brand_from_title('babycare云柔巾婴儿抽纸', 'paper'), 'babycare')
+        self.assertEqual(brand_from_title('KUB可优比婴儿云柔巾', 'paper'), '可优比')
+        self.assertEqual(brand_from_title('德佑乳霜纸', 'paper'), '德佑')
 
 
 class MustGateSamplesTests(unittest.TestCase):

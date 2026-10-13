@@ -150,7 +150,9 @@ BRAND_REFERENCE_CONFIG = {
         "丹娜丝": {"terms": ("丹娜丝",), "unit": "pack100", "price_cents": 150, "note": "丹娜丝悬挂式抽纸单提折算"},
         "怡飘":   {"terms": ("怡飘",), "unit": "pack100", "price_cents": 150, "note": "怡飘乳霜纸单包"},
         "卡布":   {"terms": ("卡布",), "unit": "pack100", "price_cents": 1200, "note": "卡布婴童乳霜纸单包(80抽级)"},
-        "可优比": {"terms": ("可优比",), "unit": "pack100", "price_cents": 1200, "note": "可优比婴童云柔巾单包"},
+        "可优比": {"terms": ("可优比", "KUB", "kub"), "unit": "pack100", "price_cents": 1200, "note": "可优比婴童云柔巾单包(80抽级，100抽折算)"},
+        "babycare": {"terms": ("babycare", "bc"), "unit": "pack100", "price_cents": 1658, "note": "babycare云柔巾乳霜保湿单包(库内样本P50折算)"},
+        "德佑":   {"terms": ("德佑",), "unit": "pack100", "price_cents": 359, "note": "德佑乳霜纸单包(库内样本P50折算)"},
         "全棉时代": {"terms": ("全棉时代",), "unit": "pack100", "price_cents": 600, "note": "全棉时代棉柔巾单包"},
         "得宝":   {"terms": ("得宝", "tempo"), "unit": "pack100", "price_cents": 300, "note": "得宝抽纸单包"},
         "斑布":   {"terms": ("斑布",), "unit": "pack100", "price_cents": 350, "note": "斑布竹浆抽纸单包"},
@@ -753,7 +755,8 @@ def calibrate(db):
         mad = _quantile([abs(x - median) for x in ordered], 0.5)
         ceiling = int(10 ** (median + CEILING_MAD_K * mad)) + 1
 
-        clean = [(lp, r, d) for lp, r, d in pairs if r is not None and r <= CUT]
+        clean = [(lp, r, d) for lp, r, d in pairs if r is not None and r <= CUT
+                 and d <= 3 * 10 ** lp]
         global_ratio = _quantile([r for _lp, r, _d in clean], P) if len(clean) >= MIN_BIN_SAMPLES else None
         global_drop = int(_quantile([d for _lp, _r, d in clean], P)) if len(clean) >= MIN_BIN_SAMPLES else None
         # Premium bins (promotion price at/above the bin that holds the topic's
@@ -764,6 +767,25 @@ def calibrate(db):
         # 69.9-yuan tissue at the P97 boundary) inside the strict band.
         p97_log = _quantile(sorted(log_promos), 0.97)
         high_log = _bin_of(p97_log)[1]
+
+        # High-tier strikethrough plausibility: for promotion prices at/above
+        # the P97 bin edge, ratio/drop caps do not apply (genuine premium deep
+        # discounts are normal), so we bound the strikethrough itself with the
+        # reserve/promo ratio distribution of the same high tier (trimmed the
+        # same way as the caps).  Few high-tier samples fall back to the
+        # topic-wide trimmed reserve/promo ratio.
+        high_ratios = sorted(
+            d / (10 ** lp) + 1.0
+            for lp, r, d in clean if 10 ** lp >= high_log and r is not None and d > 0)
+        topic_ratios = sorted(
+            d / (10 ** lp) + 1.0
+            for lp, r, d in clean if r is not None and d > 0)
+        if len(high_ratios) >= MIN_BIN_SAMPLES:
+            high_reserve_ratio_cap = _quantile(high_ratios, 0.90)
+        elif len(topic_ratios) >= MIN_BIN_SAMPLES:
+            high_reserve_ratio_cap = _quantile(topic_ratios, 0.90)
+        else:
+            high_reserve_ratio_cap = None
 
         bins = []
         for lo, hi in _bins():
@@ -783,6 +805,7 @@ def calibrate(db):
         result[topic] = {
             "price_ceiling_cents": ceiling,
             "high_log": round(high_log, 4),
+            "high_reserve_ratio_cap": high_reserve_ratio_cap,
             "bins": bins,
             "global_ratio_cap": global_ratio,
             "global_drop_cap": global_drop,
@@ -992,13 +1015,32 @@ def judge_drop(topic, reserve_cents, promotion_cents):
     # topic-wide drop cap so that 90%+ inflated strikethroughs (e.g. a shampoo
     # caught by the "rice" keyword) do not surface a huge fake saving.
     high_log = (payload or {}).get("high_log")
+    global_drop = (payload or {}).get("global_drop_cap")
+    global_ratio = (payload or {}).get("global_ratio_cap")
     if high_log is not None and promotion_cents > 0 and math.log10(promotion_cents) >= high_log:
-        global_ratio = (payload or {}).get("global_ratio_cap")
+        # Premium prices (>= topic P97 bin edge) may carry deep discounts on
+        # genuine premium goods (12-bottle low-deuterium water, camellia-oil
+        # gift sets), so the ratio/drop caps do not apply.  They are still
+        # bound by (a) the topic-wide ratio cap and (b) the plausibility of the
+        # strikethrough itself: reserve/promo above the calibrated high-tier
+        # ratio (e.g. a 188.9-yuan tissue carton "discounted" by 510 yuan,
+        # reserve = 3.7x promo) is an inflated strikethrough, not a bargain.
         if global_ratio is not None and ratio > global_ratio:
             return False, f"降幅超过该主题全局可信上界（{global_ratio:.0%}），划线价作为优惠证据不可信"
+        high_ratio_cap = (payload or {}).get("high_reserve_ratio_cap")
+        if isinstance(high_ratio_cap, (int, float)) and reserve_cents > promotion_cents * high_ratio_cap:
+            return False, (f"划线价超过该主题高价段可信比值（{high_ratio_cap:.1f}倍推广价），"
+                           "划线价作为优惠证据不可信")
         return True, ""
 
     ratio_cap, drop_cap = _lookup_caps(topic, promotion_cents)
+    # The per-bin caps come from the same corpus and can drift high when a
+    # bin's samples are few or contaminated; the topic-global cap (estimated
+    # from trimmed samples) always stays as the floor for the plausible bound.
+    if ratio_cap is not None and global_ratio is not None:
+        ratio_cap = min(ratio_cap, global_ratio)
+    if drop_cap is not None and isinstance(global_drop, int):
+        drop_cap = min(drop_cap, global_drop)
 
     # Seeds apply the same semantics as the old absolute guard.
     if ratio_cap is None:

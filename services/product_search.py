@@ -280,7 +280,13 @@ def official_promotion_discount(row):
         final_cents = evidence.get('quote_price_cents')
         rate = (coupon_drop / promotion_cents
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
-        if (not discount_calibration.is_gated_price(topic, final_cents)
+        # The saving amount of a coupon/path is also capped by the topic-wide
+        # plausibility bounds: an inflated coupon illustration on top of an
+        # inflated strikethrough must not surface as a fake saving.
+        coupon_drop_ok, _reason = discount_calibration.judge_drop(
+            topic, promotion_cents + coupon_drop, promotion_cents)
+        if (coupon_drop_ok
+                and not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
                 and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)
                 and not discount_calibration.is_brand_market_overpriced(topic, title, final_cents)):
@@ -302,7 +308,10 @@ def official_promotion_discount(row):
         final_cents = promotion_path.get('estimate_cents')
         rate = (path_drop / promotion_cents
                 if isinstance(promotion_cents, int) and promotion_cents > 0 else None)
-        if (not discount_calibration.is_gated_price(topic, final_cents)
+        path_drop_ok, _reason = discount_calibration.judge_drop(
+            topic, promotion_cents + path_drop, promotion_cents)
+        if (path_drop_ok
+                and not discount_calibration.is_gated_price(topic, final_cents)
                 and not discount_calibration.is_low_value_small_item(topic, final_cents, title)
                 and not discount_calibration.is_market_band_fake_discount(topic, final_cents, rate)
                 and not discount_calibration.is_brand_market_overpriced(topic, title, final_cents)):
