@@ -16,6 +16,29 @@ _MEASUREMENT = re.compile(
     re.IGNORECASE,
 )
 
+_SPEC_PIECE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(L|升|ml|毫升|kg|千克|克|g|斤|抽|张|包|卷|瓶|袋|盒|箱|提|片|粒|件|桶|罐)",
+    re.IGNORECASE,
+)
+
+
+def spec_summary(title):
+    """Extract a short measurement sketch from a candidate title.
+
+    Only helps the operator read the row (e.g. "5L"、"400ml"、"3.5kg");
+    it never feeds admission or price-band decisions.
+    """
+    if not title:
+        return ""
+    pieces = []
+    for match in _SPEC_PIECE.finditer(title):
+        normalized = str(match.group(1)) + match.group(2).lower()
+        if normalized not in pieces:
+            pieces.append(normalized)
+        if len(pieces) == 3:
+            break
+    return " / ".join(pieces)
+
 
 def _candidate_reason(offer):
     discount = offer.get("promotion_discount_cents")
@@ -76,6 +99,12 @@ def load_maintained_price_candidates(db, categories, *, limit=12):
         topic_key = resource_topic(row["title"], row["source_category"] or "")
         category = match_category(row["title"], topic_key, categories)
         path = offer.get("promotion_path") or {}
+        discount = offer.get("promotion_discount_cents")
+        drop_cents = discount if isinstance(discount, int) and discount > 0 else 0
+        if drop_cents <= 0:
+            coupon = offer.get("coupon_applied_cents")
+            drop_cents = coupon if isinstance(coupon, int) and coupon > 0 else 0
+        components = path.get("components") or []
         result.append({
             "opportunity_id": row["opportunity_id"],
             "title": row["title"],
@@ -87,11 +116,16 @@ def load_maintained_price_candidates(db, categories, *, limit=12):
             "category_name": category["name"] if category else "",
             "price_cents": quote_cents,
             "reference_cents": offer.get("reserve_price_cents"),
+            "estimated_cents": path.get("estimate_cents"),
+            "drop_cents": drop_cents,
+            "spec_summary": spec_summary(row["title"]),
+            "coupon_items": [p["title"] + (p["description"] or "") for p in components][:3],
+            "purchase_note": path.get("purchase_requirement") or "",
             "reason": _candidate_reason(offer),
-            "condition": path.get("purchase_requirement") or row.get("conditions") or "来源未返回额外条件字段",
         })
         if len(result) == limit:
             break
+    result.sort(key=lambda r: r["drop_cents"], reverse=True)
     return result
 
 

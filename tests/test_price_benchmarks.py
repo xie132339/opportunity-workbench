@@ -106,6 +106,41 @@ class PriceBenchmarkPageTests(unittest.TestCase):
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 
+    def test_maintenance_candidate_card_fields_and_sorting(self):
+        from services.maintained_price_candidates import load_maintained_price_candidates, spec_summary
+        self.assertEqual(spec_summary("葵王物理压榨一级浓香花生油6.08L 大桶装家用食用油"), "6.08l")
+        self.assertEqual(spec_summary("【洗衣液囤货装】网易严选酵素洗衣液6kg强效抗菌"), "6kg")
+        self.assertIn("400ml", spec_summary("金龙鱼零反式脂肪玉米胚芽油400ml小瓶家用"))
+        # 候选按降幅从大到小排序，且带规格摘要与预估到手字段
+        now = datetime.now(timezone(timedelta(hours=8)))
+        items = [
+            {"num_iid": "200", "title": "大降商品 5kg 实惠装", "item_url": "https://item.taobao.com/item.htm?id=200",
+             "reserve_price": "100.00", "zk_final_price": "50.00", "coupon_amount": "", "shop_title": "店A", "user_type": 0},
+            {"num_iid": "201", "title": "小降商品 2kg 实惠装", "item_url": "https://item.taobao.com/item.htm?id=201",
+             "reserve_price": "20.00", "zk_final_price": "18.00", "coupon_amount": "", "shop_title": "店B", "user_type": 0},
+        ]
+        with db.connect() as conn:
+            for i, item in enumerate(items):
+                parsed = parse_item(item, now=now)
+                source_id = conn.execute("""INSERT INTO sources
+                    (platform,name,category,url,method,parser,status,enabled,interval_minutes,last_success)
+                    VALUES('淘宝联盟','测试候选%d','零售优惠','https://eco.taobao.com/router/rest?q=x%d',
+                           'taobao_alliance','taobao_alliance','healthy',1,60,CURRENT_TIMESTAMP)""" % (i, i)).lastrowid
+                event_id = conn.execute("""INSERT INTO events
+                    (source_id,external_key,title,url,metadata_json,fingerprint,last_seen_at)
+                    VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                    (source_id, parsed[0], parsed[1], parsed[2], json.dumps(parsed[5]), 'cand-%d' % i)).lastrowid
+                conn.execute("""INSERT INTO opportunities
+                    (event_id,source_id,title,category,topic,url)
+                    VALUES(?,?,?,'零售优惠','other',?)""", (event_id, source_id, parsed[1], parsed[2])).lastrowid
+                conn.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason,advertised_cents)
+                    VALUES(?,'observed','官方优惠观察',1800)""", (event_id,))
+            rows = load_maintained_price_candidates(conn, [])
+            self.assertGreaterEqual(len(rows), 1)
+            if len(rows) >= 2:
+                self.assertGreater(rows[0]["drop_cents"], rows[1]["drop_cents"])
+            self.assertTrue(all(r["spec_summary"] for r in rows))
+            self.assertTrue(all("drop_cents" in r and "price_cents" in r for r in rows))
     def test_source_provenance_audit_separates_collector_publisher_and_product_links(self):
         with db.connect() as conn:
             source_ids = []

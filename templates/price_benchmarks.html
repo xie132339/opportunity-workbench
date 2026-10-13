@@ -16,18 +16,60 @@
 
 <section class="card">
   <h2>当前官方优惠中的维护候选</h2>
-  <p class="muted">只列出当前淘宝联盟官方物料中已有明确降价且标题含数量单位的商品。它们只帮助选择要维护的具体商品；四档价格带必须由你填写，候选价不会被自动写入基准。未匹配现有品类的候选会明确提示，不会被静默丢弃。</p>
+  <p class="muted">数据来自<strong>淘宝联盟官方推广接口</strong>（最近 2 小时内有降价信号、且标题含明确规格的商品），只用于帮你挑选要维护的具体商品；展示的推广价/预估到手价为接口返回，<strong>不代表已核实的到手价</strong>。四档价格带必须由你填写，候选价不会被自动写入基准。</p>
   {% if maintained_candidates %}
-  <div class="table-wrap"><table>
-    <thead><tr><th>商品 / 品类</th><th>官方推广价</th><th>官方优惠依据</th><th>条件</th><th>操作</th></tr></thead>
-    <tbody>{% for row in maintained_candidates %}<tr>
-      <td><strong>{{ row.title }}</strong><br><small>{% if row.category_name %}{{ row.category_name }}{% else %}{{ topic_labels.get(row.topic_key,row.topic_key) }}（待配置具体品类）{% endif %} · {{ row.source_name }}</small></td>
-      <td>{{ money(row.price_cents) }}{% if row.reference_cents %}<br><small>接口参考价 {{ money(row.reference_cents) }}</small>{% endif %}</td>
-      <td>{{ row.reason }}</td>
-      <td>{{ row.condition }}</td>
-      <td><a href="{{ url_for('opportunity', opportunity_id=row.opportunity_id) }}">查看证据</a><br><a href="{{ url_for('price_benchmarks', candidate=row.opportunity_id) }}#new-baseline">创建维护草稿</a></td>
-    </tr>{% endfor %}</tbody>
-  </table></div>
+  <div class="candidate-list">
+    {% for row in maintained_candidates %}
+    <div class="candidate-card">
+      <div class="candidate-main">
+        <div class="candidate-title">{{ row.title }}
+          {% if row.spec_summary %}<span class="spec-pill">{{ row.spec_summary }}</span>{% endif %}
+        </div>
+        <div class="candidate-meta">
+          {% if row.category_name %}<span class="pill">{{ row.category_name }}</span>
+          {% else %}<span class="pill warn">待配置品类</span>{% endif %}
+          <span class="muted">{{ topic_labels.get(row.topic_key,row.topic_key) }}</span>
+          <span class="muted">· {{ row.source_name }}</span>
+          <span class="muted">· {{ row.checked_at|cn_time }}</span>
+        </div>
+      </div>
+      <div class="candidate-price">
+        <div class="price-now">{{ money(row.price_cents) }}</div>
+        {% if row.reference_cents %}<div class="price-before">参考价 <s>{{ money(row.reference_cents) }}</s></div>{% endif %}
+        {% if row.drop_cents %}<div class="price-drop">降 {{ money(row.drop_cents) }}</div>{% endif %}
+        {% if row.estimated_cents %}<div class="muted">预估到手 {{ money(row.estimated_cents) }}（未核实）</div>{% endif %}
+      </div>
+      <div class="candidate-detail">
+        {% if row.coupon_items %}<div class="coupon-chips">{% for item in row.coupon_items %}<span class="chip">{{ item }}</span>{% endfor %}</div>{% endif %}
+        {% if row.purchase_note %}<div class="muted">{{ row.purchase_note }}</div>{% endif %}
+        {% if not row.coupon_items and not row.purchase_note %}<div class="muted">{{ row.reason }}</div>{% endif %}
+      </div>
+      <div class="candidate-actions">
+        <a href="{{ url_for('opportunity', opportunity_id=row.opportunity_id) }}">查看证据</a>
+        <a class="btn" href="{{ url_for('price_benchmarks', candidate=row.opportunity_id) }}#new-baseline">创建维护草稿</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <style>
+    .candidate-list{display:flex;flex-direction:column;gap:10px}
+    .candidate-card{display:grid;grid-template-columns:1fr auto;gap:10px 16px;padding:12px 14px;border:1px solid var(--border,#e3e8ef);border-radius:10px;background:var(--card,#fff)}
+    .candidate-main{grid-column:1}
+    .candidate-title{font-weight:600;line-height:1.45}
+    .spec-pill{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:20px;background:#eef2f7;color:#465a70;font-size:12px;font-weight:500;vertical-align:2px}
+    .candidate-meta{margin-top:4px;font-size:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+    .candidate-price{grid-column:2;grid-row:1/span 2;text-align:right;min-width:150px}
+    .price-now{font-size:22px;font-weight:700;color:#c62828}
+    .price-before{font-size:12px;color:#7a8699}
+    .price-drop{font-size:14px;font-weight:600;color:#2e7d32}
+    .candidate-detail{grid-column:1;font-size:12px;display:flex;flex-direction:column;gap:4px}
+    .coupon-chips{display:flex;flex-wrap:wrap;gap:5px}
+    .chip{padding:1px 8px;border-radius:20px;background:#fff3e0;color:#b26a00;font-size:12px}
+    .candidate-actions{grid-column:2;display:flex;flex-direction:column;gap:6px;align-items:flex-end;justify-content:center}
+    .candidate-actions .btn{display:inline-block;padding:5px 12px;border-radius:8px;background:#1565c0;color:#fff;text-decoration:none;font-size:13px}
+    .pill.warn{background:#fdecea;color:#b71c1c}
+    @media (max-width:640px){.candidate-card{grid-template-columns:1fr}.candidate-price,.candidate-actions{grid-column:1;text-align:left;align-items:flex-start}}
+  </style>
   {% else %}<p>当前没有同时满足官方降价和明确单位的候选；这不会影响官方优惠正常展示。</p>{% endif %}
 </section>
 
