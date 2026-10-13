@@ -240,6 +240,26 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
   444 项唯一失败仍为既有基线；新增 StrikeThroughSamplesTests（含低氘水不误伤）。
 - 生产重校准（正确库 .runtime，01:59 UTC）：paper 高价段比值 3.32、水 2.88 等。
 
+## 5.2p 2026-10-13 店铺离谱率过滤（用户："很多店铺都是瞎搞的，数据太离谱就不展示，5000 可配置"）
+
+- **需求与数据现实**：用户要求按店铺信誉过滤瞎搞小店的离谱数据（粉丝量阈值可配）。
+  淘宝联盟 API 不返回店铺粉丝数字段（仅 shop_title/user_type）→ 用数据驱动的
+  "店铺离谱率"作低信誉代理：店铺在库内条目中被判"优惠证据不可信/荒谬高价/
+  品牌贵过市场价/低价小件"的比例（条目数足够）高 = 瞎搞小店。
+- **实现（services/shop_reputation.py，阈值全部可配置 env 覆盖）**：
+  - `SHOP_BAD_RATE=0.5`：离谱率 ≥50% 且 `SHOP_MIN_ITEMS=3` 条 → 坏店；
+  - `SHOP_BAD_CAP_K=0.7`：坏店条目校准界收紧（降幅/优惠额上限 ×0.7，
+    高价段划线价比值 cap ×0.7）→ 临界离谱条目不形成优惠；
+  - 坏店 + 无法形成可验证优惠 → 准入不通过（整条不展示）；坏店 + 可验证真优惠
+    （品牌可折算/价差在界内）→ 保留（不误伤，实证得宝专卖店 9.9 元正常品）。
+  - judge_drop 增加 shop_bad 参数；web/worker 每小时刷新店铺统计（3600s）。
+- 验证：新增 tests/test_shop_reputation.py 6 项（含坏店边界、seed 收紧、高价段
+  比值收紧、准入不误伤）；全量 450 项唯一失败仍为既有基线；生产 191 家坏店、
+  1665 条隐藏（7.6%）；公网纸品页复验：可心柔/聪妈等可疑小店条目消失，
+  茶语/KUB 真捡漏保留。
+- 配置修改方式：生产 env（/application/.runtime/workbench.env）追加
+  SHOP_BAD_RATE / SHOP_MIN_ITEMS / SHOP_BAD_CAP_K 后重启 web/worker。
+
 ## 5.3 2026-10-12 登录页"保持登录状态"
 
 - `templates/login.html` 登录表单新增"保持登录状态（30 天）"复选框（`name="remember"`）；`routes/auth.py::login` 在凭据校验通过后按复选框设置 `session.permanent`；`app.py` 配置 `PERMANENT_SESSION_LIFETIME = timedelta(days=30)`。
