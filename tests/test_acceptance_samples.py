@@ -85,6 +85,24 @@ class StrikeThroughSamplesTests(unittest.TestCase):
         self.assertEqual(brand_from_title('KUB可优比婴儿云柔巾', 'paper'), '可优比')
         self.assertEqual(brand_from_title('德佑乳霜纸', 'paper'), '德佑')
 
+    def test_无品牌无规格高价纸品降级(self):
+        # 用户截图：AA桃花郎 300张 ¥199.10（优惠¥400.80/66.8%）——高价无参照，不出优惠
+        self.assertTrue(dc.is_high_tier_unverifiable('paper', 'AA桃花郎抽纸原生木浆5层共300张整箱卫生纸纸巾', 19910))
+        # 桃花郎 300张 ¥599（优惠¥572.20/95.5%）
+        self.assertTrue(dc.is_high_tier_unverifiable('paper', '桃花郎300张纸巾抽纸整箱家用实惠餐巾纸卫生纸厕纸', 59900))
+        # 纸巾定制 ¥120（优惠¥179）
+        self.assertTrue(dc.is_high_tier_unverifiable('paper', '纸巾定制可印logo饭店餐巾纸商用餐厅方巾纸订制订做专用抽纸散装', 12000))
+        # 大包悬挂式 ¥199.9（优惠¥160）
+        self.assertTrue(dc.is_high_tier_unverifiable('paper', '大包悬挂式底部抽纸整箱家用实惠装厕所卫生间专用擦手纸', 19990))
+
+    def test_可折算品牌高价品不被误伤(self):
+        # KUB（可折算 pack100=1311 分，品牌参考 1200×1.2 内）→ 高价段可验证，不降级
+        self.assertFalse(dc.is_high_tier_unverifiable('paper', 'KUB可优比婴儿云柔巾乳霜保湿超柔抽纸保湿擦鼻涕柔纸巾80抽18包', 18890))
+        # 心相印茶语 110抽24包 ¥164.7（品牌可折算）
+        self.assertFalse(dc.is_high_tier_unverifiable('paper', '【下拉详情享优惠】心相印茶语抽纸3层110抽24包', 16470))
+        # 低价悬挂纸（< 高价段门槛）不受影响
+        self.assertFalse(dc.is_high_tier_unverifiable('paper', '心相印悬挂式抽纸整箱卫生纸实惠装家用壁挂式纸巾M码320抽挂抽', 3990))
+
 
 class MustGateSamplesTests(unittest.TestCase):
     """用户明确否定的数据：必须被拦出默认列表（品牌判据/形态词任一命中）。"""

@@ -871,6 +871,29 @@ def is_low_value_small_item(topic, cents, title=None):
     return isinstance(floor, int) and cents < floor
 
 
+def is_high_tier_unverifiable(topic, title, promo_cents):
+    """Whether a high-tier promotion price has no verifiable market reference.
+
+    At/above the topic P97 bin edge, a promotion price that is neither a
+    maintained brand (has a brand standard-unit market price) nor convertible
+    to a standard unit (spec extractable) has no way to check whether it is a
+    bargain or an absurd markup (a 599-yuan carton of 300 sheets of tissue, a
+    120-yuan custom restaurant napkin).  Its discount identity is not
+    trustworthy, so it must not surface a saving.
+    """
+    if not isinstance(promo_cents, int) or isinstance(promo_cents, bool) or promo_cents <= 0:
+        return False
+    if not title:
+        return False
+    payload = get_calibration().get(topic) or {}
+    high_log = payload.get("high_log")
+    if not isinstance(high_log, (int, float)) or math.log10(promo_cents) < high_log:
+        return False
+    if brand_from_title(title, topic) is not None:
+        return False          # brand has a maintained market reference
+    return spec_unit_price_cents(title, promo_cents) is None
+
+
 def is_market_band_fake_discount(topic, final_cents, ratio):
     """Whether a deep strikethrough lands the final price inside the topic's
     market normal-price band (median +/- k*MAD of promotion prices).

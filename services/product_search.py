@@ -240,9 +240,16 @@ def official_promotion_discount(row):
     if discount_calibration.has_trial_gating_marker(title):
         return None
 
+    # High-tier promotion prices with no brand and no convertible spec have no
+    # market reference to verify (a 599-yuan carton of 300 sheets of tissue);
+    # their saving must not surface on any path.
+    promo_cents = evidence.get('promotion_price_cents')
+    topic = discount_calibration.topic_key(row.get('source_name') or '')
+    if discount_calibration.is_high_tier_unverifiable(topic, title, promo_cents):
+        return None
+
     candidates = []
     reference_drop = evidence.get('promotion_discount_cents')
-    topic = discount_calibration.topic_key(row.get('source_name') or '')
     reference_drop_plausible, _reason = discount_calibration.judge_drop(
         topic, evidence.get('reserve_price_cents'), evidence.get('promotion_price_cents'))
     # The keyword search also returns look-alike products (a "rice & wheat
@@ -408,6 +415,9 @@ def promotion_admission(row, assessment):
             if discount_calibration.is_brand_market_overpriced(topic, title, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='优惠价高于品牌标准市场价（划线虚高/引流小规格），不作为默认优惠展示')
+            if discount_calibration.is_high_tier_unverifiable(topic, title, promotion_cents):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='高价且无品牌/无规格市场参照，优惠证据不可信，不作为默认优惠展示')
         if (quote.get('kind') == 'official_promotion_observation'
                 and isinstance(quote.get('amount_cents'), int)
                 and quote['amount_cents'] > 0 and evidence):
