@@ -169,20 +169,20 @@ BRAND_REFERENCE_CONFIG = {
         "德宝":   {"terms": ("德宝",), "unit": "pack100", "price_cents": 400, "note": "德宝进口单包(100抽)"},
     },
     "water": {
-        "百岁山": {"terms": ("百岁山",), "unit": "bottle500", "price_cents": 280, "note": "百岁山570ml单瓶零售约3元"},
-        "农夫山泉": {"terms": ("农夫山泉",), "unit": "bottle500", "price_cents": 180, "note": "农夫山泉550ml单瓶零售约2元"},
-        "怡宝":   {"terms": ("怡宝", "cestbon"), "unit": "bottle500", "price_cents": 180, "note": "怡宝555ml单瓶零售约2元"},
-        "康师傅": {"terms": ("康师傅",), "unit": "bottle500", "price_cents": 150, "note": "康师傅550ml单瓶"},
-        "娃哈哈": {"terms": ("娃哈哈",), "unit": "bottle500", "price_cents": 180, "note": "娃哈哈596ml单瓶"},
-        "景田":   {"terms": ("景田",), "unit": "bottle500", "price_cents": 150, "note": "景田百岁山之外的景田水"},
-        "恒大冰泉": {"terms": ("恒大冰泉",), "unit": "bottle500", "price_cents": 200, "note": "恒大冰泉500ml单瓶"},
-        "依云":   {"terms": ("依云", "evian"), "unit": "bottle500", "price_cents": 1000, "note": "依云330ml进口单瓶"},
-        "昆仑山": {"terms": ("昆仑山",), "unit": "bottle500", "price_cents": 400, "note": "昆仑山550ml单瓶"},
-        "屈臣氏": {"terms": ("屈臣氏",), "unit": "bottle500", "price_cents": 400, "note": "屈臣氏蒸馏水500ml单瓶"},
-        "冰露":   {"terms": ("冰露",), "unit": "bottle500", "price_cents": 120, "note": "冰露550ml单瓶"},
-        "纯水乐": {"terms": ("纯水乐",), "unit": "bottle500", "price_cents": 150, "note": "纯水乐550ml单瓶"},
-        "泉阳泉": {"terms": ("泉阳泉",), "unit": "bottle500", "price_cents": 250, "note": "泉阳泉500ml单瓶"},
-        "卓玛泉": {"terms": ("卓玛泉",), "unit": "bottle500", "price_cents": 300, "note": "卓玛泉西藏冰川水单瓶"},
+        "百岁山": {"terms": ("百岁山",), "unit": "bottle500", "price_cents": 280, "note": "百岁山570ml单瓶零售约3元", "extra_units": {"liter": 526}},
+        "农夫山泉": {"terms": ("农夫山泉",), "unit": "bottle500", "price_cents": 180, "note": "农夫山泉550ml单瓶零售约2元", "extra_units": {"liter": 364}},
+        "怡宝":   {"terms": ("怡宝", "cestbon"), "unit": "bottle500", "price_cents": 180, "note": "怡宝555ml单瓶零售约2元", "extra_units": {"liter": 360}},
+        "康师傅": {"terms": ("康师傅",), "unit": "bottle500", "price_cents": 150, "note": "康师傅550ml单瓶", "extra_units": {"liter": 273}},
+        "娃哈哈": {"terms": ("娃哈哈",), "unit": "bottle500", "price_cents": 180, "note": "娃哈哈596ml单瓶", "extra_units": {"liter": 336}},
+        "景田":   {"terms": ("景田",), "unit": "bottle500", "price_cents": 150, "note": "景田百岁山之外的景田水", "extra_units": {"liter": 273}},
+        "恒大冰泉": {"terms": ("恒大冰泉",), "unit": "bottle500", "price_cents": 200, "note": "恒大冰泉500ml单瓶", "extra_units": {"liter": 400}},
+        "依云":   {"terms": ("依云", "evian"), "unit": "bottle500", "price_cents": 1000, "note": "依云330ml进口单瓶", "extra_units": {"liter": 3030}},
+        "昆仑山": {"terms": ("昆仑山",), "unit": "bottle500", "price_cents": 400, "note": "昆仑山550ml单瓶", "extra_units": {"liter": 727}},
+        "屈臣氏": {"terms": ("屈臣氏",), "unit": "bottle500", "price_cents": 400, "note": "屈臣氏蒸馏水500ml单瓶", "extra_units": {"liter": 800}},
+        "冰露":   {"terms": ("冰露",), "unit": "bottle500", "price_cents": 120, "note": "冰露550ml单瓶", "extra_units": {"liter": 218}},
+        "纯水乐": {"terms": ("纯水乐",), "unit": "bottle500", "price_cents": 150, "note": "纯水乐550ml单瓶", "extra_units": {"liter": 273}},
+        "泉阳泉": {"terms": ("泉阳泉",), "unit": "bottle500", "price_cents": 250, "note": "泉阳泉500ml单瓶", "extra_units": {"liter": 500}},
+        "卓玛泉": {"terms": ("卓玛泉",), "unit": "bottle500", "price_cents": 300, "note": "卓玛泉西藏冰川水单瓶", "extra_units": {"liter": 600}},
     },
     "rice": {
         "柴火大院": {"terms": ("柴火大院",), "unit": "kg", "price_cents": 4000, "note": "柴火大院有机五常米约40元/kg"},
@@ -381,7 +381,7 @@ def spec_unit_price_cents(title, final_cents):
             total = kg * bag_n * (bottle or 1.0)
         return ("kg", int(final_cents / total))
     if liter and liter > 0:
-        total = liter * (bottle or 1.0)
+        total = liter * (bottle or 1.0) * box_n
         return ("liter", int(final_cents / total))
     if bottle and ml and bottle > 0 and ml > 0:
         total = bottle * box_n
@@ -441,9 +441,17 @@ def is_brand_market_overpriced(topic, title, final_cents):
         return False
     unit_label, unit_price = priced
     spec = (BRAND_REFERENCE_CONFIG.get(topic) or {}).get(brand)
-    if not isinstance(spec, dict) or spec.get("unit") != unit_label:
+    if not isinstance(spec, dict):
         return False
     standard = spec.get("price_cents")
+    if spec.get("unit") != unit_label:
+        # 多单位基准：如 water 品牌主单位 bottle500（单瓶），大瓶/桶装折算为
+        # liter 时用 extra_units["liter"]（每升市场价）作参照，否则品牌判据失效
+        # （用户：怡宝/农夫山泉/娃哈哈等对应产品单价都要有）。
+        extra = spec.get("extra_units") or {}
+        if not isinstance(extra, dict) or unit_label not in extra:
+            return False
+        standard = extra[unit_label]
     if not isinstance(standard, int):
         return False
     if topic == "flour":
@@ -455,6 +463,11 @@ def is_brand_market_overpriced(topic, title, final_cents):
         if bulk is not None and bulk < 2.0:
             return False
     factor = SMALL_SPEC_BRAND_K.get(topic, 1.0)
+    if "箱" in title or "整箱" in title:
+        # 整箱/大包装为常规规格，无小规格尝鲜溢价：用标准基准直接比较
+        # （农夫山泉 550ml×24 整箱 3 元/瓶、百岁山整箱 4.58 元/瓶均应拦截；
+        #  怡宝 4.5L×4桶×10箱 1.94 元/L 真便宜不误伤）
+        factor = 1.0
     if topic == "paper" and unit_label == "pack100":
         sm = re.search(r"(\d+(?:\.\d+)?)\s*抽", title)
         if sm and float(sm.group(1)) < 100.0:

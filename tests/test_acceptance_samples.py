@@ -124,6 +124,29 @@ class StrikeThroughSamplesTests(unittest.TestCase):
         finally:
             dc.set_calibration(None)
 
+    def test_water品牌多规格基准(self):
+        # 用户：怡宝/农夫山泉/娃哈哈/百岁山等主流品牌要详细到"品牌+产品单价"参考。
+        # 瓶装用 bottle500 基准；大瓶/桶装折算 liter 用 extra_units 每升基准；
+        # 整箱为常规规格（factor=1.0），小规格保留 1.4 溢价保护。
+        dc.set_calibration(None)
+        try:
+            # 怡宝 4.5L×4桶×10箱 ¥348.8 → 1.94 元/L < 3.6 元/L → 真便宜不误伤
+            self.assertFalse(dc.is_brand_market_overpriced('water', '怡宝纯净水4.5L*4桶*10箱整箱大桶装家庭饮用水', 34880))
+            # 怡宝 4.5L×4桶单箱 ¥348.8 → 19.4 元/L 贵 → 拦
+            self.assertTrue(dc.is_brand_market_overpriced('water', '怡宝纯净水4.5L*4桶家庭大桶装饮用水', 34880))
+            # 农夫山泉 550ml×24 整箱 ¥72 → 3 元/瓶 贵 → 拦；¥30 → 1.13 元/瓶 便宜 → 放行
+            self.assertTrue(dc.is_brand_market_overpriced('water', '农夫山泉饮用天然水550ml*24瓶整箱', 7200))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '农夫山泉饮用天然水550ml*24瓶整箱', 3000))
+            # 娃哈哈 596ml×24 ¥48 → 2 元/瓶 正常 → 放行
+            self.assertFalse(dc.is_brand_market_overpriced('water', '娃哈哈纯净水596ml*24瓶整箱', 4800))
+            # 百岁山 570ml×24 ¥110 → 4.58 元/瓶 贵 → 拦
+            self.assertTrue(dc.is_brand_market_overpriced('water', '百岁山饮用天然矿泉水570ml*24瓶整箱', 11000))
+            # 依云整箱 ¥120 → 15 元/L < 30.3 → 放行；小规格 6 瓶 → 1.4 因子保护放行
+            self.assertFalse(dc.is_brand_market_overpriced('water', '依云天然矿泉水330ml*24瓶整箱装', 12000))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '依云天然矿泉水330ml*6瓶装', 6000))
+        finally:
+            dc.set_calibration(None)
+
     def test_大王与绽家品牌基准(self):
         # 大王奢润乳霜纸 60抽×30包 ¥599 → 折算 33.3 元/100抽 > 大王基准 1200×1.2 → 拦
         self.assertTrue(dc.is_brand_market_overpriced('paper', '大王奢润保湿抽纸60抽*30包整箱抽纸', 59900))
