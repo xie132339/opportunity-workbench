@@ -269,7 +269,7 @@ BRAND_EXEMPT_TERMS = {
     "paper": ("乳霜", "云柔", "柔巾", "婴儿", "宝宝", "护理", "悬挂", "挂抽",
               "壁挂", "提挂", "加厚", "4层", "5层", "6层", "厚实", "压花",
               "擦手", "厨房纸", "多康", "商用", "商务", "湿厕", "可冲散",
-              "溶易抽", "黑金", "高端", "进口", "XL", "大尺寸", "加量"),
+              "溶易抽", "黑金", "高端", "进口", "XL", "大尺寸"),
     "water": ("苏打", "气泡", "含气", "咖啡", "茶饮", "果味", "迷你", "儿童",
               "碱性", "电解", "体验"),
     "rice": ("杂粮", "糙米", "低GI", "黑米", "红米", "紫米", "胚芽", "有机",
@@ -515,6 +515,7 @@ def assess_brand_baseline(topic, title, amount_cents):
         return base
     if any(term in (title or "") for term in BRAND_BASELINE_EXCLUDE_TERMS.get(topic, ())):
         return base
+    exempted = any(term in (title or "") for term in BRAND_EXEMPT_TERMS.get(topic, ()))
     ref = _brand_standard_reference(topic, brand)
     if ref is None:
         return base
@@ -529,6 +530,8 @@ def assess_brand_baseline(topic, title, amount_cents):
     if unit_label != unit:
         return base
     ratio = unit_price / standard
+    if exempted and ratio > BRAND_BASELINE_RANKS["typical"]:
+        return base
     note = "该结论仅按本工作台维护的品牌标准市场价计算，不代表账号结算价或全网最低价。"
     matched_by = (f"品牌「{brand}」按标题规格折算为 {unit_price / 100:.2f} 元/{unit_label}"
                   f"，与配置标准市场价 {standard / 100:.2f} 元/{unit_label} 比较")

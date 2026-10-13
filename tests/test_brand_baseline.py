@@ -59,12 +59,11 @@ class BrandBaselineAssessmentTests(unittest.TestCase):
         self.assertEqual(got['state'], 'no_match')
         self.assertEqual(got['rank'], 0)
 
-    def test_exempt_subcategory_still_gets_conclusion(self):
-        # 豁免词只作用于拦截侧（细分品类单价高不拦）；捡漏侧用同一标准价比较：
-        # KUB 乳霜纸 ¥188.9/18包80抽 → 折算约 ¥13.1/100抽 vs 标准 ¥12.0 → 常规价（不误标捡漏）
+    def test_exempt_subcategory_overpriced_not_labeled(self):
+        # 豁免细分品类贵于普通标准价时无普通参照可依，不出"偏高"噪声结论
         got = assess_brand_baseline('paper', 'KUB可优比婴儿云柔巾乳霜保湿超柔抽纸80抽18包', 18890)
-        self.assertEqual(got['state'], 'maintained_regular')
-        self.assertEqual(got['rank'], 2)
+        self.assertEqual(got['state'], 'no_match')
+        self.assertEqual(got['rank'], 0)
 
     def test_no_spec_no_match(self):
         got = assess_brand_baseline('paper', '维达抽纸家用装', 5000)
