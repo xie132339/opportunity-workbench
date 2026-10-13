@@ -367,3 +367,15 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - **验证**：新增 test_login_page_never_cached + test_stale_csrf_redirects_back_with_hint；
   4 个依赖旧 400 的测试更新为 302 断言；全量回归 457 项唯一失败=既有基线；
   生产 curl 实测：login GET 200 + no-store、stale csrf POST 302、正常凭据登录成功进首页。
+
+## 5.2u 2026-10-13 登录误报"会话过期"根治（用户："现在都登录不上了，登录就提示会话过期"）
+
+- **根因（日志实证）**：login 成功后 `sign_out(session)` 用 `session.clear()` 清空整个会话
+  （含 csrf token）；用户在登录页双击/浏览器重放第二次 POST /login 时 csrf 校验失败
+  → 误报"页面会话已过期"。日志显示登录实际已成功（GET / 200 + 各页面 200），
+  是重复提交触发误报让用户误以为登录不上。
+- **修复**：① login 成功后保留原 csrf（sign_out 前取出、sign_in 后写回），重复提交不再误报；
+  ② before_request：csrf 失效但已登录（表单重放）时不踢回登录页，回来源页。
+- **验证**：新增 test_login_keeps_csrf_for_repeat_submit + test_signed_in_stale_csrf_stays_on_site；
+  全量回归 459 项唯一失败=既有基线；生产 curl 实测首次登录 302→/、重复提交 302→/、
+  已登录 csrf 失效 302→/（均不再指向 /login）。
