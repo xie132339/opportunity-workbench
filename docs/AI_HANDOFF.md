@@ -355,3 +355,15 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
   已部署 ECS health ok。
 - **后续维护**：品牌/基准改 BRAND_REFERENCE_CONFIG[topic][brand]（price_cents 主单位 +
   extra_units 副单位）；豁免词改 BRAND_EXEMPT_TERMS[topic]；无需改代码逻辑。
+
+## 5.2t 2026-10-13 登录页 Invalid form token（400）修复（用户："为啥首次登录总是有问题"）
+
+- **根因**：/login 响应无禁缓存头，浏览器从历史/缓存复用旧登录页（旧 csrf token）；
+  Flask session cookie 是浏览器会话级（关浏览器即删）或 30 天过期，
+  旧页面 token 与空 session 不匹配 → before_request 裸 abort(400) → 用户只见 Bad Request 无从下手。
+- **修复**：① /login 加 Cache-Control: no-store + Pragma: no-cache（杜绝复用旧 token 页）；
+  ② csrf 不匹配时 flash"页面会话已过期，请刷新后重新提交"并 302 回登录页（保留 next），不再裸 400；
+  CSRF 安全校验本身保留。
+- **验证**：新增 test_login_page_never_cached + test_stale_csrf_redirects_back_with_hint；
+  4 个依赖旧 400 的测试更新为 302 断言；全量回归 457 项唯一失败=既有基线；
+  生产 curl 实测：login GET 200 + no-store、stale csrf POST 302、正常凭据登录成功进首页。
