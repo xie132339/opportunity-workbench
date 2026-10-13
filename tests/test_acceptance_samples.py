@@ -147,6 +147,42 @@ class StrikeThroughSamplesTests(unittest.TestCase):
         finally:
             dc.set_calibration(None)
 
+    def test_品牌库广覆盖(self):
+        # 用户：品牌为什么这么少，要非常多覆盖非常广。六主题 176 品牌，
+        # 每主题抽查新品牌判据：贵拦、正常/便宜放行、豁免细分品类不误伤。
+        dc.set_calibration(None)
+        try:
+            # paper：低价纸基准=200（100抽正常零售2元）；3元/包拦、2元/包放行
+            self.assertTrue(dc.is_brand_market_overpriced('paper', '蓝漂抽纸整箱批发10包装家用实惠装纸巾', 3000))
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '蓝漂抽纸整箱批发10包装家用实惠装纸巾', 2000))
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '丝飘抽纸10包装家用纸巾', 2000))
+            # 无抽数 pack 折算 pack100：130抽装 3 元/包不误伤
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '心相印茶语经典抽纸3层130抽10包', 3000))
+            # 悬挂纸豁免
+            self.assertFalse(dc.is_brand_market_overpriced('paper', '心相印悬挂式抽纸320抽大包壁挂纸巾', 3000))
+            # water：今麦郎/凉白开/润田整箱贵拦、便宜放行；椰树椰汁（非矿泉水词）不误伤
+            self.assertTrue(dc.is_brand_market_overpriced('water', '今麦郎纯净水550ml*24瓶整箱装', 5000))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '今麦郎纯净水550ml*24瓶整箱装', 3000))
+            self.assertTrue(dc.is_brand_market_overpriced('water', '今麦郎凉白开熟水500ml*24瓶整箱', 7200))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '润田翠饮用纯净水550ml*24瓶整箱', 2800))
+            self.assertFalse(dc.is_brand_market_overpriced('water', '椰树牌正宗椰汁245ml*24罐装', 5000))
+            # rice：五常/稻花香豁免保护高端真品；普通五芳斋放行
+            self.assertFalse(dc.is_brand_market_overpriced('rice', '稻花香五常大米10斤装当季新米', 8000))
+            self.assertFalse(dc.is_brand_market_overpriced('rice', '五芳斋东北大米10斤装', 4500))
+            # flour：陈克明 7.6 元/kg 拦、6 元/kg 放行
+            self.assertTrue(dc.is_brand_market_overpriced('flour', '陈克明小麦面粉5kg家用装', 3800))
+            self.assertFalse(dc.is_brand_market_overpriced('flour', '陈克明小麦面粉5kg家用装', 3000))
+            # oil：道道全菜籽油（细分豁免）不误伤；香满园调和油 100 元/5L 拦、75 元放行
+            self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '道道全纯正菜籽油5L桶装', 8000))
+            self.assertTrue(dc.is_brand_market_overpriced('cooking_oil', '香满园食用调和油5L桶装', 10000))
+            self.assertFalse(dc.is_brand_market_overpriced('cooking_oil', '香满园食用调和油5L桶装', 7500))
+            # laundry：金纺（L 单位）60 元/3L 拦、45 元放行；网易严选放行
+            self.assertTrue(dc.is_brand_market_overpriced('laundry_detergent', '金纺衣物柔顺剂3L家庭装', 6000))
+            self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '金纺衣物柔顺剂3L家庭装', 4500))
+            self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '网易严选洗衣液3kg实惠装', 2500))
+        finally:
+            dc.set_calibration(None)
+
     def test_大王与绽家品牌基准(self):
         # 大王奢润乳霜纸 60抽×30包 ¥599 → 折算 33.3 元/100抽 > 大王基准 1200×1.2 → 拦
         self.assertTrue(dc.is_brand_market_overpriced('paper', '大王奢润保湿抽纸60抽*30包整箱抽纸', 59900))
