@@ -97,6 +97,10 @@ def create_app():
         if request.method == "POST" and request.form.get("csrf") != session.get("csrf"):
             # 登录页被浏览器缓存或会话 cookie 过期时，旧页面携带的 csrf 会失效；
             # 不再裸 400（浏览器显示 Bad Request 用户无从下手），改为提示并回到登录页重试。
+            # 若已登录（csrf 校验失败通常是表单重放/重复提交），不踢回登录页，回来源页即可。
+            if signed_in(session):
+                flash("页面会话已过期，请刷新后重新提交。", "error")
+                return redirect(request.referrer or "/")
             flash("页面会话已过期，请刷新后重新提交。", "error")
             next_path = request.form.get("next") or "/"
             return redirect(url_for("login", next=next_path))

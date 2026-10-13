@@ -137,6 +137,42 @@ class LocalAuthenticationTests(unittest.TestCase):
         follow = client.get(response.headers["Location"])
         self.assertIn("页面会话已过期", follow.get_data(as_text=True))
 
+    def test_login_keeps_csrf_for_repeat_submit(self):
+        # 登录成功后 csrf 必须保留：用户在登录页双击/重复提交时，
+        # 第二次 POST 不得因 sign_out 清掉 token 而误报"会话过期"。
+        client = app.test_client(authenticated=False)
+        with patch.dict(os.environ, {
+            "WORKBENCH_ADMIN_USERNAME": "admin",
+            "WORKBENCH_ADMIN_PASSWORD": "taobaoadmin@1",
+        }, clear=False):
+            client.get("/login")
+            with client.session_transaction() as stored_session:
+                csrf = stored_session["csrf"]
+            first = client.post("/login", data={
+                "csrf": csrf, "next": "/", "username": "admin", "password": "taobaoadmin@1",
+            })
+            self.assertEqual(first.status_code, 302)
+            self.assertEqual(first.headers["Location"], "/")
+            # 登录后 session 仍保留 csrf，用同一 token 重复提交不再提示过期
+            repeat = client.post("/login", data={
+                "csrf": csrf, "next": "/", "username": "admin", "password": "taobaoadmin@1",
+            })
+            self.assertEqual(repeat.status_code, 302)
+            self.assertEqual(repeat.headers["Location"], "/")
+
+    def test_signed_in_stale_csrf_stays_on_site(self):
+        # 已登录用户遇到 csrf 失效（表单重放）不应被踢回登录页
+        client = app.test_client(authenticated=False)
+        with patch.dict(os.environ, {
+            "WORKBENCH_ADMIN_USERNAME": "admin",
+            "WORKBENCH_ADMIN_PASSWORD": "taobaoadmin@1",
+        }, clear=False):
+            response = self.login(client, next_path="/")
+        self.assertEqual(response.status_code, 302)
+        response = client.post("/strategies", data={"csrf": "stale", "name": "x"})
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn("/login", response.headers["Location"])
+
 
 if __name__ == "__main__":
     unittest.main()
