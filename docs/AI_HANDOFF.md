@@ -391,3 +391,20 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
   凑单等条件单独一行；按降幅从大到小排序；页首明示数据来源与"不代表已核实到手价"。
 - **验证**：新增 test_maintenance_candidate_card_fields_and_sorting；全量回归 460 项唯一失败=既有基线；
   生产抓页确认 12 卡片/规格徽章/降幅/预估到手/来源说明全部渲染。已部署 health ok。
+
+## 5.2w 品牌标准价格库页面（2026-10-13）
+
+用户口径："直接就定义好对应的品牌数据（公开市场零售价），基于它判断是否真正优惠"。此前 176 品牌配置藏在代码（BRAND_REFERENCE_CONFIG）页面不可见不可改，被用户视为"没有数据"。
+
+实现：
+- db 新增 `brand_reference_overrides`（topic+brand_key UNIQUE, price_cents, note）与 `brand_reference_custom`（terms_json/unit/price_cents/note）两表。
+- services/discount_calibration.py：模块级缓存 `_BRAND_OVERRIDES/_BRAND_CUSTOM`；`_load_brand_reference(db)`（表缺失静默降级）；`brand_specs(topic)`（默认+页面新增合并）；`effective_brand_price`（override 优先）；`apply_brand_override`/`add_custom_brand`（写库+立即刷缓存）；`brand_reference_table(db)` 全量合并清单（176 条）；`UNIT_LABELS` 七单位标签。`brand_from_title`/`is_brand_market_overpriced`/`_brand_standard_reference` 改读合并库+override；`refresh_if_stale` 开头刷品牌缓存。
+- routes/price_benchmarks.py：GET 传 brand_library/brand_topics（六主题标签 BRAND_TOPIC_LABELS：paper纸品/water饮用水/rice大米/flour面粉/cooking_oil食用油/laundry_detergent洗衣液）；POST save_brand_override（改基准价）、save_brand_custom（新增品牌）。
+- 模板 price_benchmarks.html 新增"品牌标准价格库"区块：六主题 details 分组表格（品牌/识别词/单位/标准市场价/说明），行内改价表单，尾部新增品牌表单。规则说明：高于 基准价×1.2 判定异常不展示，改价保存即时生效。
+- 测试 test_brand_library_page_lists_all_brands_and_supports_override_and_add（16 项 price_benchmarks 测试，全量 461 项唯一失败=既有基线）。
+
+生产验证（commit c67e93a，已部署 health ok）：
+- 生产库两表已建、0 记录；页面抓取 176 行编辑表单、六主题分组（42/30/23/24/28/29）、农夫山泉/怡宝/心相印/维达/金龙鱼可见。
+- 生产 POST 改价链路：302→#brand-library、库写入 ('water','康师傅',150)、判断侧 effective_brand_price 读到 150；验证记录已清理（0 残留）。
+
+踩坑：TOPIC_LABELS 是九大类（home/food/…）与品牌六主题（paper/water/…）两套体系，路由校验和模板分组最初误用大类 → 品牌列表不渲染、'water' 被拒（302 但不写入）；改用 BRAND_TOPIC_LABELS 后闭环。
