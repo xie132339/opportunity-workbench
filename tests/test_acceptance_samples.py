@@ -103,6 +103,35 @@ class StrikeThroughSamplesTests(unittest.TestCase):
         # 低价悬挂纸（< 高价段门槛）不受影响
         self.assertFalse(dc.is_high_tier_unverifiable('paper', '心相印悬挂式抽纸整箱卫生纸实惠装家用壁挂式纸巾M码320抽挂抽', 3990))
 
+    def test_优惠额超售价硬规则(self):
+        # 主动审计发现：大量漏网假优惠共性 = 优惠额 > 促销价（蓝漂 ¥5.89 纸优惠 ¥10.01、
+        # 洞庭山 ¥92.93 水优惠 ¥106.07、道道全 ¥54.8 油优惠 ¥104.2）——优惠不可能大于售价
+        dc.set_calibration(None)  # seed 态（生产校准下同样生效：这些条目均为中低价段）
+        try:
+            ok, _ = dc.judge_drop('paper', 1590, 589)      # 蓝漂：drop 1001 > 589×1.05 → 拦
+            self.assertFalse(ok)
+            ok, _ = dc.judge_drop('water', 19900, 9293)    # 洞庭山：drop 10607 > 9293×1.05 → 拦
+            self.assertFalse(ok)
+            ok, _ = dc.judge_drop('cooking_oil', 15900, 5480)  # 道道全：drop 10420 > 5480×1.05 → 拦
+            self.assertFalse(ok)
+            # 真实优惠不误伤：半价（drop≈promo）与低折扣
+            ok, _ = dc.judge_drop('paper', 6000, 3000)     # 恰半价 → 放行
+            self.assertTrue(ok)
+            ok, _ = dc.judge_drop('paper', 5990, 2990)     # 半价划线误差内 → 放行
+            self.assertTrue(ok)
+            ok, _ = dc.judge_drop('water', 10000, 7000)    # 七折 → 放行
+            self.assertTrue(ok)
+        finally:
+            dc.set_calibration(None)
+
+    def test_大王与绽家品牌基准(self):
+        # 大王奢润乳霜纸 60抽×30包 ¥599 → 折算 33.3 元/100抽 > 大王基准 1200×1.2 → 拦
+        self.assertTrue(dc.is_brand_market_overpriced('paper', '大王奢润保湿抽纸60抽*30包整箱抽纸', 59900))
+        # 乳霜/婴儿/宝宝豁免词按设计放行（乳霜纸单价高，不误伤高端真品）
+        self.assertFalse(dc.is_brand_market_overpriced('paper', '大王奢润保湿乳霜婴儿柔纸巾60抽*30包整箱保湿抽纸宝宝专用', 59900))
+        # 绽家香氛洗衣液 1.7kg×8 ¥559.9 → 41 元/kg < 绽家基准 4000×1.2 → 不误伤
+        self.assertFalse(dc.is_brand_market_overpriced('laundry_detergent', '【繁花全家桶】绽家四季繁花香氛洗衣液持久留香护色除菌1.7kg*8', 55990))
+
 
 class MustGateSamplesTests(unittest.TestCase):
     """用户明确否定的数据：必须被拦出默认列表（品牌判据/形态词任一命中）。"""

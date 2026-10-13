@@ -153,6 +153,7 @@ BRAND_REFERENCE_CONFIG = {
         "可优比": {"terms": ("可优比", "KUB", "kub"), "unit": "pack100", "price_cents": 1200, "note": "可优比婴童云柔巾单包(80抽级，100抽折算)"},
         "babycare": {"terms": ("babycare", "bc"), "unit": "pack100", "price_cents": 1658, "note": "babycare云柔巾乳霜保湿单包(库内样本P50折算)"},
         "德佑":   {"terms": ("德佑",), "unit": "pack100", "price_cents": 359, "note": "德佑乳霜纸单包(库内样本P50折算)"},
+        "大王":   {"terms": ("大王", "GOO.N"), "unit": "pack100", "price_cents": 1200, "note": "大王奢润乳霜婴儿柔纸巾单包(100抽级，60抽整箱折算)"},
         "全棉时代": {"terms": ("全棉时代",), "unit": "pack100", "price_cents": 600, "note": "全棉时代棉柔巾单包"},
         "得宝":   {"terms": ("得宝", "tempo"), "unit": "pack100", "price_cents": 300, "note": "得宝抽纸单包"},
         "斑布":   {"terms": ("斑布",), "unit": "pack100", "price_cents": 350, "note": "斑布竹浆抽纸单包"},
@@ -232,6 +233,7 @@ BRAND_REFERENCE_CONFIG = {
     },
     "laundry_detergent": {
         "蓝月亮": {"terms": ("蓝月亮",), "unit": "kg", "price_cents": 2000, "note": "蓝月亮洗衣液3kg约60元"},
+        "绽家":   {"terms": ("绽家",), "unit": "kg", "price_cents": 4000, "note": "绽家香氛洗衣液1.7L装市场价约68元"},
         "立白":   {"terms": ("立白",), "unit": "kg", "price_cents": 1500, "note": "立白洗衣液3kg约45元"},
         "超能":   {"terms": ("超能",), "unit": "kg", "price_cents": 1500, "note": "超能洗衣液3kg约45元"},
         "威露士": {"terms": ("威露士",), "unit": "kg", "price_cents": 2000, "note": "威露士洗衣液3kg约60元"},
@@ -950,6 +952,12 @@ def refresh_if_stale(db, max_age_seconds=REFRESH_INTERVAL_SECONDS, now=None):
         (now - datetime.fromisoformat(row["updated_at"])).total_seconds() < max_age_seconds
         for row in rows
     ) if rows else False
+    if rows and _CACHE is None:
+        # A fresh persisted snapshot must still be loaded into a cold process:
+        # otherwise a restarted web/worker (or any new process) silently falls
+        # back to the looser seed caps (0.85 / 50 yuan) until the snapshot ages
+        # out, letting 74-85% fake strikethroughs through for up to an hour.
+        load(db)
     if not fresh:
         calibration = calibrate(db)
         if calibration:
@@ -1083,6 +1091,13 @@ def judge_drop(topic, reserve_cents, promotion_cents, shop_bad=False):
             return False, "降幅达到参考价85%或以上，参考价作为划线价不可信"
         if reserve_cents > promotion_cents * 20:
             return False, "参考价超过推广价20倍，参考价作为划线价不可信"
+        if drop - promotion_cents > promotion_cents // 20:
+            # 主动审计发现：中低价假优惠的共性 = 优惠额显著超过促销价本身
+            # （蓝漂纸 ¥5.89 优惠 ¥10.01、洞庭山桶装水 ¥92.93 优惠 ¥106.07、
+            # 道道全菜籽油 ¥54.8 优惠 ¥104.2 等）。真实优惠恒有 drop <= promo；
+            # 半价划线（drop ≈ promo）在 5% 容差内不受影响。高价段真品
+            # （低氘水等市场价 2 倍+）已在上方高价段分支豁免。
+            return False, "优惠额显著超过推广价（划线价高于推广价2倍以上），划线价作为优惠证据不可信"
         return True, ""
 
     if shop_bad:
@@ -1092,4 +1107,7 @@ def judge_drop(topic, reserve_cents, promotion_cents, shop_bad=False):
         return False, f"降幅超过该价位校准可信上界（{ratio_cap:.0%}），划线价作为优惠证据不可信"
     if drop_cap is not None and drop > drop_cap:
         return False, f"优惠额超过该价位校准可信上界（¥{drop_cap / 100:.0f}），划线价作为优惠证据不可信"
+    if drop - promotion_cents > promotion_cents // 20:
+        # 同 seed 分支：中低价假优惠的硬证据（优惠额显著超过售价本身）
+        return False, "优惠额显著超过推广价（划线价高于推广价2倍以上），划线价作为优惠证据不可信"
     return True, ""

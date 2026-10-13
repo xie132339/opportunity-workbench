@@ -56,9 +56,10 @@ class ShopReputationTests(unittest.TestCase):
         self.assertFalse(shop_reputation.is_bad_shop(''))
 
     def test_judge_drop_坏店收紧_seed边界(self):
-        # 确定性 seed 边界：ratio 0.65 —— 正常店放行，坏店（0.85×0.7=0.595）拦截
+        # seed 态下 ratio 0.65 且优惠额超售价（drop 13000 > 7000×1.05）→ 硬规则拦，
+        # 正常店与坏店都不放行（优惠不可能大于售价；该区间已被硬规则覆盖）
         ok_norm, _ = self._judge(20000, 7000)
-        self.assertTrue(ok_norm)
+        self.assertFalse(ok_norm)
         ok_bad, _ = self._judge(20000, 7000, shop_bad=True)
         self.assertFalse(ok_bad)
 

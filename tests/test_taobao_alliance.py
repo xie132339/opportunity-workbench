@@ -84,10 +84,10 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertFalse(plausible(69900, 6990)[0])
         self.assertFalse(plausible(69900, 7300)[0])
         self.assertFalse(plausible(10000, 1500)[0])    # 恰 85% 也拦
-        # 真实促销不受影响：5 折、7 折、84% 内深折扣保留
+        # 真实促销不受影响：5 折、半价（drop≈promo）保留；优惠额超售价的引流划线拦
         self.assertTrue(plausible(10000, 5000)[0])
-        self.assertTrue(plausible(10000, 3000)[0])
-        self.assertTrue(plausible(10000, 1600)[0])     # 84% 降幅
+        self.assertTrue(plausible(6000, 3000)[0])     # 半价，drop=3000=promo
+        self.assertFalse(plausible(10000, 3000)[0])   # 70% 但优惠额 7000 > 3000×1.05 → 引流划线拦
 
     def test_parse_item_inflated_reference_drop_is_not_a_promotion_signal(self):
         record = parse_item(sample_item(self.now, reserve="199.00", promotion="2.90"), now=self.now)

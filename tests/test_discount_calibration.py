@@ -85,9 +85,12 @@ class CalibrationEstimatorTests(unittest.TestCase):
             plausible, reason = dc.judge_drop("paper", 69900, 6990)   # KUB 90%
             self.assertFalse(plausible)
             self.assertIn("校准可信上界", reason)
-            self.assertTrue(dc.judge_drop("paper", 10000, 1600)[0])   # 84% < 85% 界，放行
+            # 84% 中低价且优惠额超售价（drop 8400 > 1600×1.05）→ 引流划线，硬规则拦（新语义）
+            plausible, reason = dc.judge_drop("paper", 10000, 1600)
+            self.assertFalse(plausible)
+            self.assertIn("优惠额显著超过推广价", reason)
             self.assertTrue(dc.judge_drop("paper", 10000, 5000)[0])   # 5 折
-            self.assertTrue(dc.judge_drop("paper", 4000, 1000)[0])    # drop 30 < 300，放行
+            self.assertTrue(dc.judge_drop("paper", 2000, 1000)[0])    # drop 10 < 30，放行
             self.assertFalse(dc.judge_drop("paper", 50000, 10000)[0])  # drop 400 > 300，优惠额超界
             # 荒谬高价：促销价 > 校准上界
             self.assertFalse(dc.judge_drop("laundry_detergent", 299900, 299700)[0])
@@ -197,7 +200,7 @@ class CalibrationEstimatorTests(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("引流", reason)
             # 非 gated 价不受影响
-            self.assertTrue(dc.judge_drop("paper", 990, 400)[0])
+            self.assertTrue(dc.judge_drop("paper", 990, 600)[0])   # drop 390 < 600×1.05，放行
         finally:
             dc.set_calibration(None)
 
@@ -229,7 +232,8 @@ class CalibrationEstimatorTests(unittest.TestCase):
             self.assertFalse(plausible(10000, 300)[0])       # 33 倍参考价
             self.assertFalse(plausible(10000, 1500)[0])      # 恰 85%
             self.assertTrue(plausible(10000, 5000)[0])       # 5 折
-            self.assertTrue(plausible(10000, 1600)[0])       # 84%
+            # 84% 中低价且优惠额超售价（drop 8400 > 1600×1.05）→ 引流划线，硬规则拦（新语义）
+            self.assertFalse(plausible(10000, 1600)[0])
         finally:
             dc.set_calibration(None)
 
