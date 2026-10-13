@@ -381,17 +381,108 @@ SMALL_SPEC_BRAND_K = {"water": 1.4}
 
 BRAND_OVERPRICE_K = 1.2
 
+# 页面可编辑的品牌基准：数据库 brand_reference_overrides（改默认基准价/说明）
+# 与 brand_reference_custom（新增品牌）在进程内缓存的合并视图。判断函数是纯函数，
+# 通过模块级缓存读取；refresh_if_stale 与保存动作都会刷新，保证页面改价实时生效。
+_BRAND_OVERRIDES = {}   # {(topic, brand_key): price_cents}
+_BRAND_CUSTOM = {}      # {(topic, brand_key): {"terms":..., "unit":..., "price_cents":..., "note":...}}
+_BRAND_LIBRARY_LOADED = False
+
+UNIT_LABELS = {
+    "pack100": "元/100抽", "pack": "元/包", "bottle500": "元/瓶(500ml)",
+    "bottle": "元/瓶", "liter": "元/升", "kg": "元/公斤", "ml": "元/毫升",
+}
+
+
+def _load_brand_reference(db):
+    """Refresh in-process overrides and custom brands from the database."""
+    global _BRAND_OVERRIDES, _BRAND_CUSTOM, _BRAND_LIBRARY_LOADED
+    overrides = {}
+    custom = {}
+    if db is not None:
+        try:
+            for row in db.execute(
+                "SELECT topic, brand_key, price_cents FROM brand_reference_overrides"
+            ).fetchall():
+                if isinstance(row["price_cents"], int) and row["price_cents"] > 0:
+                    overrides[(row["topic"], row["brand_key"])] = row["price_cents"]
+            for row in db.execute(
+                "SELECT topic, brand_key, terms_json, unit, price_cents, note "
+                "FROM brand_reference_custom"
+            ).fetchall():
+                try:
+                    terms = json.loads(row["terms_json"])
+                except (TypeError, ValueError):
+                    terms = []
+                custom[(row["topic"], row["brand_key"])] = {
+                    "terms": tuple(terms) if isinstance(terms, list) else (),
+                    "unit": row["unit"], "price_cents": row["price_cents"],
+                    "note": row["note"] or "",
+                }
+        except Exception:
+            # 表不存在（旧库）时静默降级为纯代码配置，不阻塞启动
+            overrides, custom = {}, {}
+    _BRAND_OVERRIDES, _BRAND_CUSTOM, _BRAND_LIBRARY_LOADED = overrides, custom, True
+
+
+def brand_specs(topic):
+    """Merged brand specs for a topic: code defaults + page-added custom brands.
+
+    Custom brands never collide with a default brand key (same key = override
+    of the default spec's identity fields is not supported; use overrides for
+    price only).
+    """
+    merged = dict(BRAND_REFERENCE_CONFIG.get(topic) or {})
+    for (t, brand), spec in _BRAND_CUSTOM.items():
+        if t == topic and brand not in merged:
+            merged[brand] = spec
+    return merged
+
+
+def effective_brand_price(topic, brand, spec):
+    """Apply a page-edited override price on top of the code default."""
+    overridden = _BRAND_OVERRIDES.get((topic, brand))
+    if isinstance(overridden, int) and overridden > 0:
+        return overridden
+    return spec.get("price_cents")
+
+
+def apply_brand_override(db, topic, brand_key, price_cents, note=None):
+    """Persist a price override and refresh the in-process view immediately."""
+    db.execute(
+        "INSERT INTO brand_reference_overrides (topic, brand_key, price_cents, note) "
+        "VALUES (?,?,?,?) "
+        "ON CONFLICT(topic, brand_key) DO UPDATE SET price_cents=excluded.price_cents, "
+        "note=excluded.note", (topic, brand_key, int(price_cents), note or "")
+    )
+    _BRAND_OVERRIDES[(topic, brand_key)] = int(price_cents)
+
+
+def add_custom_brand(db, topic, brand_key, terms, unit, price_cents, note=None):
+    """Persist a new page-added brand and refresh the in-process view immediately."""
+    db.execute(
+        "INSERT INTO brand_reference_custom (topic, brand_key, terms_json, unit, price_cents, note) "
+        "VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(topic, brand_key) DO UPDATE SET terms_json=excluded.terms_json, "
+        "unit=excluded.unit, price_cents=excluded.price_cents, note=excluded.note",
+        (topic, brand_key, json.dumps(list(terms), ensure_ascii=False), unit,
+         int(price_cents), note or "")
+    )
+    _BRAND_CUSTOM[(topic, brand_key)] = {
+        "terms": tuple(terms), "unit": unit, "price_cents": int(price_cents), "note": note or ""}
+
 
 def brand_from_title(title, topic):
     """Longest brand term (incl. aliases) present in a title for a managed
-    topic, from BRAND_REFERENCE_CONFIG (or None).  English aliases match
-    case-insensitively; longer terms win ("华润五丰" over "五丰")."""
+    topic, from BRAND_REFERENCE_CONFIG plus page-added custom brands (or None).
+    English aliases match case-insensitively; longer terms win
+    ("华润五丰" over "五丰")."""
     if not title:
         return None
     lowered = title.lower()
     best = None
     best_brand = None
-    for brand, spec in (BRAND_REFERENCE_CONFIG.get(topic) or {}).items():
+    for brand, spec in brand_specs(topic).items():
         for term in spec.get("terms") or ():
             if term.lower() in lowered and (best is None or len(term) > len(best)):
                 best = term
@@ -538,10 +629,10 @@ def is_brand_market_overpriced(topic, title, final_cents):
         # 按 pack100 基准比较（低价纸 3 元/包=300 分 > 基准 150×1.2 拦截，
         # 130抽装 3 元/包仍在中端基准容差内不误伤）
         unit_label = "pack100"
-    spec = (BRAND_REFERENCE_CONFIG.get(topic) or {}).get(brand)
+    spec = brand_specs(topic).get(brand)
     if not isinstance(spec, dict):
         return False
-    standard = spec.get("price_cents")
+    standard = effective_brand_price(topic, brand, spec)
     if spec.get("unit") != unit_label:
         # 多单位基准：如 water 品牌主单位 bottle500（单瓶），大瓶/桶装折算为
         # liter 时用 extra_units["liter"]（每升市场价）作参照，否则品牌判据失效
@@ -602,10 +693,10 @@ BRAND_BASELINE_EXCLUDE_TERMS = {
 def _brand_standard_reference(topic, brand):
     """Return (standard_cents, unit_label) or None when the brand has no
     usable maintained standard-market reference for this topic."""
-    spec = (BRAND_REFERENCE_CONFIG.get(topic) or {}).get(brand)
+    spec = brand_specs(topic).get(brand)
     if not isinstance(spec, dict):
         return None
-    standard = spec.get("price_cents")
+    standard = effective_brand_price(topic, brand, spec)
     unit = spec.get("unit")
     if not isinstance(standard, int) or not isinstance(unit, str) or not unit:
         return None
@@ -1069,6 +1160,7 @@ def load(db):
 def refresh_if_stale(db, max_age_seconds=REFRESH_INTERVAL_SECONDS, now=None):
     """Recompute calibration when the persisted snapshot is older than max_age."""
     now = now or datetime.now(timezone.utc)
+    _load_brand_reference(db)
     rows = db.execute("SELECT topic, updated_at FROM discount_calibration").fetchall()
     fresh = all(
         (now - datetime.fromisoformat(row["updated_at"])).total_seconds() < max_age_seconds
@@ -1233,3 +1325,29 @@ def judge_drop(topic, reserve_cents, promotion_cents, shop_bad=False):
         # 同 seed 分支：中低价假优惠的硬证据（优惠额显著超过售价本身）
         return False, "优惠额显著超过推广价（划线价高于推广价2倍以上），划线价作为优惠证据不可信"
     return True, ""
+
+
+def brand_reference_table(db):
+    """Full merged brand library for the maintenance page: every configured
+    brand with its default and effective (override-aware) reference price."""
+    _load_brand_reference(db)
+    rows = []
+    for topic in BRAND_REFERENCE_CONFIG:
+        for brand, spec in brand_specs(topic).items():
+            default_cents = spec.get("price_cents")
+            effective = effective_brand_price(topic, brand, spec)
+            custom = (topic, brand) in _BRAND_CUSTOM
+            rows.append({
+                "topic": topic,
+                "brand": brand,
+                "terms": list(spec.get("terms") or ()),
+                "unit": spec.get("unit", ""),
+                "unit_label": UNIT_LABELS.get(spec.get("unit", ""), spec.get("unit", "")),
+                "default_cents": default_cents,
+                "price_cents": effective,
+                "overridden": (topic, brand) in _BRAND_OVERRIDES,
+                "custom": custom,
+                "note": spec.get("note", ""),
+            })
+    rows.sort(key=lambda r: (r["topic"], r["brand"]))
+    return rows

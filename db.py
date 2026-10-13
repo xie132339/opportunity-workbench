@@ -196,6 +196,17 @@ CREATE TABLE IF NOT EXISTS benchmark_categories (
  version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)), updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS brand_reference_overrides (
+ id INTEGER PRIMARY KEY, topic TEXT NOT NULL, brand_key TEXT NOT NULL,
+ price_cents INTEGER, note TEXT,
+ UNIQUE(topic, brand_key)
+);
+CREATE TABLE IF NOT EXISTS brand_reference_custom (
+ id INTEGER PRIMARY KEY, topic TEXT NOT NULL, brand_key TEXT NOT NULL,
+ terms_json TEXT NOT NULL, unit TEXT NOT NULL,
+ price_cents INTEGER NOT NULL, note TEXT,
+ UNIQUE(topic, brand_key)
+);
 CREATE TABLE IF NOT EXISTS benchmark_category_rule_audit (
  id INTEGER PRIMARY KEY, category_id INTEGER NOT NULL, version INTEGER NOT NULL,
  previous_policy_json TEXT, policy_json TEXT NOT NULL,

@@ -106,6 +106,38 @@ class PriceBenchmarkPageTests(unittest.TestCase):
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM maintained_price_baselines").fetchone()[0], 0)
 
+    def test_brand_library_page_lists_all_brands_and_supports_override_and_add(self):
+        from services import discount_calibration as dc
+        body = self.client.get("/price-benchmarks").get_data(as_text=True)
+        self.assertEqual(body.count('action="/price-benchmarks/brands/override"'), 176)
+        self.assertIn("纸品（42 品牌）", body)
+        self.assertIn("饮用水（30 品牌）", body)
+        self.assertIn("农夫山泉", body)
+        self.assertIn("心相印", body)
+        # 保存基准价覆盖 → 判断即时生效
+        with self.client.session_transaction() as stored_session:
+            csrf = stored_session["csrf"]
+        response = self.client.post("/price-benchmarks/brands/override", data={
+            "csrf": csrf, "topic": "water", "brand": "农夫山泉", "price_cents": "5.00", "note": "test",
+        }, follow_redirects=True)
+        self.assertIn("已更新 农夫山泉", response.get_data(as_text=True))
+        self.assertEqual(dc.effective_brand_price("water", "农夫山泉",
+                                                  dc.BRAND_REFERENCE_CONFIG["water"]["农夫山泉"]), 500)
+        # 新增品牌 → 页面可见且参与判断
+        response = self.client.post("/price-benchmarks/brands/add", data={
+            "csrf": csrf, "topic": "paper", "brand": "洁云", "terms": "洁云,jieyun",
+            "unit": "pack100", "price_cents": "3.00", "note": "洁云抽纸",
+        }, follow_redirects=True)
+        self.assertIn("已新增品牌 洁云", response.get_data(as_text=True))
+        self.assertEqual(dc.brand_from_title("洁云抽纸3层100抽10包", "paper"), "洁云")
+        self.assertTrue(dc.is_brand_market_overpriced("paper", "洁云抽纸3层100抽1包", 1000))
+        self.assertFalse(dc.is_brand_market_overpriced("paper", "洁云抽纸3层100抽10包", 3000))
+        # 无效单位/非法主题被拒绝
+        response = self.client.post("/price-benchmarks/brands/add", data={
+            "csrf": csrf, "topic": "water", "brand": "测试", "terms": "测试",
+            "unit": "bad_unit", "price_cents": "3.00",
+        })
+        self.assertEqual(response.status_code, 302)
     def test_maintenance_candidate_card_fields_and_sorting(self):
         from services.maintained_price_candidates import load_maintained_price_candidates, spec_summary
         self.assertEqual(spec_summary("葵王物理压榨一级浓香花生油6.08L 大桶装家用食用油"), "6.08l")

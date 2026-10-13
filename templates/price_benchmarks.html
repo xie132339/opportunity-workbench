@@ -130,6 +130,51 @@
   {% else %}<p><strong>还没有维护价格带。</strong> 先新增一个明确品牌、规格和单位的基准；系统不会编造默认价格。</p>{% endif %}
 </section>
 
+<section class="card" id="brand-library">
+  <h2>品牌标准价格库（判断真优惠的基准）</h2>
+  <p class="muted">这里维护的每个品牌标准市场价，是系统判断"是否真正优惠"的依据：商品折算到对应单位后，<strong>高于 基准价×1.2 判定为价格异常不展示</strong>；低于市场价才作为可捡漏候选参与排序。修改基准价保存后<strong>即时生效</strong>，无需改代码。下表全部为公开市场零售价（元/单位）。</p>
+  {% for topic,label in brand_topics.items() %}
+  {% set group = brand_library|selectattr('topic','equalto',topic)|list %}
+  {% if group %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ label }}（{{ group|length }} 品牌）</strong></summary>
+    <div class="table-wrap"><table>
+      <thead><tr><th>品牌</th><th>识别词</th><th>单位</th><th>标准市场价（元）</th><th>说明 / 修改</th></tr></thead>
+      <tbody>{% for row in group %}<tr>
+        <td><strong>{{ row.brand }}</strong>{% if row.custom %} <span class="pill">页面新增</span>{% endif %}{% if row.overridden %} <span class="pill warn">已改价</span>{% endif %}</td>
+        <td><small>{{ row.terms|join('、') }}</small></td>
+        <td><small>{{ row.unit_label }}</small></td>
+        <td><strong>{{ money(row.price_cents) }}</strong>{% if row.overridden and row.default_cents %}<br><small>原 {{ money(row.default_cents) }}</small>{% endif %}</td>
+        <td><details><summary>{{ row.note or '编辑' }}</summary>
+          <form method="post" action="{{ url_for('save_brand_override') }}" class="stack">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="topic" value="{{ row.topic }}">
+            <input type="hidden" name="brand" value="{{ row.brand }}">
+            <label>标准市场价（元）<input name="price_cents" type="number" min="0.01" step="0.01" value="{{ '%.2f'|format(row.price_cents / 100) }}" required></label>
+            <label>说明<input name="note" value="{{ row.note }}" maxlength="500"></label>
+            <button>保存（即时生效）</button>
+          </form>
+        </details></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  {% endif %}
+  {% endfor %}
+  <details>
+    <summary>新增品牌（加入判断库）</summary>
+    <form method="post" action="{{ url_for('save_brand_custom') }}" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>所属主题<select name="topic">{% for key,label in brand_topics.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+      <label>品牌名<input name="brand" maxlength="40" placeholder="例如：洁云" required></label>
+      <label>标题识别词（逗号分隔，含别名）<input name="terms" maxlength="200" placeholder="例如：洁云，jieyun" required></label>
+      <label>计价单位<select name="unit">{% for key,label in [('pack100','元/100抽'),('pack','元/包'),('bottle500','元/瓶(500ml)'),('bottle','元/瓶'),('liter','元/升'),('kg','元/公斤'),('ml','元/毫升')] %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+      <label>标准市场价（元）<input name="price_cents" type="number" min="0.01" step="0.01" required></label>
+      <label>说明<input name="note" maxlength="500" placeholder="例如：洁云抽纸单包(100抽)零售"></label>
+      <div><button>新增品牌</button></div>
+    </form>
+  </details>
+</section>
+
 <section class="card">
   <h2>品类识别与单位规则</h2>
   <p class="muted">品类用于归档；每条维护基准自己选择按抽、瓶、包、克、毫升或固定规格比较。标题只要缺少数量或同时命中多个基准，就不会输出结论。</p>

@@ -13,7 +13,9 @@ from services.maintained_price_baselines import (decode_terms, parse_terms, unit
                                                   validate_baseline)
 from services.maintained_price_candidates import (load_maintained_price_candidates,
                                                    maintenance_draft)
-from services.money import cents
+from services.discount_calibration import (brand_reference_table, apply_brand_override,
+                                            add_custom_brand, UNIT_LABELS)
+from services.money import cents, money
 from offer import TOPIC_LABELS
 
 
@@ -79,9 +81,76 @@ def price_benchmarks():
                                 ready=sum(bool(row["enabled"]) for row in baselines))
         maintained_candidates = load_maintained_price_candidates(db, categories)
         baseline_draft = maintenance_draft(maintained_candidates, request.args.get("candidate"))
+        brand_library = brand_reference_table(db)
+        brand_topics = BRAND_TOPIC_LABELS
     return render_template("price_benchmarks.html", categories=categories, baselines=baselines,
                            baseline_summary=baseline_summary, maintained_candidates=maintained_candidates,
-                           baseline_draft=baseline_draft)
+                           baseline_draft=baseline_draft, brand_library=brand_library,
+                           brand_topics=brand_topics)
+
+
+BRAND_TOPIC_LABELS = {
+    "paper": "纸品", "water": "饮用水", "rice": "大米", "flour": "面粉",
+    "cooking_oil": "食用油", "laundry_detergent": "洗衣液",
+}
+
+
+def save_brand_override():
+    topic = request.form.get("topic", "").strip()
+    brand = request.form.get("brand", "").strip()
+    price_raw = request.form.get("price_cents", "").strip()
+    note = request.form.get("note", "").strip()[:500]
+    if topic not in BRAND_TOPIC_LABELS or not brand or len(brand) > 40:
+        flash("品牌或主题无效", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    try:
+        price = cents(price_raw, required=True)
+    except ValueError:
+        flash("基准价必须是大于 0 的金额", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    if price <= 0 or price > 1000000:
+        flash("基准价超出合理范围", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    with connect() as db:
+        apply_brand_override(db, topic, brand, price, note)
+    flash(f"已更新 {brand} 标准市场价（{money(price)}/{UNIT_LABELS.get(price_benchmarks_topic_unit(topic, brand), '')}），商品判断即时生效。", "ok")
+    return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+
+
+def price_benchmarks_topic_unit(topic, brand):
+    from services.discount_calibration import brand_specs
+    spec = brand_specs(topic).get(brand) or {}
+    return spec.get("unit", "")
+
+
+def save_brand_custom():
+    topic = request.form.get("topic", "").strip()
+    brand = request.form.get("brand", "").strip()
+    terms_raw = request.form.get("terms", "").strip()
+    unit = request.form.get("unit", "").strip()
+    price_raw = request.form.get("price_cents", "").strip()
+    note = request.form.get("note", "").strip()[:500]
+    terms = list(dict.fromkeys(unicodedata.normalize("NFKC", term).strip()
+                               for term in re.split(r"[,，\n]+", terms_raw) if term.strip()))
+    if (topic not in BRAND_TOPIC_LABELS or not brand or len(brand) > 40 or not terms
+            or len(terms) > 20 or any(len(term) > 50 for term in terms)):
+        flash("新增品牌：主题、品牌名、至少一个识别词必填，请检查长度", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    if unit not in UNIT_LABELS:
+        flash("计价单位无效（可选：元/100抽、元/包、元/瓶(500ml)、元/瓶、元/升、元/公斤、元/毫升）", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    try:
+        price = cents(price_raw, required=True)
+    except ValueError:
+        flash("基准价必须是大于 0 的金额", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    if price <= 0 or price > 1000000:
+        flash("基准价超出合理范围", "error")
+        return redirect(url_for("price_benchmarks", _anchor="brand-library"))
+    with connect() as db:
+        add_custom_brand(db, topic, brand, terms, unit, price, note)
+    flash(f"已新增品牌 {brand}（{money(price)}/{UNIT_LABELS.get(unit, unit)}），商品判断即时生效。", "ok")
+    return redirect(url_for("price_benchmarks", _anchor="brand-library"))
 
 
 def _baseline_payload(form):
@@ -308,6 +377,10 @@ def register(app):
                      view_func=save_maintained_price_baseline, methods=["POST"])
     app.add_url_rule("/price-benchmarks/categories", endpoint="save_benchmark_category",
                      view_func=save_benchmark_category, methods=["POST"])
+    app.add_url_rule("/price-benchmarks/brands/override", endpoint="save_brand_override",
+                     view_func=save_brand_override, methods=["POST"])
+    app.add_url_rule("/price-benchmarks/brands/add", endpoint="save_brand_custom",
+                     view_func=save_brand_custom, methods=["POST"])
     app.add_url_rule("/price-benchmarks/rules/<topic_key>", endpoint="save_topic_rule",
                      view_func=save_topic_rule, methods=["POST"])
     app.add_url_rule("/price-benchmarks/providers/<int:provider_id>/watch",
