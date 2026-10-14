@@ -19,6 +19,10 @@ def connect():
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=15000")
+    # 大库(1.37GB/6.4万行)冷读调优：加大每连接页缓存(约62MB)与mmap(256MB)，
+    # 显著提升常用查询(列表/搜索/核验)二次及后续请求速度；首次冷读仍受磁盘IO限制。
+    db.execute("PRAGMA cache_size=-8000")
+    db.execute("PRAGMA mmap_size=268435456")
     try:
         yield db
         db.commit()
