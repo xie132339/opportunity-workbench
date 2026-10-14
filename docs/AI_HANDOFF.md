@@ -457,3 +457,11 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 根因定性：生产库 1.37GB（page_count 335164×4096），events 表 6.4 万行×~3.8KB≈234MB（snippet 大头）+ opportunities 40MB + auto_reviews 31.6MB + 索引/空闲页约 1GB；LIKE '%纸%' 全表扫描需冷读约 234MB+，ECS 通用云盘约 4MB/s → 首次 60s+；部署后 3.5s 是文件系统页缓存热（worker 刚读过库）的特例。
 - 落地：db.py connect() 加 PRAGMA cache_size=-8000（62MB/连接）+ mmap_size=268435456（256MB），缓解热路径（内存仅 1.74G/可用 474M，保守取值）。验证 db.connect() 生效；回归 463 仅基线失败；停服→部署→health OK。
 - 未解决边界：首次冷读仍 60s+（磁盘 IO 上限）。彻底根治下一步：ECS 升配（≥4G 双核 + SSD）或把搜索标题匹配改 FTS5（大工程，需防召回变化）或缩小 LIKE 扫描范围（只 title，有漏召回风险，需验证）。
+
+## 5.5 工业/农用加工设备拦截（commit d181869，已部署 health OK）
+
+- 需求：首页默认列表混入碾米机/粉碎机/拌馅机等 B端加工设备（1万多元、优惠100元=0.9%，用户截图"机器乱套了"）。
+- 根因：`_GENERIC_INTERFERING_TERMS` 只有"机器/设备"整词，单字"机"标题（碾米机等）未拦；且机器类把 food 主题校准 P97 高价位阈值抬高，`is_high_tier_unverifiable` 失效。
+- 落地（可维护配置数据，services/discount_calibration.py）：`EQUIPMENT_DEVICE_TERMS`（~60 个设备词）+ `BUSINESS_EQUIPMENT_MARKERS`（商用/工厂/批发/农用/工业等）+ `_EQUIPMENT_CORE_WORDS`（机/设备/机械/机组）组合兜底 + 金额 ≥500 元下界 + `HOUSEHOLD_APPLIANCE_EXEMPT_TERMS`（洗衣机/破壁机/电饭煲/手机等 ~44 个家用形态豁免）。接入 `promotion_admission`（is_high_tier_unverifiable 之后）。
+- 验证：单测 3 项（截图 8 条全拦 + 真优惠/有机米/手机壳/低价家用小机器不误伤）；生产库抽样 500 条机器 447 拦、保留 53 条全为合理项（低价配件/脱皮食材）；准入路径 12 条机器应展示 0；洗衣机 37/电饭煲 109/有机米 12 条零误伤。回归 466 项仅基线失败；停服→部署→health OK。
+- 边界：低价（<500元）家用小机器与配件不拦（宁漏勿伤）；采集侧保留数据（审计），拦截在展示判断层。
