@@ -408,3 +408,19 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 生产 POST 改价链路：302→#brand-library、库写入 ('water','康师傅',150)、判断侧 effective_brand_price 读到 150；验证记录已清理（0 残留）。
 
 踩坑：TOPIC_LABELS 是九大类（home/food/…）与品牌六主题（paper/water/…）两套体系，路由校验和模板分组最初误用大类 → 品牌列表不渲染、'water' 被拒（302 但不写入）；改用 BRAND_TOPIC_LABELS 后闭环。
+
+## 5.2x 首页"访问不通"（504）根治（2026-10-14 已部署）
+
+现象：http://8.159.128.186/ 用户多次报"访问不通"，nginx 504；登录后有时跳会话过期。根因链：
+1. offers 视图 SQL 每请求物化 6.2 万行宽行 + CASE 表达式排序（无索引），单查 25-42s；4 线程并发即拖爆 60s nginx 超时。
+2. 淘宝联盟采集 worker（app.py taobao-worker）每 60s 轮询、联盟 API 无增量能力，一轮全量 sync 25 分钟+，worker 常年 60-91% CPU，2G 机器被占满 → 任何实时查询被拖到 27-70s。
+
+修复（commit 三连，本地/远端/生产对齐，health ok）：
+- `routes/search.py` offers 视图两阶段预取：阶段1 轻量 `SELECT o.id, MAX(advertised_cents) …GROUP BY o.id`（6.2 万行去重 14s）→ Python 取推广价 top1500 → 阶段2 宽行 `o.id IN` 回查（3.7s）→ Python 品牌判据/假优惠拦截/排序照旧（语义不变，只是候选池收敛）。
+- 整页 HTML 缓存（`services/search_result_cache.py` get_page/put_page，TTL 300s，仅默认 offers 视图启用）：同一 query_string 请求 TTL 内直接返回渲染结果，完全不碰 DB。
+- worker 轮询 60s→300s；nginx proxy_read_timeout 60s→120s（生产配置已改并 reload）。
+
+生产实测（worker 满载态，本机 127.0.0.1 登录后）：
+- 首页二次/搜索二次：0.0s（缓存命中）；首次渲染（含登录后首开）：首页随登录完成、搜索 55.7s、品牌库 30.9s——全部 200，无 504。
+
+已知边界：首次渲染在采集满载时段需 30-60s（联盟 API 无增量，全量采集占用 2G CPU）；采集侧数据一致性窗口 = 页面缓存 300s + 采集轮 25-30 分钟。
