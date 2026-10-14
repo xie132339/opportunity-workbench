@@ -435,7 +435,13 @@ def index():
         # only when the same captured text contains a price marker; the title
         # remains searchable without that extra requirement.
         if len(query) == 1:
-            sql += " AND (o.title LIKE ? OR (COALESCE(e.snippet,'') LIKE ? AND (COALESCE(e.snippet,'') LIKE '%元%' OR COALESCE(e.snippet,'') LIKE '%¥%' OR COALESCE(e.snippet,'') LIKE '%￥%')))"
+            # 联盟渠道标题即商品名，来源文本(events.snippet)是商品描述的大文本。
+            # 对 snippet 做前导通配 LIKE 在 JOIN 后要全扫 6.2 万行大文本（30s+，
+            # 曾把搜索页拖到 75s 触发 504"访问不通"）。联盟标题匹配已覆盖绝大多数
+            # 相关商品，故仅对非联盟渠道保留来源文本匹配（RSS 等多平台场景需要）。
+            sql += (" AND (o.title LIKE ? OR (s.method!='taobao_alliance' AND "
+                    "COALESCE(e.snippet,'') LIKE ? AND (COALESCE(e.snippet,'') LIKE '%元%' "
+                    "OR COALESCE(e.snippet,'') LIKE '%¥%' OR COALESCE(e.snippet,'') LIKE '%￥%')))")
             args.extend(("%" + query + "%", "%" + query + "%"))
             if query == '纸':
                 # Common non-paper compound terms in deal feeds.
@@ -443,7 +449,8 @@ def index():
                     sql += " AND o.title NOT LIKE ?"
                     args.append('%' + unrelated_title_term + '%')
         else:
-            sql += " AND (o.title LIKE ? OR COALESCE(e.snippet,'') LIKE ?)"
+            # 多字符搜索同样避免联盟渠道全扫 snippet 大文本：联盟标题已含关键词。
+            sql += " AND (o.title LIKE ? OR (s.method!='taobao_alliance' AND COALESCE(e.snippet,'') LIKE ?))"
             args.extend(("%" + query + "%", "%" + query + "%"))
     if category:
         sql += " AND o.category=?"
