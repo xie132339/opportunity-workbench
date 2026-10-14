@@ -62,9 +62,12 @@ def clear() -> None:
 
 
 # 整页 HTML 缓存：首页/搜索页的最终渲染输出。worker 全量 sync 会持续占满
-# 2G ECS 的 CPU，实时查询被拖到 27-58s（nginx 60s 超时 → 504"访问不通"）。
+# 2G ECS 的 CPU，实时查询被拖到 27-70s（nginx 60s 超时 → 504"访问不通"）。
 # 页面缓存让同一参数的请求在 TTL 内直接秒回，完全不碰数据库。
-PAGE_TTL_SECONDS = 60
+# TTL=300s：用户翻页/刷新/筛选的连续操作全部命中缓存；采集侧数据本身
+# 一轮 sync 25 分钟以上，5 分钟一致性窗口完全够用。nginx 超时已放宽到 120s，
+# 首次渲染 30-70s 也不会 504。
+PAGE_TTL_SECONDS = 300
 PAGE_MAX_ENTRIES = 16
 _page_entries: OrderedDict[Hashable, _Entry] = OrderedDict()
 
