@@ -279,6 +279,53 @@ class CalibrationTopicKeyTests(unittest.TestCase):
         self.assertIsNone(dc.topic_key(""))
 
 
+class MachineryEquipmentTests(unittest.TestCase):
+    """工业/农用加工设备（B端大件）拦截：不进入默认优惠列表，家用电器豁免。"""
+
+    def test_user_screenshot_machines_all_gated(self):
+        # 用户截图的 8 条机器：万元设备 + 100元券，全部应拦
+        machines = [
+            ("新款多功能玉米食品蓬化机商用大米花空心棒江米机膨化五谷杂粮机", 377000),
+            ("组合小型小麦大豆碾米机砂轮脱皮大米磨碎机农用五谷杂粮磨面机", 1122000),
+            ("厂家供应芝麻清洗机小型多用芝麻大米小麦花生水洗机芝麻淘洗机", 1161600),
+            ("本月特价供应大米淘洗机芝麻水洗谷物清洗机去石去沙", 1161600),
+            ("304不锈钢齿盘粉碎机青稞大米打粉机香辛料孜然化工物料破碎机", 1161600),
+            ("长期供应大米清洗机全自动大米水洗机五谷杂粮淘洗机紫苏籽清洗", 1188000),
+            ("柴油机带动70商用600kg/时产能碾米机两用稻谷剥谷机大米碾米机", 1314700),
+            ("粽子馅料拌馅机大米酱油肉块混合拌料", 1306800),
+        ]
+        for title, cents in machines:
+            self.assertTrue(
+                dc.is_machinery_equipment(title, cents),
+                "应拦截: %s (%d)" % (title[:30], cents))
+
+    def test_genuine_deals_not_harmed(self):
+        # 真优惠不误伤：家用电器/消费电子豁免、低价家用小机器不拦、无设备词不拦
+        self.assertFalse(dc.is_machinery_equipment("海尔洗衣机全自动10公斤家用大容量", 199900))
+        self.assertFalse(dc.is_machinery_equipment("破壁机家用多功能豆浆料理机加热款", 89900))
+        self.assertFalse(dc.is_machinery_equipment("榨汁机便携家用小型水果原汁机", 29900))
+        self.assertFalse(dc.is_machinery_equipment("小米手机14Pro 5G手机", 599900))
+        self.assertFalse(dc.is_machinery_equipment("电饭煲家用智能预约4L大容量", 39900))
+        # 低价家用小机器（<500元）不拦
+        self.assertFalse(dc.is_machinery_equipment("家用小型粉碎机五谷杂粮研磨机", 8900))
+        self.assertFalse(dc.is_machinery_equipment("家用迷你爆米花机微波炉专用", 2900))
+        # 含"机"但非设备的正常商品不拦（有机/手机壳/玩具）
+        self.assertFalse(dc.is_machinery_equipment("有机五常大米东北稻花香5kg", 8990))
+        self.assertFalse(dc.is_machinery_equipment("手机壳苹果全包边透明保护套", 2900))
+        # 非整数/缺失金额不拦（不误判审计记录）
+        self.assertFalse(dc.is_machinery_equipment("碾米机大型商用", None))
+        self.assertFalse(dc.is_machinery_equipment("", 1000000))
+
+    def test_business_marker_plus_equipment_core_fallback(self):
+        # B端场景词 + 设备核心词兜底（未枚举设备名）
+        self.assertTrue(dc.is_machinery_equipment("商用大型滚筒式烘干机食品加工设备", 1280000))
+        self.assertTrue(dc.is_machinery_equipment("工厂直供全自动包装流水线设备", 2600000))
+        # 只有 B端词无设备核心词 → 不拦（商用大米礼盒）
+        self.assertFalse(dc.is_machinery_equipment("商用大米礼盒装5kg*2", 15800))
+        # 只有设备核心词无 B端词、无精确设备名 → 不拦
+        self.assertFalse(dc.is_machinery_equipment("家用机械表男士防水石英表", 19900))
+
+
 if __name__ == "__main__":
     unittest.main()
 

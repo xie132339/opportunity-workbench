@@ -69,6 +69,60 @@ TOPIC_CATEGORY_TERMS = {
 _GENERIC_INTERFERING_TERMS = ("洗发", "护发", "化妆", "护肤", "彩妆", "面膜", "直邮", "条纹", "罗纹",
                               "服饰", "手机", "数码", "机器", "设备", "机油", "润滑")
 
+# 工业/农用加工设备（B端大件）拦截：碾米机、粉碎机、拌馅机等设备不是个人
+# 消费捡漏品，优惠 100 元对它万元金额毫无意义（用户：怎么把机器的也给获取
+# 到了，乱套了）。词表是集中可维护的配置数据；判定组合「设备词 + 金额≥500元」，
+# 并对家用电器/消费电子形态豁免，避免误伤破壁机、洗衣机、有机米等真优惠。
+EQUIPMENT_DEVICE_TERMS = (
+    "碾米机", "磨面机", "磨粉机", "打粉机", "粉碎机", "膨化机", "拌馅机", "拌料机",
+    "搅馅机", "淘洗机", "去石机", "去沙机", "剥谷机", "脱壳机", "脱皮机", "榨油机",
+    "压面机", "分离机", "破碎机", "剥壳机", "脱粒机", "孵化机", "收割机", "播种机",
+    "青贮机", "磨浆机", "切丝机", "切片机", "饲料机", "柴油机", "汽油机", "空压机",
+    "真空包装机", "封口机", "灌装机", "输送机", "提升机", "烘干机", "清洗机", "搅拌机",
+    "和面机", "绞肉机", "切肉机", "饺子机", "包馅机", "丸子机", "磨豆机", "爆米花机",
+    "薯条机", "炸鸡炉", "烤鸭炉", "商用烤箱", "冰柜", "冷柜", "保鲜柜", "和面",
+    "面条机", "馒头机", "豆腐机", "豆芽机",
+)
+# B端场景词 + 设备核心词组合兜底（未枚举的设备名，如"厂家供应芝麻清洗机"）。
+BUSINESS_EQUIPMENT_MARKERS = ("商用", "工厂", "厂家", "批发", "摆摊", "农用", "工业",
+                              "大型", "成套", "流水线", "养殖", "车间", "作坊", "粮食加工",
+                              "粮油加工", "饲料", "秸秆", "稻谷", "粮食")
+_EQUIPMENT_CORE_WORDS = ("机", "设备", "机械", "机组")
+# 家用电器/消费电子形态豁免（即使含设备词或 B端组合也不拦；家用大件也能真捡漏）。
+HOUSEHOLD_APPLIANCE_EXEMPT_TERMS = (
+    "洗衣机", "干衣机", "烘干衣", "微波炉", "冰箱", "空调", "电视", "手机", "电脑",
+    "平板", "耳机", "音箱", "破壁", "榨汁", "豆浆", "咖啡机", "电饭煲", "电水壶",
+    "电风扇", "吸尘", "扫地机", "吹风机", "熨斗", "挂烫", "饮水机", "空气炸锅",
+    "面包机", "电炖盅", "加湿器", "净化器", "取暖器", "热水器", "洗碗机", "消毒柜",
+    "油烟机", "燃气灶", "理发器", "剃须刀", "美容仪", "剃毛器", "电动牙刷", "投影仪",
+)
+# 设备判定金额下界：500 元。家用小机器（几十元的家用粉碎机/爆米花机）低于
+# 此线不拦，避免误伤低价家用真优惠；万元级设备必然超过此线。
+EQUIPMENT_MIN_CENTS = 50000
+
+
+def is_machinery_equipment(title, promo_cents):
+    """Whether a title is an industrial/agricultural processing device (B2B).
+
+    A 10,000-yuan rice mill with a 100-yuan coupon is not a personal-consumption
+    bargain; showing it in the default offer list is noise (user screenshot).
+    Exact device names, or a business marker plus an equipment core word, gate
+    the item — but only at/above 500 yuan, and household appliances/consumer
+    electronics are exempt so genuine deals (blenders, washing machines,
+    organic rice) are never harmed.
+    """
+    if not title or not isinstance(promo_cents, int) or isinstance(promo_cents, bool) \
+            or promo_cents < EQUIPMENT_MIN_CENTS:
+        return False
+    if any(word in title for word in HOUSEHOLD_APPLIANCE_EXEMPT_TERMS):
+        return False
+    if any(word in title for word in EQUIPMENT_DEVICE_TERMS):
+        return True
+    if any(word in title for word in BUSINESS_EQUIPMENT_MARKERS) and any(
+            word in title for word in _EQUIPMENT_CORE_WORDS):
+        return True
+    return False
+
 # Trial / first-order traffic SKUs ("尝鲜" 348ml x 2 bottles at 5 yuan each,
 # "新客专享" small packs, "u先试用", "2.01元购" first-order subsidies).  They
 # carry a deep-looking strikethrough but are marketing traffic, not real
