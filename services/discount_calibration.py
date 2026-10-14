@@ -135,15 +135,17 @@ HOUSEHOLD_APPLIANCE_EXEMPT_TERMS = (
 EQUIPMENT_MIN_CENTS = 50000
 
 
-# 命中词前导否定豁免："无化肥/无农药/不含化肥/非转基因"等是生活品的正常
-# 卖点描述，不是农资化工商品本身；"无/不/非"紧邻命中词前 3 字符内则不算命中。
+# 命中词前导否定豁免："无化肥/无农药/不含化肥/不用化肥农药/非转基因"等是
+# 生活品的正常卖点描述，不是农资化工商品本身；"无/不/非"出现在命中词前
+# 5 字符内（覆盖"不用化肥农药"等多字否定）则不算命中。
 _NEGATION_PREFIXES = ("无", "不", "非")
+_NEGATION_WINDOW = 5
 
 
 def _negated_hit(title, word):
     idx = title.find(word)
     while idx >= 0:
-        if not any(ch in _NEGATION_PREFIXES for ch in title[max(0, idx - 3):idx]):
+        if not any(ch in _NEGATION_PREFIXES for ch in title[max(0, idx - _NEGATION_WINDOW):idx]):
             return False
         idx = title.find(word, idx + 1)
     return True
