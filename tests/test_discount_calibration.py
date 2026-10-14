@@ -320,6 +320,15 @@ class MachineryEquipmentTests(unittest.TestCase):
         self.assertFalse(dc.is_non_consumer_category("无防腐剂无添加宝宝辅食肉松", 6990))
         self.assertFalse(dc.is_non_consumer_category("树脂摆件手办桌面装饰工艺品", 8900))
         self.assertFalse(dc.is_non_consumer_category("食品原料天然海藻糖烘焙用", 2590))
+        # 生产全量验证发现的误伤点：菜籽油/大米品种/否定卖点/日化成分 全部不拦
+        self.assertFalse(dc.is_non_consumer_category("金龙鱼菜籽油花生油调和油5L家用", 59900))
+        self.assertFalse(dc.is_non_consumer_category("鲁花低芥酸菜籽油特香5L物理压榨家用", 89900))
+        self.assertFalse(dc.is_non_consumer_category("五常大米原粮稻种稻香米5kg东北大米", 8990))
+        self.assertFalse(dc.is_non_consumer_category("新疆木垒旱田小麦面粉含硒自留麦种", 2590))
+        self.assertFalse(dc.is_non_consumer_category("吉内得大米新米3斤富硒丝苗米老种子", 1990))
+        self.assertFalse(dc.is_non_consumer_category("农家自种面粉不用化肥无添加包子面条粉", 1590))
+        self.assertFalse(dc.is_non_consumer_category("鑫乐河套有机面粉5斤无农药无化肥中高筋", 2990))
+        self.assertFalse(dc.is_non_consumer_category("氨基酸表面活性剂洗发水控油蓬松", 3990))
         # 非整数/缺失金额不拦（不误判审计记录）
         self.assertFalse(dc.is_non_consumer_category("碾米机大型商用", None))
         self.assertFalse(dc.is_non_consumer_category("", 1000000))
@@ -342,7 +351,7 @@ class MachineryEquipmentTests(unittest.TestCase):
         self.assertTrue(dc.is_non_consumer_category("化工原料增稠剂工业级", 1990))
         self.assertTrue(dc.is_non_consumer_category("医疗器械一次性医用耗材", 5900))
         self.assertTrue(dc.is_non_consumer_category("收银机一体机餐饮点餐系统", 89900))
-        self.assertTrue(dc.is_non_consumer_category("种子蔬菜种子四季豆豇豆种子", 990))
+        self.assertTrue(dc.is_non_consumer_category("除草剂农用非选择性灭草剂", 990))
         self.assertTrue(dc.is_non_consumer_category("全自动包装机灌装机生产线设备", 1580000))
 
 

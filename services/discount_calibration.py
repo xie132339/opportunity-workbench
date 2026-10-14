@@ -107,13 +107,14 @@ NON_CONSUMER_CATEGORY_TERMS = (
     # 汽配（排除歧义词：车衣/坐垫/脚垫/车载）
     "汽车配件", "轮胎", "机油滤", "火花塞", "刹车片", "电瓶", "蓄电池", "车灯",
     "雨刮", "排气管", "离合器", "减震器", "行车记录仪", "汽车用品", "汽车膜",
-    # 农资农具（种子/化肥/农药等；"杀虫剂"家庭少量可接受）
-    "种子", "化肥", "农药", "除草剂", "杀虫剂", "尿素", "复合肥", "农膜", "滴灌",
-    "锄头", "镰刀", "喷雾器", "大棚", "秧盘", "菜籽", "稻种", "麦种", "有机肥",
-    "兽药", "饲料",
-    # 化工原料（排除歧义词：树脂→树脂摆件、原料→食品原料、防腐剂→无防腐剂食品）
-    "化工", "工业原料", "塑料粒子", "色母", "增稠剂", "胶水原料", "实验器材",
-    "试管", "烧杯", "试剂", "染料", "催化剂", "表面活性剂", "环氧",
+    # 农资农具（种子/化肥/农药等；排除歧义词：菜籽→菜籽油、稻种/麦种/种子→
+    # 大米面粉品种描述、杀虫剂→家庭可接受；否定前缀"无/不/非"另行豁免）
+    "化肥", "农药", "除草剂", "杀虫剂", "尿素", "复合肥", "农膜", "滴灌",
+    "锄头", "镰刀", "喷雾器", "大棚", "秧盘", "有机肥", "兽药", "饲料",
+    # 化工原料（排除歧义词：树脂→树脂摆件、原料→食品原料、防腐剂→无防腐剂
+    # 食品、表面活性剂/增稠剂→日化/食品成分描述）
+    "化工", "工业原料", "塑料粒子", "色母", "胶水原料", "实验器材",
+    "试管", "烧杯", "试剂", "染料", "催化剂", "环氧",
     # 医疗场景（只拦明确医疗场景，血压计/血糖仪/雾化器等家庭健康用品保留）
     "医疗", "手术", "医院", "医疗器械", "护理床", "氧气机",
     # 办公收银（打印机/投影幕布/对讲机等家庭可购保留）
@@ -134,6 +135,20 @@ HOUSEHOLD_APPLIANCE_EXEMPT_TERMS = (
 EQUIPMENT_MIN_CENTS = 50000
 
 
+# 命中词前导否定豁免："无化肥/无农药/不含化肥/非转基因"等是生活品的正常
+# 卖点描述，不是农资化工商品本身；"无/不/非"紧邻命中词前 3 字符内则不算命中。
+_NEGATION_PREFIXES = ("无", "不", "非")
+
+
+def _negated_hit(title, word):
+    idx = title.find(word)
+    while idx >= 0:
+        if not any(ch in _NEGATION_PREFIXES for ch in title[max(0, idx - 3):idx]):
+            return False
+        idx = title.find(word, idx + 1)
+    return True
+
+
 def is_non_consumer_category(title, promo_cents):
     """Whether a title belongs to a B2B / non-personal-consumption category.
 
@@ -143,7 +158,8 @@ def is_non_consumer_category(title, promo_cents):
     raw materials, medical scenarios and office/checkout equipment are not
     bargains for this audience (user: machines in the list are a mess; such
     problems must not recur). Household appliances and consumer electronics
-    are exempt, and low-price household hybrid devices are never gated.
+    are exempt, low-price household hybrid devices are never gated, and a
+    negated marker ("无化肥/无农药/不含防腐剂") never gates a living good.
     """
     if not title or not isinstance(promo_cents, int) or isinstance(promo_cents, bool):
         return False
@@ -151,7 +167,8 @@ def is_non_consumer_category(title, promo_cents):
         return False
     if any(word in title for word in INDUSTRIAL_EQUIPMENT_TERMS):
         return True
-    if any(word in title for word in NON_CONSUMER_CATEGORY_TERMS):
+    if any(word in title for word in NON_CONSUMER_CATEGORY_TERMS
+           if not _negated_hit(title, word)):
         return True
     if promo_cents < EQUIPMENT_MIN_CENTS:
         return False
