@@ -442,3 +442,18 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 语义一致性：tc19 生产库同刻对比 8979/8979 全覆盖、无多余（新⊆参照 True）。
 
 已知边界：首页首次 24s 仍含阶段2 宽行回查 1.3s + Python 侧 2.7s + 登录/渲染（冷缓存首次）；品牌库首次 22.4s 未纳入页缓存主线（页面自身渲染，二次应秒回）。彻底消除首次慢的下一步是 ECS 升配（≥4G 双核）或品牌库页缓存。
+
+## 5.3 大文本展示裁剪（commit 7ff5867，已部署 health OK）
+
+- 需求：列表/详情/核验页大段原文没人看且是商家灌水（事件正文、自动检查 conditions 等）。
+- 数据实情：events.snippet 与 auto_reviews.conditions 62973 条全非空但 >200 字符仅 221 条（系统生成诊断说明，非灌水）；detail_json 结构化无大文本。
+- 关键约束：snippet/conditions 参与优惠判断（autoreview.py offer_summary 的规格折算/优惠提及/资格提及/折扣声明/正则匹配都吃正文）→ **只裁剪展示，判断逻辑零改动**。
+- 落地（模板 3 文件）：index.html 列表折叠 truncate(90)；opportunity.html 原始正文 truncate(160)、自动检查 conditions truncate(200)；verification.html 条件与缺口 truncate(120)。Jinja truncate 单测验证；回归 463 项仅基线失败。
+- 生产验证：模板文件 grep 确认部署、搜索页 len 由 289848→289578（裁剪生效）、health OK。
+
+## 5.4 首页/搜索首次慢残余根因定性 + PRAGMA 调优（commit 44a00cd，已部署 health OK）
+
+- 残余现象：部署后搜索"纸"首次又回到 63-69.5s（曾 3.5s），二次 0.0s（页缓存）。worker 仅 11.8-22.8% CPU 非满载 → **不是 worker 写库竞争**。
+- 根因定性：生产库 1.37GB（page_count 335164×4096），events 表 6.4 万行×~3.8KB≈234MB（snippet 大头）+ opportunities 40MB + auto_reviews 31.6MB + 索引/空闲页约 1GB；LIKE '%纸%' 全表扫描需冷读约 234MB+，ECS 通用云盘约 4MB/s → 首次 60s+；部署后 3.5s 是文件系统页缓存热（worker 刚读过库）的特例。
+- 落地：db.py connect() 加 PRAGMA cache_size=-8000（62MB/连接）+ mmap_size=268435456（256MB），缓解热路径（内存仅 1.74G/可用 474M，保守取值）。验证 db.connect() 生效；回归 463 仅基线失败；停服→部署→health OK。
+- 未解决边界：首次冷读仍 60s+（磁盘 IO 上限）。彻底根治下一步：ECS 升配（≥4G 双核 + SSD）或把搜索标题匹配改 FTS5（大工程，需防召回变化）或缩小 LIKE 扫描范围（只 title，有漏召回风险，需验证）。
