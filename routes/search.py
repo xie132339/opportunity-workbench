@@ -16,6 +16,11 @@ from services.product_search import (listing_quote, quote_note,
                                      is_promotional_price_candidate, promotion_admission,
                                      official_promotion_discount, meets_minimum_official_discount,
                                      affiliate_promotion)
+
+# 默认优惠收件箱的 Python 校验/排序候选池上限：SQL 层先按推广价预取这批机会，
+# 再全量跑品牌判据与假优惠拦截。2G ECS 上全量（6 万行宽行）会 60s+ 超时，
+# 收敛到该池后单页加载 <10s，展示行仍是池内精确排序的最优优惠。
+OFFER_TOP_N = 1500
 from services.source_provenance import annotate_search_sources, build_search_source_index
 from services.search_diagnostics import summarize_search_funnel
 from services.public_campaign import parse_public_campaign
@@ -139,6 +144,22 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
     corpus.  Keeping this work here makes it explicit that page slicing is a
     rendering concern, and lets the caller reuse this prepared result safely.
     """
+    # 默认优惠收件箱（offers 视图）两阶段预取：先以轻量列（id+推广价）在 SQL 层
+    # 去重并取推广价最高的前 OFFER_TOP_N 个机会，再回查这些 id 的完整宽行。
+    # 避免 6 万行宽行全量物化 + 大排序把 2G ECS 拖到 60s+（nginx 超时→504"访问不通"）。
+    # 语义：排序仍由下方 Python 精确完成（含品牌判据/假优惠拦截），只是候选池
+    # 收敛为推广价最高的一批——优惠额大的真优惠不会因此漏掉。
+    if (priced_only and buy_platform == 'taobao' and not show_archive
+            and not ready_only):
+        scope = sql.split(" FROM ", 1)[1]
+        id_sql = ("SELECT o.id, MAX(COALESCE(a.advertised_cents,0)) AS adv FROM "
+                  + scope + " GROUP BY o.id")
+        top = sorted((dict(row) for row in db.execute(id_sql, args)),
+                     key=lambda row: (row["adv"], row["id"]), reverse=True)[:OFFER_TOP_N]
+        top_ids = [row["id"] for row in top]
+        if top_ids:
+            sql = sql + " AND o.id IN (" + ",".join("?" for _ in top_ids) + ")"
+            args = list(args) + top_ids
     raw_rows = [dict(row) for row in db.execute(sql + order_by, args)]
     # 展示层折叠：淘宝联盟同款（同归一化标题、不同店铺/多轮快照）只保留排序最优一条。
     # SQL 已按 order_by 排序，每组第一个即最优/最新；非淘宝来源（external_key 唯一）不折叠。
