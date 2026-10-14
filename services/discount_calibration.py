@@ -69,59 +69,103 @@ TOPIC_CATEGORY_TERMS = {
 _GENERIC_INTERFERING_TERMS = ("洗发", "护发", "化妆", "护肤", "彩妆", "面膜", "直邮", "条纹", "罗纹",
                               "服饰", "手机", "数码", "机器", "设备", "机油", "润滑")
 
-# 工业/农用加工设备（B端大件）拦截：碾米机、粉碎机、拌馅机等设备不是个人
-# 消费捡漏品，优惠 100 元对它万元金额毫无意义（用户：怎么把机器的也给获取
-# 到了，乱套了）。词表是集中可维护的配置数据；判定组合「设备词 + 金额≥500元」，
-# 并对家用电器/消费电子形态豁免，避免误伤破壁机、洗衣机、有机米等真优惠。
-EQUIPMENT_DEVICE_TERMS = (
-    "碾米机", "磨面机", "磨粉机", "打粉机", "粉碎机", "膨化机", "拌馅机", "拌料机",
-    "搅馅机", "淘洗机", "去石机", "去沙机", "剥谷机", "脱壳机", "脱皮机", "榨油机",
-    "压面机", "分离机", "破碎机", "剥壳机", "脱粒机", "孵化机", "收割机", "播种机",
-    "青贮机", "磨浆机", "切丝机", "切片机", "饲料机", "柴油机", "汽油机", "空压机",
-    "真空包装机", "封口机", "灌装机", "输送机", "提升机", "烘干机", "清洗机", "搅拌机",
-    "和面机", "绞肉机", "切肉机", "饺子机", "包馅机", "丸子机", "磨豆机", "爆米花机",
-    "薯条机", "炸鸡炉", "烤鸭炉", "商用烤箱", "冰柜", "冷柜", "保鲜柜", "和面",
-    "面条机", "馒头机", "豆腐机", "豆芽机",
+# 非个人消费品类拦截（集中可维护的配置数据）：默认优惠列表只服务个人消费
+# 生活品（纸/水/米面粮油/日化/食品等）。工业设备、五金工具、建材施工、汽配、
+# 农资农具、化工原料、医疗场景、办公收银等 B端/非生活品不进入默认列表
+# （用户：怎么把机器的也给获取到了，乱套了；类似问题不要出现）。
+# 判定原则：①无家用场景的工业设备名命中即拦；②有家用形态的设备词需金额
+# ≥500元才拦（低价家用小机器不误伤）；③B端场景词+设备核心词组合兜底（≥500）；
+# ④非消费大类词命中即拦（与生活品无重叠）；⑤家用电器/消费电子形态豁免优先。
+INDUSTRIAL_EQUIPMENT_TERMS = (
+    "碾米机", "膨化机", "拌馅机", "拌料机", "搅馅机", "淘洗机", "去石机", "去沙机",
+    "剥谷机", "脱壳机", "脱皮机", "分离机", "破碎机", "剥壳机", "脱粒机", "孵化机",
+    "收割机", "播种机", "青贮机", "饲料机", "柴油机", "汽油机", "空压机",
+    "真空包装机", "封口机", "灌装机", "输送机", "提升机", "薯条机", "炸鸡炉",
+    "烤鸭炉", "商用烤箱", "冰柜", "冷柜", "保鲜柜",
+)
+# 有家用形态的设备词（家用粉碎机/爆米花机/面条机等低价真优惠不误伤）。
+HOUSEHOLD_HYBRID_EQUIPMENT_TERMS = (
+    "粉碎机", "打粉机", "磨粉机", "磨面机", "压面机", "榨油机", "烘干机", "清洗机",
+    "搅拌机", "和面机", "绞肉机", "切肉机", "饺子机", "丸子机", "面条机", "馒头机",
+    "豆腐机", "爆米花机", "磨豆机", "切片机", "切丝机", "包馅机", "磨浆机", "豆芽机",
 )
 # B端场景词 + 设备核心词组合兜底（未枚举的设备名，如"厂家供应芝麻清洗机"）。
 BUSINESS_EQUIPMENT_MARKERS = ("商用", "工厂", "厂家", "批发", "摆摊", "农用", "工业",
                               "大型", "成套", "流水线", "养殖", "车间", "作坊", "粮食加工",
                               "粮油加工", "饲料", "秸秆", "稻谷", "粮食")
 _EQUIPMENT_CORE_WORDS = ("机", "设备", "机械", "机组")
-# 家用电器/消费电子形态豁免（即使含设备词或 B端组合也不拦；家用大件也能真捡漏）。
+# 非个人消费大类词：命中即拦（词均与生活消费品无重叠，宁漏勿伤）。
+NON_CONSUMER_CATEGORY_TERMS = (
+    # 五金工具（排除歧义词：螺丝→螺丝粉/螺丝刀、锤子→锤子手机）
+    "扳手", "钻头", "电钻", "角磨", "砂轮", "切割片", "台钳", "卡尺", "锯片", "套筒",
+    "气动", "电动工具", "焊机", "电焊", "螺丝刀", "螺丝钉", "锉刀", "卷尺", "冲击钻",
+    "砂轮机", "切割机", "电圆锯", "五金", "丝锥", "板牙",
+    # 建材施工（排除歧义词：地板→地板袜、灯具/开关/电线/水管/门锁→家庭可购保留）
+    "瓷砖", "油漆", "涂料", "腻子", "水泥", "钢筋", "卫浴", "浴缸", "马桶", "板材",
+    "石材", "乳胶漆", "墙纸", "硅藻泥", "美缝", "玻璃胶", "防水涂料", "石膏线",
+    "龙骨", "瓷砖胶",
+    # 汽配（排除歧义词：车衣/坐垫/脚垫/车载）
+    "汽车配件", "轮胎", "机油滤", "火花塞", "刹车片", "电瓶", "蓄电池", "车灯",
+    "雨刮", "排气管", "离合器", "减震器", "行车记录仪", "汽车用品", "汽车膜",
+    # 农资农具（种子/化肥/农药等；"杀虫剂"家庭少量可接受）
+    "种子", "化肥", "农药", "除草剂", "杀虫剂", "尿素", "复合肥", "农膜", "滴灌",
+    "锄头", "镰刀", "喷雾器", "大棚", "秧盘", "菜籽", "稻种", "麦种", "有机肥",
+    "兽药", "饲料",
+    # 化工原料（排除歧义词：树脂→树脂摆件、原料→食品原料、防腐剂→无防腐剂食品）
+    "化工", "工业原料", "塑料粒子", "色母", "增稠剂", "胶水原料", "实验器材",
+    "试管", "烧杯", "试剂", "染料", "催化剂", "表面活性剂", "环氧",
+    # 医疗场景（只拦明确医疗场景，血压计/血糖仪/雾化器等家庭健康用品保留）
+    "医疗", "手术", "医院", "医疗器械", "护理床", "氧气机",
+    # 办公收银（打印机/投影幕布/对讲机等家庭可购保留）
+    "收银机", "点钞机", "碎纸机", "装订机", "考勤机", "标签机", "扫描枪", "传真机",
+    "复印机", "pos机",
+)
+# 家用电器/消费电子形态豁免（即使含设备词或非消费大类词也不拦；家用大件也能真捡漏）。
 HOUSEHOLD_APPLIANCE_EXEMPT_TERMS = (
     "洗衣机", "干衣机", "烘干衣", "微波炉", "冰箱", "空调", "电视", "手机", "电脑",
     "平板", "耳机", "音箱", "破壁", "榨汁", "豆浆", "咖啡机", "电饭煲", "电水壶",
     "电风扇", "吸尘", "扫地机", "吹风机", "熨斗", "挂烫", "饮水机", "空气炸锅",
     "面包机", "电炖盅", "加湿器", "净化器", "取暖器", "热水器", "洗碗机", "消毒柜",
     "油烟机", "燃气灶", "理发器", "剃须刀", "美容仪", "剃毛器", "电动牙刷", "投影仪",
+    "血压计", "血糖仪", "雾化器", "理疗仪", "按摩椅", "打印机",
 )
-# 设备判定金额下界：500 元。家用小机器（几十元的家用粉碎机/爆米花机）低于
+# 模糊设备词金额下界：500 元。家用小机器（几十元的家用粉碎机/爆米花机）低于
 # 此线不拦，避免误伤低价家用真优惠；万元级设备必然超过此线。
 EQUIPMENT_MIN_CENTS = 50000
 
 
-def is_machinery_equipment(title, promo_cents):
-    """Whether a title is an industrial/agricultural processing device (B2B).
+def is_non_consumer_category(title, promo_cents):
+    """Whether a title belongs to a B2B / non-personal-consumption category.
 
-    A 10,000-yuan rice mill with a 100-yuan coupon is not a personal-consumption
-    bargain; showing it in the default offer list is noise (user screenshot).
-    Exact device names, or a business marker plus an equipment core word, gate
-    the item — but only at/above 500 yuan, and household appliances/consumer
-    electronics are exempt so genuine deals (blenders, washing machines,
-    organic rice) are never harmed.
+    The default offer list serves personal-consumption living goods (paper,
+    water, rice/oil, daily chemicals, food). Industrial devices, hardware
+    tools, building materials, auto parts, agricultural inputs, chemical
+    raw materials, medical scenarios and office/checkout equipment are not
+    bargains for this audience (user: machines in the list are a mess; such
+    problems must not recur). Household appliances and consumer electronics
+    are exempt, and low-price household hybrid devices are never gated.
     """
-    if not title or not isinstance(promo_cents, int) or isinstance(promo_cents, bool) \
-            or promo_cents < EQUIPMENT_MIN_CENTS:
+    if not title or not isinstance(promo_cents, int) or isinstance(promo_cents, bool):
         return False
     if any(word in title for word in HOUSEHOLD_APPLIANCE_EXEMPT_TERMS):
         return False
-    if any(word in title for word in EQUIPMENT_DEVICE_TERMS):
+    if any(word in title for word in INDUSTRIAL_EQUIPMENT_TERMS):
+        return True
+    if any(word in title for word in NON_CONSUMER_CATEGORY_TERMS):
+        return True
+    if promo_cents < EQUIPMENT_MIN_CENTS:
+        return False
+    if any(word in title for word in HOUSEHOLD_HYBRID_EQUIPMENT_TERMS):
         return True
     if any(word in title for word in BUSINESS_EQUIPMENT_MARKERS) and any(
             word in title for word in _EQUIPMENT_CORE_WORDS):
         return True
     return False
+
+
+def is_machinery_equipment(title, promo_cents):
+    """Backward-compatible alias of the device gate (kept for existing callers)."""
+    return is_non_consumer_category(title, promo_cents)
 
 # Trial / first-order traffic SKUs ("尝鲜" 348ml x 2 bottles at 5 yuan each,
 # "新客专享" small packs, "u先试用", "2.01元购" first-order subsidies).  They

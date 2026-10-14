@@ -424,11 +424,12 @@ def promotion_admission(row, assessment):
             if discount_calibration.is_high_tier_unverifiable(topic, title, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='高价且无品牌/无规格市场参照，优惠证据不可信，不作为默认优惠展示')
-            # 工业/农用加工设备（B端大件）：万元设备 + 100元券不是个人消费捡漏
-            # （用户：机器乱套了）。家用电器/消费电子形态豁免，低价家用小机器不拦。
-            if discount_calibration.is_machinery_equipment(title, promotion_cents):
+            # 非个人消费品类（工业设备/五金工具/建材施工/汽配/农资农具/化工原料/
+            # 医疗场景/办公收银，B端大件）：不是个人消费捡漏（用户：机器乱套了，
+            # 类似问题不要出现）。家用电器/消费电子形态豁免，低价家用小机器不拦。
+            if discount_calibration.is_non_consumer_category(title, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
-                            reason='工业/农用加工设备（B端大件），不作为默认优惠展示')
+                            reason='非个人消费品类（设备/工具/建材/汽配/农资/化工等），不作为默认优惠展示')
             # 瞎搞小店（店铺离谱率高，见 services/shop_reputation）：店内无法形成
             # 有效优惠证据的条目不展示（用户：很多店铺都是瞎搞的，数据太离谱就不
             # 展示）；店内可验证的真优惠仍保留，避免误伤。

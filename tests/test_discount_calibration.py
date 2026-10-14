@@ -296,34 +296,54 @@ class MachineryEquipmentTests(unittest.TestCase):
         ]
         for title, cents in machines:
             self.assertTrue(
-                dc.is_machinery_equipment(title, cents),
+                dc.is_non_consumer_category(title, cents),
                 "应拦截: %s (%d)" % (title[:30], cents))
 
     def test_genuine_deals_not_harmed(self):
         # 真优惠不误伤：家用电器/消费电子豁免、低价家用小机器不拦、无设备词不拦
-        self.assertFalse(dc.is_machinery_equipment("海尔洗衣机全自动10公斤家用大容量", 199900))
-        self.assertFalse(dc.is_machinery_equipment("破壁机家用多功能豆浆料理机加热款", 89900))
-        self.assertFalse(dc.is_machinery_equipment("榨汁机便携家用小型水果原汁机", 29900))
-        self.assertFalse(dc.is_machinery_equipment("小米手机14Pro 5G手机", 599900))
-        self.assertFalse(dc.is_machinery_equipment("电饭煲家用智能预约4L大容量", 39900))
+        self.assertFalse(dc.is_non_consumer_category("海尔洗衣机全自动10公斤家用大容量", 199900))
+        self.assertFalse(dc.is_non_consumer_category("破壁机家用多功能豆浆料理机加热款", 89900))
+        self.assertFalse(dc.is_non_consumer_category("榨汁机便携家用小型水果原汁机", 29900))
+        self.assertFalse(dc.is_non_consumer_category("小米手机14Pro 5G手机", 599900))
+        self.assertFalse(dc.is_non_consumer_category("电饭煲家用智能预约4L大容量", 39900))
+        self.assertFalse(dc.is_non_consumer_category("血压计家用电子血压仪上臂式语音播报", 12900))
+        self.assertFalse(dc.is_non_consumer_category("家用打印机无线彩色喷墨一体机", 49900))
         # 低价家用小机器（<500元）不拦
-        self.assertFalse(dc.is_machinery_equipment("家用小型粉碎机五谷杂粮研磨机", 8900))
-        self.assertFalse(dc.is_machinery_equipment("家用迷你爆米花机微波炉专用", 2900))
+        self.assertFalse(dc.is_non_consumer_category("家用小型粉碎机五谷杂粮研磨机", 8900))
+        self.assertFalse(dc.is_non_consumer_category("家用迷你爆米花机微波炉专用", 2900))
+        self.assertFalse(dc.is_non_consumer_category("家用小型豆芽机全自动发豆芽器", 6900))
         # 含"机"但非设备的正常商品不拦（有机/手机壳/玩具）
-        self.assertFalse(dc.is_machinery_equipment("有机五常大米东北稻花香5kg", 8990))
-        self.assertFalse(dc.is_machinery_equipment("手机壳苹果全包边透明保护套", 2900))
+        self.assertFalse(dc.is_non_consumer_category("有机五常大米东北稻花香5kg", 8990))
+        self.assertFalse(dc.is_non_consumer_category("手机壳苹果全包边透明保护套", 2900))
+        self.assertFalse(dc.is_non_consumer_category("螺蛳粉柳州正宗螺丝粉速食米粉", 3990))
+        self.assertFalse(dc.is_non_consumer_category("地板袜防滑保暖袜冬季加厚", 1990))
+        self.assertFalse(dc.is_non_consumer_category("无防腐剂无添加宝宝辅食肉松", 6990))
+        self.assertFalse(dc.is_non_consumer_category("树脂摆件手办桌面装饰工艺品", 8900))
+        self.assertFalse(dc.is_non_consumer_category("食品原料天然海藻糖烘焙用", 2590))
         # 非整数/缺失金额不拦（不误判审计记录）
-        self.assertFalse(dc.is_machinery_equipment("碾米机大型商用", None))
-        self.assertFalse(dc.is_machinery_equipment("", 1000000))
+        self.assertFalse(dc.is_non_consumer_category("碾米机大型商用", None))
+        self.assertFalse(dc.is_non_consumer_category("", 1000000))
 
     def test_business_marker_plus_equipment_core_fallback(self):
         # B端场景词 + 设备核心词兜底（未枚举设备名）
-        self.assertTrue(dc.is_machinery_equipment("商用大型滚筒式烘干机食品加工设备", 1280000))
-        self.assertTrue(dc.is_machinery_equipment("工厂直供全自动包装流水线设备", 2600000))
+        self.assertTrue(dc.is_non_consumer_category("商用大型滚筒式烘干机食品加工设备", 1280000))
+        self.assertTrue(dc.is_non_consumer_category("工厂直供全自动包装流水线设备", 2600000))
         # 只有 B端词无设备核心词 → 不拦（商用大米礼盒）
-        self.assertFalse(dc.is_machinery_equipment("商用大米礼盒装5kg*2", 15800))
+        self.assertFalse(dc.is_non_consumer_category("商用大米礼盒装5kg*2", 15800))
         # 只有设备核心词无 B端词、无精确设备名 → 不拦
-        self.assertFalse(dc.is_machinery_equipment("家用机械表男士防水石英表", 19900))
+        self.assertFalse(dc.is_non_consumer_category("家用机械表男士防水石英表", 19900))
+
+    def test_non_consumer_categories_all_gated(self):
+        # 全库扫描发现的其他非个人消费品类：五金/建材/汽配/农资/化工/医疗/办公
+        self.assertTrue(dc.is_non_consumer_category("电钻冲击钻家用电动工具套装", 12900))
+        self.assertTrue(dc.is_non_consumer_category("瓷砖美缝剂防水防霉填缝剂", 3900))
+        self.assertTrue(dc.is_non_consumer_category("汽车轮胎205/55R16静音轮胎", 39900))
+        self.assertTrue(dc.is_non_consumer_category("复合肥尿素化肥农用氮肥", 2590))
+        self.assertTrue(dc.is_non_consumer_category("化工原料增稠剂工业级", 1990))
+        self.assertTrue(dc.is_non_consumer_category("医疗器械一次性医用耗材", 5900))
+        self.assertTrue(dc.is_non_consumer_category("收银机一体机餐饮点餐系统", 89900))
+        self.assertTrue(dc.is_non_consumer_category("种子蔬菜种子四季豆豇豆种子", 990))
+        self.assertTrue(dc.is_non_consumer_category("全自动包装机灌装机生产线设备", 1580000))
 
 
 if __name__ == "__main__":
