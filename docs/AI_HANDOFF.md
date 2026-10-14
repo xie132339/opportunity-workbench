@@ -424,3 +424,21 @@ ECS 项目根目录为 `/application`，实例 `i-uf693wtee99tze11foca`（上海
 - 首页二次/搜索二次：0.0s（缓存命中）；首次渲染（含登录后首开）：首页随登录完成、搜索 55.7s、品牌库 30.9s——全部 200，无 504。
 
 已知边界：首次渲染在采集满载时段需 30-60s（联盟 API 无增量，全量采集占用 2G CPU）；采集侧数据一致性窗口 = 页面缓存 300s + 采集轮 25-30 分钟。
+
+## 5.2y 2026-10-14 首页首次请求深度优化（阶段1 两段式，78-117s→24s，已部署）
+
+现象：5.2x 部署后搜索首次已 10.4s，但首页首次仍 78-117s（cProfile：23 次 sqlite execute 74-105s，其中 prepare_standard_results 内 69-98s）。定位（生产 ECS 逐条拆 SQL）：
+1. 首页与搜索唯一差异 = 无 LIKE 时对 6.2 万行全量评估"新鲜度条件"（`routes/search.py` 原 491-501，逐行 `datetime('now','-'||MIN(2*s.interval_minutes+15,120)||' minutes')` 计算）。
+2. `SELECT o.id, MAX(adv) FROM <完整 WHERE 含新鲜度> GROUP BY o.id`：生产实测 33-59s（波动，冷页缓存+worker 30% CPU）；无 GROUP BY 版本同样 58.9s → 瓶颈在 datetime 条件本身，非聚合。
+3. events 表有 `idx_events_source_last_seen(source_id,last_seen_at DESC,published_at)`：`SELECT e.id FROM events e JOIN sources s… WHERE s.last_success>=window AND e.last_seen_at>=window` 仅 0.02-0.07s（命中索引，过滤后 ~8979 行）；`idx_auto_reviews_state`（本次新增）使 campaign 分支 8s→0.00s。
+
+修复（commit `318f5d4`，已推 GitHub、已部署 ECS，health ok；回归 463 项仅既有基线失败）：
+- `routes/search.py`：新鲜度条件提取为模块级常量 `FRESHNESS_SQL`（index() 与 prepare 共用同一文本，杜绝分叉）；OFFER 两阶段预取阶段1 改为 events 方向三段并集（① last_seen 新事件 ② campaign 状态机会 ③ manual verified 15min）→ 分块 `o.event_id IN (900/块)` 替代 6 万行逐行 datetime 评估。
+- `db.py`：新增 `idx_auto_reviews_state ON auto_reviews(state)`（生产库已在线补建，幂等）。
+- `tests/test_search_freshness_two_stage.py`：新增 2 项防回归（两段式与完整 WHERE id 集合相等 + 常量被引用）。
+
+生产实测（test_client 清缓存后，worker 满载态）：
+- 首页首次：78.1-116.9s → **24.2s**（二次 0.0s）；搜索纸：74.7s→10.4s→**3.5s**；登录：96.9s→**7.8s**；品牌库：32.2s→22.4s。全部 200，无 504。
+- 语义一致性：tc19 生产库同刻对比 8979/8979 全覆盖、无多余（新⊆参照 True）。
+
+已知边界：首页首次 24s 仍含阶段2 宽行回查 1.3s + Python 侧 2.7s + 登录/渲染（冷缓存首次）；品牌库首次 22.4s 未纳入页缓存主线（页面自身渲染，二次应秒回）。彻底消除首次慢的下一步是 ECS 升配（≥4G 双核）或品牌库页缓存。
