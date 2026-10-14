@@ -18,7 +18,7 @@ class SearchResultCacheTests(unittest.TestCase):
             self.assertIs(search_result_cache.get(('same-filter',)), value)
 
     def test_expired_result_is_not_reused(self):
-        with patch('services.search_result_cache.monotonic', side_effect=(100.0, 110.0)):
+        with patch('services.search_result_cache.monotonic', side_effect=(100.0, 401.0)):
             search_result_cache.put(('same-filter',), {'all_rows': []})
             self.assertIsNone(search_result_cache.get(('same-filter',)))
 

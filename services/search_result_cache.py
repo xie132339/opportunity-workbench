@@ -13,8 +13,12 @@ from time import monotonic
 from typing import Any, Hashable
 
 
-TTL_SECONDS = 10
-MAX_ENTRIES = 12
+# 2G 内存的 ECS 上，全量 prepare（数千条机会的品牌判断+排序）单次要 30-60s。
+# TTL 太短（曾 10s）会让每个翻页/刷新请求都撞上重算窗口，nginx 60s 超时 → 504"访问不通"。
+# TTL=300s：翻页连续访问命中缓存；采集侧新数据最多延迟 5 分钟可见（采集周期本就 15-120 分钟）。
+# MAX_ENTRIES=4：每个 entry 是数千行 dict，条目过多会直接把 2G 机器内存吃满。
+TTL_SECONDS = 300
+MAX_ENTRIES = 4
 
 
 @dataclass(frozen=True)
