@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS auto_reviews (
  detail_checked_at TEXT, detail_json TEXT, detail_error TEXT,
  attempts INTEGER NOT NULL DEFAULT 0, next_check_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_auto_reviews_state ON auto_reviews(state);
 CREATE TABLE IF NOT EXISTS benefit_observations (
  id INTEGER PRIMARY KEY, resource_url TEXT NOT NULL, checked_at TEXT NOT NULL,
  method TEXT NOT NULL, evidence_json TEXT NOT NULL,
