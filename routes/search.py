@@ -668,24 +668,44 @@ def index():
             source for source in all_sources if source['enabled'] or source['method'] == 'manual'
         ]
         fresh_events={r['source_id']:r['count'] for r in db.execute("SELECT source_id,COUNT(*) AS count FROM events WHERE last_seen_at>=datetime('now','-2 hours') GROUP BY source_id")}
-        fresh_opportunities={r['source_id']:r['count'] for r in db.execute('''SELECT o.source_id,COUNT(*) AS count
-            FROM opportunities o
-            JOIN sources s ON s.id=o.source_id
-            JOIN events e ON e.id=o.event_id
-            LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
-            WHERE o.status!='ignored'
-              AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')
-              AND ((s.method='manual' AND o.status='verified'
-                    AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP)
-                OR (s.method!='manual' AND s.enabled=1 AND s.status='healthy'
-                    AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                    AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                    AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
-                      OR a.state IN ('campaign_upcoming','campaign_active')
-                      OR ((s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
-                           OR s.method='taobao_alliance')
-                          AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))))
-            GROUP BY o.source_id''')}
+        # 来源新鲜机会计数（两段式）：
+        # 原单条 SQL 对 6.2 万行 JOIN 后的宽行逐行做 datetime/MIN 计算（生产实测
+        # 39-51s，拖慢每个请求并叠加成 nginx 504"访问不通"）。改为先在 events 表按
+        # 各健康来源的窗口(2*interval+15, 上限120分钟)过滤出候选 event_id（0.1s），
+        # 再回查 opportunities 计数（0.5s，与原 SQL 结果完全一致）。IN 列表按 900
+        # 分块以避开 SQLite 999 参数上限；各块按 source_id 相加即总计数。
+        healthy_sources = [dict(row) for row in db.execute(
+            "SELECT id, interval_minutes FROM sources WHERE enabled=1 AND status='healthy'")]
+        window_conds = []
+        for healthy_source in healthy_sources:
+            window_minutes = min(2 * (healthy_source['interval_minutes'] or 60) + 15, 120)
+            window_conds.append(
+                f"(e.source_id={healthy_source['id']} AND e.last_seen_at>=datetime('now','-{window_minutes} minutes'))")
+        fresh_opportunities = {}
+        if window_conds:
+            fresh_event_ids = [row[0] for row in db.execute(
+                "SELECT id FROM events e WHERE " + " OR ".join(window_conds))]
+            fresh_in_block = 900
+            for block_start in range(0, len(fresh_event_ids), fresh_in_block):
+                block_ids = fresh_event_ids[block_start:block_start + fresh_in_block]
+                if not block_ids:
+                    continue
+                block_placeholders = ",".join("?" * len(block_ids))
+                block_rows = db.execute(f"""SELECT o.source_id,COUNT(*) AS count
+                    FROM opportunities o
+                    LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+                    JOIN sources s ON s.id=o.source_id
+                    WHERE o.status!='ignored'
+                      AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')
+                      AND o.event_id IN ({block_placeholders})
+                      AND (a.state IN ('campaign_upcoming','campaign_active')
+                        OR o.event_id IN (SELECT id FROM events WHERE published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP)
+                        OR (s.method='taobao_alliance' AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP)
+                        OR (s.method='manual' AND o.status='verified' AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP))
+                    GROUP BY o.source_id""", block_ids)
+                for block_row in block_rows:
+                    fresh_opportunities[block_row['source_id']] = (
+                        fresh_opportunities.get(block_row['source_id'], 0) + block_row['count'])
         source_coverage = [dict(source, match_count=source_match_counts.get(source['id'], 0),
                                 quote_count=source_quote_counts.get(source['id'],0),
                                 fresh_event_count=fresh_events.get(source['id'],0),
