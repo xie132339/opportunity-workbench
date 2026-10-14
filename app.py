@@ -194,7 +194,11 @@ def main():
             with connect() as connection:
                 discount_calibration.refresh_if_stale(connection)
                 shop_reputation.refresh_stats_if_stale(connection)
-            time.sleep(60)
+            # 采集源 interval=60 分钟，60s 轮询等于每轮全量 sync，worker 常年在
+            # 满载状态，2G 机器上把首页请求拖到 27-58s（nginx 60s 超时→504"访问不通"）。
+            # 改为 5 分钟一轮：sync 一轮约 2-4 分钟，之后留出空闲窗口给 Web 请求，
+            # 采集新鲜度上限由 2 小时窗口兜底，不受影响。
+            time.sleep(300)
     elif command == "review":
         print(run_cycle())
     elif command == "channels-refresh":

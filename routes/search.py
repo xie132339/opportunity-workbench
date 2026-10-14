@@ -30,7 +30,8 @@ from services.marketplace_identity import (
 from services.maintained_price_baselines import assess_maintained_baseline, load_baselines
 from services.discount_calibration import assess_brand_baseline, topic_key
 from services.taobao_alliance import validated_offer_for_row
-from services.search_result_cache import get as get_prepared_search, put as put_prepared_search
+from services.search_result_cache import (get as get_prepared_search, put as put_prepared_search,
+                                           get_page as get_page_html, put_page as put_page_html)
 
 
 def attach_offer_data(row, include_diagnostics=True):
@@ -394,6 +395,18 @@ def index():
         budget = cents(budget_text) if budget_text else None
     except ValueError:
         budget = None
+    # 整页缓存：仅默认 offers 收件箱视图启用。同一参数的请求在 TTL(60s) 内
+    # 直接返回已渲染 HTML，完全跳过 SQLite 查询与 Jinja 渲染。worker 全量 sync
+    # 期间 2G 机器 CPU 满载，实时渲染会被拖到 27-58s；页面缓存保证首页/搜索
+    # 永远秒回（最多 60s 旧）。candidate/ready/current/all 属审计视图，数据变化
+    # 敏感且访问量低，不做页面缓存，保持所见即最新。
+    page_cache_key = None
+    if priced_only and not candidate_only and not ready_only and not show_archive:
+        page_cache_key = ("index-html-v1", str(database.DB_PATH),
+                          request.query_string.decode("utf-8", "replace"))
+        cached_page = get_page_html(page_cache_key)
+        if cached_page is not None:
+            return cached_page
     try:
         minimum_discount_cents = cents(minimum_discount_text) if minimum_discount_text else 500
     except ValueError:
@@ -676,7 +689,7 @@ def index():
         quoted_enabled_source_count = sum(bool(source['enabled']) and source['quote_count'] > 0 for source in source_coverage)
         alerts = sum(is_current_notice(row) for row in notice_rows(db, "pending"))
         benefit_link_counts=linked_benefit_counts(db,[row['id'] for row in rows])
-    return render_template("index.html", rows=rows, sources=sources,
+    html = render_template("index.html", rows=rows, sources=sources,
                            benefit_link_counts=benefit_link_counts,
                            comparisons=comparisons,sort_mode=sort_mode,
                            search_assessments=search_assessments,quality_counts=quality_counts,
@@ -702,6 +715,10 @@ def index():
                            ready_only=ready_only, priced_only=priced_only,
                            source_comparison_deferred=source_comparison_deferred,
                            unpriced_current_count=unpriced_current_count)
+    if page_cache_key is not None:
+        put_page_html(page_cache_key, html)
+    return html
+
 
 def register(app):
     app.add_url_rule('/', endpoint='index', view_func=index, methods=['GET'])

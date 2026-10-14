@@ -58,3 +58,35 @@ def clear() -> None:
     """Clear cached results, used by tests and future in-process mutations."""
     with _lock:
         _entries.clear()
+        _page_entries.clear()
+
+
+# 整页 HTML 缓存：首页/搜索页的最终渲染输出。worker 全量 sync 会持续占满
+# 2G ECS 的 CPU，实时查询被拖到 27-58s（nginx 60s 超时 → 504"访问不通"）。
+# 页面缓存让同一参数的请求在 TTL 内直接秒回，完全不碰数据库。
+PAGE_TTL_SECONDS = 60
+PAGE_MAX_ENTRIES = 16
+_page_entries: OrderedDict[Hashable, _Entry] = OrderedDict()
+
+
+def get_page(key: Hashable) -> str | None:
+    """Return a non-expired rendered page HTML and mark it most recently used."""
+    now = monotonic()
+    with _lock:
+        entry = _page_entries.get(key)
+        if entry is None:
+            return None
+        if now - entry.created_at >= PAGE_TTL_SECONDS:
+            del _page_entries[key]
+            return None
+        _page_entries.move_to_end(key)
+        return entry.value
+
+
+def put_page(key: Hashable, html: str) -> None:
+    """Store a fully rendered page; the caller owns the string."""
+    with _lock:
+        _page_entries[key] = _Entry(monotonic(), html)
+        _page_entries.move_to_end(key)
+        while len(_page_entries) > PAGE_MAX_ENTRIES:
+            _page_entries.popitem(last=False)
