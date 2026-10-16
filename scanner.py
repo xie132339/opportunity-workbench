@@ -599,7 +599,7 @@ def scan_all(due_only=False, method=None):
             # 否则 UTC vs CST 差 8 小时导致源永远"没到期"、worker 空转。
             sql += """ AND (last_checked IS NULL OR
                 (status='healthy' AND datetime(last_checked, '+' || interval_minutes || ' minutes') <= datetime('now','localtime')) OR
-                (status!='healthy' AND datetime(last_checked, '+' || min(interval_minutes, ?) || ' minutes') <= datetime('now','localtime'))"""
+                (status!='healthy' AND datetime(last_checked, '+' || min(interval_minutes, ?) || ' minutes') <= datetime('now','localtime')))"""
             params.append(FAILED_SOURCE_RETRY_MINUTES)
         sql += " ORDER BY CASE WHEN method='xianbao' THEN 0 ELSE 1 END, last_checked, id"
         ids = [r[0] for r in db.execute(sql, params)]
