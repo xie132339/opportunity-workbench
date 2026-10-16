@@ -423,11 +423,11 @@ def promotion_admission(row, assessment):
                     and reserve - promotion_cents < max(promotion_cents * 0.05, 1)):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='无实质优惠（划线价与到手价基本一致），不作为默认优惠展示')
-            # 个人日常小规格上界 150 元：超过的是囤货/批发/礼盒/乱标价
+            # 个人日常小规格上界 200 元：超过的是囤货/批发/礼盒/乱标价
             # （299 元洗衣液、300 元 25kg 面包粉这种）。
-            if promotion_cents > 15000:
+            if promotion_cents > 20000:
                 return dict(eligible=False, tier='promotion_clue',
-                            reason='价格超出个人日常小规格范围（>150元，囤货/批发/乱标价），不作为默认优惠展示')
+                            reason='价格超出个人日常小规格范围（>200元，囤货/批发/乱标价），不作为默认优惠展示')
             if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promotion_cents
                     and discount_calibration.is_market_band_fake_discount(
                         topic, promotion_cents, (reserve - promotion_cents) / reserve)):
