@@ -406,6 +406,10 @@ def promotion_admission(row, assessment):
             return dict(eligible=False, tier='promotion_clue',
                         reason='引流小规格/首单试用 SKU（尝鲜/新客/小样等），不作为默认优惠展示')
         if isinstance(promotion_cents, int) and not isinstance(promotion_cents, bool):
+            # 引流小样：到手价 < 3 元基本是 1 分钱试用/包邮小样套路。
+            if promotion_cents < 300:
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='引流小样/1 分钱试用装（到手价 < 3 元），不作为默认优惠展示')
             if discount_calibration.is_gated_price(topic, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='低价引流统一价（首单/新人补贴价），不作为默认优惠展示')
@@ -419,11 +423,11 @@ def promotion_admission(row, assessment):
                     and reserve - promotion_cents < max(promotion_cents * 0.05, 1)):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='无实质优惠（划线价与到手价基本一致），不作为默认优惠展示')
-            # 绝对价格上界：个人日常小规格优惠不应超过 300 元；超过的是囤货批发装、
-            # 礼盒装或乱标价（用户：要的是个人日常小规格、真便宜、能直接买的东西）。
-            if promotion_cents > 30000:
+            # 个人日常小规格上界 150 元：超过的是囤货/批发/礼盒/乱标价
+            # （299 元洗衣液、300 元 25kg 面包粉这种）。
+            if promotion_cents > 15000:
                 return dict(eligible=False, tier='promotion_clue',
-                            reason='价格超出个人日常小规格范围（囤货/批发/乱标价），不作为默认优惠展示')
+                            reason='价格超出个人日常小规格范围（>150元，囤货/批发/乱标价），不作为默认优惠展示')
             if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promotion_cents
                     and discount_calibration.is_market_band_fake_discount(
                         topic, promotion_cents, (reserve - promotion_cents) / reserve)):
