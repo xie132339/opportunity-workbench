@@ -342,12 +342,12 @@ class AllianceTrafficAdmissionTests(unittest.TestCase):
             self.assertFalse(promotion_admission(mk('【尝鲜】百岁山348ml2瓶便携', '19.90', '10.01'), {})['eligible'])
             # 低价统一价聚集（¥2.01）→ 排除
             self.assertFalse(promotion_admission(mk('大包原木抽纸整箱批', '9.90', '2.01'), {})['eligible'])
-            # P15 低价小件（¥2.39 便携纸）→ 排除
-            self.assertFalse(promotion_admission(mk('植护乳霜纸便携装', '15.70', '2.39'), {})['eligible'])
+            # 真低价小件（¥2.39 便携纸）→ 保留（用户要<10元捡漏，不再拦P15线）
+            self.assertTrue(promotion_admission(mk('植护乳霜纸便携装', '15.70', '2.39'), {})['eligible'])
             # 深划线 + 到手价在市场正常价带（¥8.5 省95%）→ 排除
             self.assertFalse(promotion_admission(mk('加厚抽纸整箱实惠装', '170.00', '8.50'), {})['eligible'])
-            # 真品整箱/大提保留
-            self.assertTrue(promotion_admission(mk('KUB可优比婴儿云柔巾80抽18包', '699.00', '188.90', amount=18890), {})['eligible'])
+            # 真品整箱/大提保留（<100元小规格）
+            self.assertTrue(promotion_admission(mk('KUB可优比婴儿云柔巾80抽18包', '120.00', '88.90', amount=8890), {})['eligible'])
             self.assertTrue(promotion_admission(mk('漫花6大提悬挂式抽纸巾整箱批', '37.90', '7.90', amount=790), {})['eligible'])
         finally:
             dc.set_calibration(None)
