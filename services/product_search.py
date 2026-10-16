@@ -413,9 +413,8 @@ def promotion_admission(row, assessment):
             if discount_calibration.is_gated_price(topic, promotion_cents):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='低价引流统一价（首单/新人补贴价），不作为默认优惠展示')
-            if discount_calibration.is_low_value_small_item(topic, promotion_cents, title):
-                return dict(eligible=False, tier='promotion_clue',
-                            reason='低价小件（主题推广价 P15 线内），不作为默认优惠展示')
+            # 注意：is_low_value_small_item 已移除——用户要的就是 <10 元捡漏，
+            # P15 线拦截会把真低价优惠全拦掉（洗衣液低于10元、大米低于15元全被拦）。
             reserve = (evidence or {}).get('reserve_price_cents')
             # 零/微优惠幅度：划线价与到手价基本一致（<5% off），本质不是优惠
             # （599元抽纸标题写"一分钱秒杀"但 quote=promotion=reserve=599 这种套路）。
@@ -423,11 +422,11 @@ def promotion_admission(row, assessment):
                     and reserve - promotion_cents < max(promotion_cents * 0.05, 1)):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='无实质优惠（划线价与到手价基本一致），不作为默认优惠展示')
-            # 个人日常小规格上界 200 元：超过的是囤货/批发/礼盒/乱标价
+            # 个人日常小规格上界 100 元：超过的是囤货/批发/礼盒/乱标价
             # （299 元洗衣液、300 元 25kg 面包粉这种）。
-            if promotion_cents > 20000:
+            if promotion_cents > 10000:
                 return dict(eligible=False, tier='promotion_clue',
-                            reason='价格超出个人日常小规格范围（>200元，囤货/批发/乱标价），不作为默认优惠展示')
+                            reason='价格超出个人日常小规格范围（>100元，囤货/批发/乱标价），不作为默认优惠展示')
             if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promotion_cents
                     and discount_calibration.is_market_band_fake_discount(
                         topic, promotion_cents, (reserve - promotion_cents) / reserve)):
