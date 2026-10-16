@@ -142,11 +142,9 @@ class CalibrationEstimatorTests(unittest.TestCase):
         self.assertTrue(dc.has_trial_gating_marker("2.01元购400张大包抽纸擦手纸整箱批"))
         self.assertTrue(dc.has_trial_gating_marker("【u先试用】无染原木纯品抽纸家用整箱"))
         self.assertTrue(dc.has_trial_gating_marker("蓝月亮内衣专用洗衣液小样80g去渍除菌"))
-        # 扩展引流表达：首购/试吃/随身装/便携/迷你/免费领/1分钱
+        # 扩展引流表达：首购/试吃/免费领/1分钱
         self.assertTrue(dc.has_trial_gating_marker("首购礼金 洗衣凝珠试用装3颗"))
         self.assertTrue(dc.has_trial_gating_marker("食用油500ml试吃装特级初榨"))
-        self.assertTrue(dc.has_trial_gating_marker("矿泉水随身装便携小瓶350ml"))
-        self.assertTrue(dc.has_trial_gating_marker("大米迷你装真空小袋300g"))
         self.assertTrue(dc.has_trial_gating_marker("免费领取 抽纸2包体验"))
         # 真实商品（即使带小规格/整箱）放行；数字子串（如 10.01 标题）不误伤
         self.assertFalse(dc.has_trial_gating_marker("山茶油5L茶油茶籽油低温冷榨食用油植物油"))

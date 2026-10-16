@@ -192,7 +192,7 @@ def is_machinery_equipment(title, promo_cents):
 # bargains: they must not produce a discount amount.
 TRIAL_GATING_TERMS = ("尝鲜", "首单", "新人", "新客", "试饮", "试用", "小样", "引流",
                       "体验装", "一分购", "元购", "首购", "首件", "试吃", "试喝",
-                      "随身装", "便携", "迷你", "U先", "u先", "新人礼", "首单礼金",
+                      "U先", "u先", "新人礼", "首单礼金",
                       "免费领", "1分钱")
 # A promotion price shared verbatim by many distinct listings inside one topic's
 # low band is a first-order/unified subsidy price, not a market price.
