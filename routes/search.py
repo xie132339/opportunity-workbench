@@ -142,13 +142,13 @@ def attach_search_marketplace(row, link_cache):
 FRESHNESS_SQL = """ AND ((s.method='manual' AND o.status='verified'
                          AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP)
                      OR (s.method!='manual' AND s.enabled=1 AND s.status='healthy'
-                         AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                         AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
+                         AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes')
+                         AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes')
                          AND (e.published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP
                               OR a.state IN ('campaign_upcoming','campaign_active')
                               OR ((s.parser IN ('apple','mi','suning','lenovo','honor','kongfz')
                                    OR s.method='taobao_alliance')
-                                  AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP))) )"""
+                                  AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes') AND CURRENT_TIMESTAMP))) )"""
 
 
 def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
@@ -179,8 +179,8 @@ def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
             for row in db.execute("""SELECT e.id FROM events e
                     JOIN sources s ON s.id=e.source_id
                     WHERE s.method='taobao_alliance' AND s.enabled=1 AND s.status='healthy'
-                      AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')
-                      AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')"""):
+                      AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes')
+                      AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes')"""):
                 event_ids.add(row[0])
             for row in db.execute("""SELECT DISTINCT o.event_id FROM auto_reviews a
                     JOIN opportunities o ON o.id=a.opportunity_id
@@ -558,7 +558,7 @@ def index():
             # search, even though the default inbox only accepts Alliance data.
             source_ids = [row['id'] for row in db.execute("""SELECT id FROM sources
                 WHERE method='taobao_alliance' AND enabled=1 AND status='healthy'
-                  AND last_success>=datetime('now','-' || MIN(2*interval_minutes+15,120) || ' minutes')""")]
+                  AND last_success>=datetime('now','-' || MIN(2*interval_minutes+15,720) || ' minutes')""")]
             if source_ids:
                 sql += " AND o.source_id IN (" + ",".join("?" for _ in source_ids) + ")"
                 args.extend(source_ids)
@@ -742,7 +742,7 @@ def index():
                       AND o.event_id IN ({block_placeholders})
                       AND (a.state IN ('campaign_upcoming','campaign_active')
                         OR o.event_id IN (SELECT id FROM events WHERE published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP)
-                        OR (s.method='taobao_alliance' AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes') AND CURRENT_TIMESTAMP)
+                        OR (s.method='taobao_alliance' AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes') AND CURRENT_TIMESTAMP)
                         OR (s.method='manual' AND o.status='verified' AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP))
                     GROUP BY o.source_id""", block_ids)
                 for block_row in block_rows:
