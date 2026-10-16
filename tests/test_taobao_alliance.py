@@ -494,7 +494,7 @@ class TaobaoAllianceAdapterTests(unittest.TestCase):
         self.assertFalse(options["allow_redirects"])
         self.assertEqual(options["timeout"], (5, 20))
         self.assertEqual(options["params"]["q"], "抽纸")
-        self.assertEqual(options["params"]["has_coupon"], "false")
+        self.assertEqual(options["params"]["has_coupon"], "true")
         self.assertEqual(options["params"]["page_size"], "100")
         self.assertEqual(options["params"]["sign_method"], "hmac")
         # The legacy material.optional contract returns its documented fields

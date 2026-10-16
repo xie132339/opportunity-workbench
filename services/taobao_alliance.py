@@ -752,7 +752,7 @@ def _fetch_page(source_url, *, http_get=None, env=None, now=None, report=None):
     """Fetch one bounded official API page and return scanner-compatible rows."""
     query = search_config(source_url)
     query.pop("max_pages", None)
-    query.setdefault("has_coupon", "false")
+    query.setdefault("has_coupon", "true")
     payload = _request_top_payload(API_METHOD, query, http_get=http_get, env=env, now=now, report=report)
     response_body = payload.get("tbk_dg_material_optional_upgrade_response")
     if not isinstance(response_body, dict):
