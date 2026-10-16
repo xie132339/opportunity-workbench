@@ -413,6 +413,17 @@ def promotion_admission(row, assessment):
                 return dict(eligible=False, tier='promotion_clue',
                             reason='低价小件（主题推广价 P15 线内），不作为默认优惠展示')
             reserve = (evidence or {}).get('reserve_price_cents')
+            # 零/微优惠幅度：划线价与到手价基本一致（<5% off），本质不是优惠
+            # （599元抽纸标题写"一分钱秒杀"但 quote=promotion=reserve=599 这种套路）。
+            if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > 0
+                    and reserve - promotion_cents < max(promotion_cents * 0.05, 1)):
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='无实质优惠（划线价与到手价基本一致），不作为默认优惠展示')
+            # 绝对价格上界：个人日常小规格优惠不应超过 300 元；超过的是囤货批发装、
+            # 礼盒装或乱标价（用户：要的是个人日常小规格、真便宜、能直接买的东西）。
+            if promotion_cents > 30000:
+                return dict(eligible=False, tier='promotion_clue',
+                            reason='价格超出个人日常小规格范围（囤货/批发/乱标价），不作为默认优惠展示')
             if (isinstance(reserve, int) and not isinstance(reserve, bool) and reserve > promotion_cents
                     and discount_calibration.is_market_band_fake_discount(
                         topic, promotion_cents, (reserve - promotion_cents) / reserve)):
