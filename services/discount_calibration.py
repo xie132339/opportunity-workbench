@@ -1046,7 +1046,7 @@ def calibrate(db):
         FROM opportunities o JOIN events e ON e.id = o.event_id
         JOIN sources s ON s.id = o.source_id
         WHERE s.method = 'taobao_alliance' AND ({keyword_clause})
-        AND length(e.metadata_json) > 2""", params).fetchall()
+        AND length(e.metadata_json) > 2""", params)
 
     by_topic = {topic.key: [] for topic in CORE_LIVING_TOPICS}
     promo_values = {topic.key: [] for topic in CORE_LIVING_TOPICS}

@@ -51,7 +51,7 @@ def load_shop_stats(connection):
         JOIN sources s ON s.id = o.source_id
         WHERE s.method = 'taobao_alliance'""")
     stats = {}
-    for source_name, title, meta in c.fetchall():
+    for source_name, title, meta in c:
         try:
             offer = json.loads(meta or '{}').get('taobao_alliance_offer') or {}
         except (ValueError, TypeError):
