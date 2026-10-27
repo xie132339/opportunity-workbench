@@ -14,6 +14,9 @@ Environment=WORKBENCH_DB=__APP_ROOT__/.runtime/workbench.sqlite3
 ExecStart=__APP_ROOT__/.venv/bin/python -B app.py taobao-worker
 Restart=on-failure
 RestartSec=10
+MemoryHigh=600M
+MemoryMax=850M
+MemorySwapMax=512M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

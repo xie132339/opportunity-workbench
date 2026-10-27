@@ -36,6 +36,23 @@
 - GitHub 可访问 `feature/bootstrap` 分支。
 - 已为服务器单独准备管理员密码和 `WORKBENCH_SECRET`；不能复用本机 `.env`、SQLite 数据库或淘宝密钥。
 
+## 2 GiB 实例的内存保护
+
+服务单元已配置 `MemoryHigh=600M`、`MemoryMax=850M`、`MemorySwapMax=512M`，分别约束网页和采集进程，避免一个进程拖垮整机。生产库元数据按游标逐行处理，不得恢复为全量 `fetchall()`。
+
+新实例启动业务前，先确认系统盘至少有 2 GiB 空余；若没有 Swap 且 `/swapfile` 不存在，以 root 执行：
+
+```bash
+install -m 600 /dev/null /swapfile
+fallocate -l 1G /swapfile
+mkswap /swapfile
+swapon /swapfile
+printf '/swapfile none swap sw 0 0\n' >> /etc/fstab
+swapon --show
+```
+
+已有 `/swapfile` 时先检查文件和 `/etc/fstab`，不得覆盖或重复追加。Swap 只是缓冲；若服务持续触发 `MemoryMax`，应检查采集批次和数据库读取路径。
+
 ## 首次安装
 
 在服务器以 root 用户执行：
