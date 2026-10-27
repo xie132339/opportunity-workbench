@@ -26,7 +26,7 @@ def price_claim_evidence(db):
         JOIN events e ON e.id=o.event_id JOIN sources s ON s.id=o.source_id
         WHERE a.advertised_cents IS NOT NULL AND e.published_at IS NOT NULL
           AND a.state IN ('observed','conditional','stale')
-          AND e.published_at <= CURRENT_TIMESTAMP""").fetchall()
+          AND e.published_at <= CURRENT_TIMESTAMP""")
     future_excluded_rows = db.execute("""SELECT COUNT(*)
         FROM auto_reviews a JOIN opportunities o ON o.id=a.opportunity_id
         JOIN events e ON e.id=o.event_id
@@ -48,7 +48,9 @@ def price_claim_evidence(db):
     states = {"observed": 0, "conditional": 0, "stale": 0}
     days = set()
     platforms = set()
+    claim_count = 0
     for row in claim_rows:
+        claim_count += 1
         topic = row["topic"] or "other"
         bucket = buckets.setdefault(topic, {
             "topic": topic, "label": TOPIC_LABELS.get(topic, "其他（主题识别）"),
@@ -91,7 +93,7 @@ def price_claim_evidence(db):
         "healthy_enabled_sources": source_counts["healthy"] or 0,
         "latest_enabled_success": source_counts["latest_enabled_success"],
         "future_excluded_rows": future_excluded_rows,
-        "claim_rows": len(claim_rows), "observed_rows": states["observed"],
+        "claim_rows": claim_count, "observed_rows": states["observed"],
         "conditional_rows": states["conditional"], "stale_rows": states["stale"],
         "platform_count": len(platforms), "published_day_count": len(days),
         "external_quote_rows": quote_count,

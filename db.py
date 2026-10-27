@@ -508,9 +508,19 @@ def initialize():
             db.execute("ALTER TABLE opportunities ADD COLUMN eligibility TEXT NOT NULL DEFAULT 'unknown'")
         if "purchase_limit" not in opportunity_columns:
             db.execute("ALTER TABLE opportunities ADD COLUMN purchase_limit INTEGER")
-        for row in db.execute("SELECT id,title FROM opportunities WHERE offer_type='unknown'").fetchall():
-            if detected_offer_type(row["title"]) == "suspected_new_user":
-                db.execute("UPDATE opportunities SET offer_type='suspected_new_user' WHERE id=?", (row["id"],))
+        # This migration runs at every web and worker startup. Keep its memory
+        # independent of the number of stored opportunities.
+        last_id = 0
+        while True:
+            rows = db.execute("""SELECT id,title FROM opportunities
+                WHERE id>? AND offer_type='unknown' ORDER BY id LIMIT 500""",
+                (last_id,)).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                if detected_offer_type(row["title"]) == "suspected_new_user":
+                    db.execute("UPDATE opportunities SET offer_type='suspected_new_user' WHERE id=?", (row["id"],))
+            last_id = rows[-1]["id"]
         quote_columns = {row[1] for row in db.execute("PRAGMA table_info(quotes)")}
         event_columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
         benefit_columns = {row[1] for row in db.execute("PRAGMA table_info(benefit_resources)")}

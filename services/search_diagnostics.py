@@ -12,8 +12,11 @@ def summarize_search_funnel(matched_rows, current_rows):
     ``current_rows`` are the rows that passed the existing current-view query
     and live topic classifier. This reports gate outcomes without changing them.
     """
-    states = Counter((row.get("auto_state") or "queued") for row in matched_rows)
-    matched = len(matched_rows)
+    states = Counter()
+    matched = 0
+    for row in matched_rows:
+        states[row.get("auto_state") or "queued"] += 1
+        matched += 1
     current = len(current_rows)
     stale = states["stale"]
     unavailable = states["source_unavailable"]

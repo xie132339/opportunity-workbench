@@ -3,7 +3,7 @@ import unittest
 import sqlite3
 
 import db as dbm
-from routes.search import FRESHNESS_SQL
+from routes.search import FRESHNESS_SQL, fresh_offer_event_ids
 
 
 def build_fixture(db):
@@ -75,27 +75,8 @@ class FreshnessTwoStageTests(unittest.TestCase):
                 + SCOPE + " GROUP BY o.id"))
         # 两段式（events 方向 + 分块 IN）
         scope_wo = SCOPE.replace(FRESHNESS_SQL, "")
-        event_ids = set()
-        for row in db.execute(
-                "SELECT e.id FROM events e JOIN sources s ON s.id=e.source_id"
-                " WHERE s.method='taobao_alliance' AND s.enabled=1 AND s.status='healthy'"
-                " AND s.last_success>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')"
-                " AND e.last_seen_at>=datetime('now','-' || MIN(2*s.interval_minutes+15,120) || ' minutes')"):
-            event_ids.add(row['id'])
-        for row in db.execute(
-                "SELECT DISTINCT o.event_id FROM auto_reviews a"
-                " JOIN opportunities o ON o.id=a.opportunity_id"
-                " WHERE a.state IN ('campaign_upcoming','campaign_active')"
-                " AND o.event_id IS NOT NULL"):
-            event_ids.add(row['id'])
-        for row in db.execute(
-                "SELECT DISTINCT o.event_id FROM opportunities o"
-                " JOIN sources s ON s.id=o.source_id"
-                " WHERE s.method='manual' AND o.status='verified'"
-                " AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP"
-                " AND o.event_id IS NOT NULL"):
-            event_ids.add(row['id'])
-        ids = sorted(event_ids)
+        ids = [row['id'] for row in fresh_offer_event_ids(db)]
+        self.assertEqual(ids, sorted(set(ids)))
         two_stage = set()
         for i in range(0, len(ids), 900):
             chunk = ids[i:i + 900]

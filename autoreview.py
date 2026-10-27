@@ -789,45 +789,51 @@ def review_all(source_method=None, opportunity_ids=None):
                                AND (ne.last_seen_at>e.last_seen_at
                                     OR (ne.last_seen_at=e.last_seen_at AND newer.id>o.id)))))
                   )"""
-        rows = db.execute(f'''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
+        query = f'''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
             s.parser AS source_parser,s.method AS source_method,
             s.status AS source_status,s.interval_minutes,s.last_success,s.url AS source_url,
             a.detail_json,a.detail_checked_at,a.detail_error,
 {duplicate_sql} AS duplicate
             FROM opportunities o JOIN events e ON e.id=o.event_id
             JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
-            WHERE ''' + " AND ".join(conditions), params).fetchall()
+            WHERE ''' + " AND ".join(conditions) + " AND o.id>? ORDER BY o.id LIMIT ?"
         counts = {}
-        for item in rows:
-            row = dict(item)
-            metadata = json.loads(row.get('metadata_json') or '{}')
-            detail = json.loads(row.get('detail_json') or '{}')
-            if row['source_parser'] == 'apple' and not detail:
-                observation = metadata.get('catalog_observation') or {}
-                if observation.get('evidence_kind') == 'apple_catalog_card':
-                    try:
-                        from services.apple_catalog import parse_listing_card
-                        detail = parse_listing_card(
-                            row['url'], row['title'], observation['card_text'], row['source_url'])
-                        row['detail_json'] = json.dumps(detail, ensure_ascii=False)
-                    except (KeyError, TypeError, ValueError):
-                        # Malformed or stale imported metadata never becomes price evidence.
-                        detail = {}
-                        row['detail_json'] = None
-            db.execute('UPDATE opportunities SET resource_kind=?,topic=? WHERE id=?',
-                       ('purchase' if is_taobao_alliance_feed(row) else
-                        resource_kind(detail.get('title') or row['title'],detail.get('conditions') or row['snippet']),
-                        resource_topic(row['title'],metadata.get('source_category','')),row['id']))
-            result = classify(row, now, bool(row['duplicate']))
-            db.execute('''INSERT INTO auto_reviews
-                (opportunity_id,state,reason,advertised_cents,specification,conditions,evidence,detail_json)
-                VALUES(:id,:state,:reason,:advertised_cents,:specification,:conditions,:evidence,:detail_json)
-                ON CONFLICT(opportunity_id) DO UPDATE SET state=excluded.state,reason=excluded.reason,
-                advertised_cents=excluded.advertised_cents,specification=excluded.specification,
-                conditions=excluded.conditions,evidence=excluded.evidence,
-                detail_json=COALESCE(excluded.detail_json,auto_reviews.detail_json),
-                checked_at=CURRENT_TIMESTAMP''', dict(result,id=row['id'],detail_json=row.get('detail_json')))
-            counts[result['state']] = counts.get(result['state'], 0) + 1
+        last_id = 0
+        while True:
+            rows = db.execute(query, (*params, last_id, 200)).fetchall()
+            if not rows:
+                break
+            last_id = rows[-1]["id"]
+            for item in rows:
+                row = dict(item)
+                metadata = json.loads(row.get('metadata_json') or '{}')
+                detail = json.loads(row.get('detail_json') or '{}')
+                if row['source_parser'] == 'apple' and not detail:
+                    observation = metadata.get('catalog_observation') or {}
+                    if observation.get('evidence_kind') == 'apple_catalog_card':
+                        try:
+                            from services.apple_catalog import parse_listing_card
+                            detail = parse_listing_card(
+                                row['url'], row['title'], observation['card_text'], row['source_url'])
+                            row['detail_json'] = json.dumps(detail, ensure_ascii=False)
+                        except (KeyError, TypeError, ValueError):
+                            # Malformed or stale imported metadata never becomes price evidence.
+                            detail = {}
+                            row['detail_json'] = None
+                db.execute('UPDATE opportunities SET resource_kind=?,topic=? WHERE id=?',
+                           ('purchase' if is_taobao_alliance_feed(row) else
+                            resource_kind(detail.get('title') or row['title'],detail.get('conditions') or row['snippet']),
+                            resource_topic(row['title'],metadata.get('source_category','')),row['id']))
+                result = classify(row, now, bool(row['duplicate']))
+                db.execute('''INSERT INTO auto_reviews
+                    (opportunity_id,state,reason,advertised_cents,specification,conditions,evidence,detail_json)
+                    VALUES(:id,:state,:reason,:advertised_cents,:specification,:conditions,:evidence,:detail_json)
+                    ON CONFLICT(opportunity_id) DO UPDATE SET state=excluded.state,reason=excluded.reason,
+                    advertised_cents=excluded.advertised_cents,specification=excluded.specification,
+                    conditions=excluded.conditions,evidence=excluded.evidence,
+                    detail_json=COALESCE(excluded.detail_json,auto_reviews.detail_json),
+                    checked_at=CURRENT_TIMESTAMP''', dict(result,id=row['id'],detail_json=row.get('detail_json')))
+                counts[result['state']] = counts.get(result['state'], 0) + 1
         return counts
 
 
