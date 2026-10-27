@@ -771,11 +771,14 @@ def review_all(source_method=None, opportunity_ids=None):
         if target_ids:
             conditions.append("o.id IN (" + ",".join("?" for _ in target_ids) + ")")
             params.extend(target_ids)
-        rows = db.execute('''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
-            s.parser AS source_parser,s.method AS source_method,
-            s.status AS source_status,s.interval_minutes,s.last_success,s.url AS source_url,
-            a.detail_json,a.detail_checked_at,a.detail_error,
-            EXISTS(SELECT 1 FROM opportunities newer JOIN sources ns ON ns.id=newer.source_id
+        # The Taobao path can use events' (source_id, external_key) index.
+        if source_method == "taobao_alliance":
+            duplicate_sql = """EXISTS(SELECT 1 FROM events ne
+                   JOIN opportunities newer ON newer.event_id=ne.id
+                   WHERE ne.source_id=o.source_id
+                     AND ne.external_key=e.external_key AND newer.id>o.id)"""
+        else:
+            duplicate_sql = """EXISTS(SELECT 1 FROM opportunities newer JOIN sources ns ON ns.id=newer.source_id
                    JOIN events ne ON ne.id=newer.event_id
                    WHERE (s.method='taobao_alliance' AND newer.source_id=o.source_id
                           AND ne.external_key=e.external_key AND newer.id>o.id)
@@ -785,7 +788,12 @@ def review_all(source_method=None, opportunity_ids=None):
                                AND ns.enabled=1 AND ns.status='healthy'
                                AND (ne.last_seen_at>e.last_seen_at
                                     OR (ne.last_seen_at=e.last_seen_at AND newer.id>o.id)))))
-                  ) AS duplicate
+                  )"""
+        rows = db.execute(f'''SELECT o.*, e.snippet,e.metadata_json,e.published_at,e.last_seen_at,s.enabled,
+            s.parser AS source_parser,s.method AS source_method,
+            s.status AS source_status,s.interval_minutes,s.last_success,s.url AS source_url,
+            a.detail_json,a.detail_checked_at,a.detail_error,
+{duplicate_sql} AS duplicate
             FROM opportunities o JOIN events e ON e.id=o.event_id
             JOIN sources s ON s.id=o.source_id LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
             WHERE ''' + " AND ".join(conditions), params).fetchall()
