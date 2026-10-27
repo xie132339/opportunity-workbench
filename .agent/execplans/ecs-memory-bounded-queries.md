@@ -22,8 +22,11 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 - [x] (2026-10-27 13:10 CST) 核对非保护分支、原本地改动、线上服务与当前数据量。
 - [x] (2026-10-27 13:16 CST) 启动迁移与复审改成按主键分批；报价汇总改游标；搜索候选改流式 ID 与固定大小 Top N，漏斗只查询必要列并逐行汇总。
 - [x] (2026-10-27 13:16 CST) 跨 500/200 条边界测试通过；完整测试 469 项中 2 项失败，改动前版本复现同样失败。
-- [ ] 将代码提交、推送并部署到 `/application`，确认实际版本和两服务状态。
-- [ ] 用公网真实列表请求、采集周期和 cgroup OOM/重启计数验证；更新核心验收证据与 Obsidian 交接记录。
+- [x] (2026-10-27 13:19 CST) 提交 `3fd43c3`、推送 `feature/bootstrap` 并快进部署到 `/application`；依次重启网页和采集。
+- [x] (2026-10-27 13:21 CST) 真实登录后查询列表与采集一轮完成；两服务 `NRestarts=0`、`oom=0`，网页公网登录正常。
+- [x] (2026-10-27 13:25 CST) 补查首页新鲜机会统计，发现并修复遗漏的全量 event ID 列表，改为 900 条一批；跨批次 905 条有效机会计数测试通过。
+- [x] (2026-10-27 13:26 CST) 更新 `docs/core-acceptance.md` AC-07，并同步 Obsidian 实施日志和核心台账；首次列表耗时已标记为未通过。
+- [ ] 部署首页新鲜机会统计的补充修复，确认生产服务版本、列表与 OOM 计数。
 
 ## Plan of work
 
@@ -35,7 +38,9 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 - `/Applications/work/gitRepo/opportunity-workbench/.venv/bin/python -B -m unittest discover -s tests`：当前 469 项，2 项 `test_price_admission` 失败；在未改动基线也复现，尚未由本轮修复。
 - `test_memory_boundaries.py`：520 条启动迁移、450 条复审跨批次且保留查重结果，2 项通过。
-- 线上待执行：公网登录后的默认列表返回 200；网页和 worker `NRestarts=0`、`memory.events` 中 `oom=0`；worker 输出本轮结果并进入 300 秒等待。
+- `test_search_freshness_two_stage.py`：3 项通过，其中 905 条有效机会跨 900 ID 批次且正确排除 2 条；`test_core_rules.py`：33 项通过。
+- 线上已执行：登录后“抽纸”列表和无关键词列表均返回 200，采集输出 `selected=200` 后进入 `app.py:201` 的等待；网页、worker 均 `NRestarts=0`，两个 cgroup 的 `oom=0`。
+- 性能边界：“抽纸”首次 17.437 秒；已缓存翻页 0.87 秒；无关键词第 2 页首次 14.062 秒。内存未失控，但首次请求速度未达到用户此前期望。
 
 ## Surprises and discoveries
 
@@ -54,4 +59,4 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 
 ## Outcomes and retrospective
 
-待线上验收后填写。
+已交付启动迁移、复审、报价汇总、默认优惠预选、漏斗统计及首页新鲜机会计数的有界读取，并在 124219 条生产记录上验证采集完整周期与网页列表无 OOM。首次列表仍需独立性能诊断；历史审计视图的全量明细输出不属于本轮普通列表路径，不能据此宣称全项目所有查询均有界。

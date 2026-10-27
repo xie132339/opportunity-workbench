@@ -169,6 +169,31 @@ def fresh_offer_event_ids(db):
           AND o.event_id IS NOT NULL ORDER BY id""")
 
 
+def fresh_opportunity_counts(db, window_conds):
+    """Count current opportunities while holding at most 900 event IDs."""
+    counts = {}
+    if not window_conds:
+        return counts
+    event_cursor = db.execute("SELECT id FROM events e WHERE " + " OR ".join(window_conds))
+    while block_ids := [row[0] for row in islice(event_cursor, 900)]:
+        placeholders = ",".join("?" * len(block_ids))
+        block_rows = db.execute(f"""SELECT o.source_id,COUNT(*) AS count
+            FROM opportunities o
+            LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
+            JOIN sources s ON s.id=o.source_id
+            WHERE o.status!='ignored'
+              AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')
+              AND o.event_id IN ({placeholders})
+              AND (a.state IN ('campaign_upcoming','campaign_active')
+                OR o.event_id IN (SELECT id FROM events WHERE published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP)
+                OR (s.method='taobao_alliance' AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes') AND CURRENT_TIMESTAMP)
+                OR (s.method='manual' AND o.status='verified' AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP))
+            GROUP BY o.source_id""", block_ids)
+        for row in block_rows:
+            counts[row['source_id']] = counts.get(row['source_id'], 0) + row['count']
+    return counts
+
+
 def prepare_standard_results(db, *, sql, args, order_by, topic, buy_platform,
                              show_archive, ready_only, priced_only, budget,
                              minimum_discount_cents, sort_mode, maintained_baselines, funnel_scope_sql,
@@ -724,31 +749,7 @@ def index():
             window_minutes = min(2 * (healthy_source['interval_minutes'] or 60) + 15, 120)
             window_conds.append(
                 f"(e.source_id={healthy_source['id']} AND e.last_seen_at>=datetime('now','-{window_minutes} minutes'))")
-        fresh_opportunities = {}
-        if window_conds:
-            fresh_event_ids = [row[0] for row in db.execute(
-                "SELECT id FROM events e WHERE " + " OR ".join(window_conds))]
-            fresh_in_block = 900
-            for block_start in range(0, len(fresh_event_ids), fresh_in_block):
-                block_ids = fresh_event_ids[block_start:block_start + fresh_in_block]
-                if not block_ids:
-                    continue
-                block_placeholders = ",".join("?" * len(block_ids))
-                block_rows = db.execute(f"""SELECT o.source_id,COUNT(*) AS count
-                    FROM opportunities o
-                    LEFT JOIN auto_reviews a ON a.opportunity_id=o.id
-                    JOIN sources s ON s.id=o.source_id
-                    WHERE o.status!='ignored'
-                      AND COALESCE(a.state,'queued') NOT IN ('stale','source_unavailable','retry','excluded')
-                      AND o.event_id IN ({block_placeholders})
-                      AND (a.state IN ('campaign_upcoming','campaign_active')
-                        OR o.event_id IN (SELECT id FROM events WHERE published_at BETWEEN datetime('now','-2 hours') AND CURRENT_TIMESTAMP)
-                        OR (s.method='taobao_alliance' AND s.last_success BETWEEN datetime('now','-' || MIN(2*s.interval_minutes+15,720) || ' minutes') AND CURRENT_TIMESTAMP)
-                        OR (s.method='manual' AND o.status='verified' AND datetime(o.buy_checked_at) BETWEEN datetime('now','-15 minutes') AND CURRENT_TIMESTAMP))
-                    GROUP BY o.source_id""", block_ids)
-                for block_row in block_rows:
-                    fresh_opportunities[block_row['source_id']] = (
-                        fresh_opportunities.get(block_row['source_id'], 0) + block_row['count'])
+        fresh_opportunities = fresh_opportunity_counts(db, window_conds)
         source_coverage = [dict(source, match_count=source_match_counts.get(source['id'], 0),
                                 quote_count=source_quote_counts.get(source['id'],0),
                                 fresh_event_count=fresh_events.get(source['id'],0),

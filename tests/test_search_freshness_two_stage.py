@@ -3,7 +3,7 @@ import unittest
 import sqlite3
 
 import db as dbm
-from routes.search import FRESHNESS_SQL, fresh_offer_event_ids
+from routes.search import FRESHNESS_SQL, fresh_offer_event_ids, fresh_opportunity_counts
 
 
 def build_fixture(db):
@@ -63,6 +63,27 @@ SCOPE = (
 
 
 class FreshnessTwoStageTests(unittest.TestCase):
+    def test_fresh_opportunity_counts_crosses_event_batch_boundary(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.executescript(dbm.SCHEMA)
+        build_fixture(db)
+        db.executemany(
+            "INSERT INTO events (id,source_id,external_key,title,url,fingerprint,"
+            " observed_at,published_at,last_seen_at) VALUES (?,1,?,?,?, ?,"
+            " datetime('now'),datetime('now'),datetime('now'))",
+            [(i, f'taobao:{i}', f'商品{i}', 'http://e', f'fp{i}') for i in range(100, 1003)],
+        )
+        db.execute("""INSERT INTO opportunities(id,event_id,source_id,title,category,status,
+            resource_kind,offer_type,created_at)
+            SELECT id,id,1,title,'零售优惠',CASE WHEN id=1001 THEN 'ignored' ELSE 'active' END,
+                'purchase','unknown',datetime('now') FROM events WHERE id>=100""")
+        db.execute("""INSERT INTO auto_reviews(opportunity_id,state,reason)
+            VALUES (1002,'stale','测试排除')""")
+        counts = fresh_opportunity_counts(
+            db, ["(e.source_id=1 AND e.last_seen_at>=datetime('now','-75 minutes'))"])
+        self.assertEqual(counts, {1: 905})  # 4 original + 901 eligible; two excluded
+
     def test_two_stage_matches_full_where(self):
         db = sqlite3.connect(":memory:")
         db.row_factory = sqlite3.Row
