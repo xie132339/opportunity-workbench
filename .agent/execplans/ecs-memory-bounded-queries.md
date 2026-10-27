@@ -26,7 +26,7 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 - [x] (2026-10-27 13:21 CST) 真实登录后查询列表与采集一轮完成；两服务 `NRestarts=0`、`oom=0`，网页公网登录正常。
 - [x] (2026-10-27 13:25 CST) 补查首页新鲜机会统计，发现并修复遗漏的全量 event ID 列表，改为 900 条一批；跨批次 905 条有效机会计数测试通过。
 - [x] (2026-10-27 13:26 CST) 更新 `docs/core-acceptance.md` AC-07，并同步 Obsidian 实施日志和核心台账；首次列表耗时已标记为未通过。
-- [ ] 部署首页新鲜机会统计的补充修复，确认生产服务版本、列表与 OOM 计数。
+- [x] (2026-10-27 13:29 CST) 补充提交 `f704763` 推送并部署 `/application`，顺序重启两服务；登录后“抽纸”列表 200/8.369 秒、网页内存峰值约 532 MiB；采集首轮 `selected=200`、两服务 `NRestarts=0` 与 `oom=0`。
 
 ## Plan of work
 
@@ -40,6 +40,7 @@ This ExecPlan is a living document maintained according to `~/.codex/PLANS.md`.
 - `test_memory_boundaries.py`：520 条启动迁移、450 条复审跨批次且保留查重结果，2 项通过。
 - `test_search_freshness_two_stage.py`：3 项通过，其中 905 条有效机会跨 900 ID 批次且正确排除 2 条；`test_core_rules.py`：33 项通过。
 - 线上已执行：登录后“抽纸”列表和无关键词列表均返回 200，采集输出 `selected=200` 后进入 `app.py:201` 的等待；网页、worker 均 `NRestarts=0`，两个 cgroup 的 `oom=0`。
+- 补充版本 `f704763`：实际首页统计代码回放，登录后“抽纸”列表 200/8.369 秒、返回 251731 字节；worker 输出 200 条复审，两个 cgroup 未出现 OOM 或异常重启。
 - 性能边界：“抽纸”首次 17.437 秒；已缓存翻页 0.87 秒；无关键词第 2 页首次 14.062 秒。内存未失控，但首次请求速度未达到用户此前期望。
 
 ## Surprises and discoveries
